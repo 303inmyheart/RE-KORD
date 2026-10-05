@@ -1,0 +1,4 @@
+# Stile rustfmt di serie (quello in cui e' gia' scritto il codice): la CI controlla
+# con `cargo fmt --all --check`. Opzioni qui solo se stabili e a costo zero sul
+# codice esistente.
+edition = "2021"

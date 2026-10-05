@@ -5,12 +5,22 @@ description = "RE-KORD client shell"
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# "Server flavor": il guscio desktop avvia anche l'hub (rekord-core) in un thread
+# suo, come faceva l'app Electron "Server". Spento di serie e mai sul telefono:
+# su Android/iOS le dipendenze qui sotto non esistono e il codice e' escluso.
+#   pnpm build:client:server-flavor
+hub = ["dep:rekord-core", "dep:tokio", "dep:anyhow"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-shell = "2"
+# Link esterni (re-kord.com, Cloudflare, Discogs...) nel browser di sistema invece
+# che dentro la finestra dell'app.
+tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -19,6 +29,15 @@ serde_json = "1"
 # dipendenze del binario Linux/Windows.
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-barcode-scanner = "2"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# Una sola finestra: il secondo avvio porta in primo piano la prima.
+tauri-plugin-single-instance = "2"
+# Finestra «Salva con nome» per i file generati nella pagina (backup, profilo, tema).
+tauri-plugin-dialog = "2"
+rekord-core = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
 
 [lib]
 name = "rekord_client_lib"

@@ -18,3 +18,6 @@ apps/client-shell/src-tauri/target/
 release/
 .env
 .env.*
+
+# Volumi di docker-compose.yml (dati e musica di prova)
+docker-data/

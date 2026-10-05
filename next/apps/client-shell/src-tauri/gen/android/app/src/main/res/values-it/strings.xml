@@ -5,4 +5,5 @@
     <string name="media_play">Riproduci</string>
     <string name="media_pause">Pausa</string>
     <string name="media_next">Successivo</string>
+    <string name="cast_playing_on">Su %1$s</string>
 </resources>

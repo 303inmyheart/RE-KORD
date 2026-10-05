@@ -5,11 +5,16 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -21,6 +26,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.media.VolumeProviderCompat
 import androidx.media.session.MediaButtonReceiver
 import java.net.HttpURLConnection
 import java.net.URL
@@ -51,12 +57,68 @@ class RekordMediaService : Service() {
     private var art: Bitmap? = null
     private var inForeground = false
 
+    private lateinit var audioManager: AudioManager
+    private var focusRequest: AudioFocusRequest? = null
+    private var hasFocus = false
+    /** Messo in pausa da una perdita temporanea (telefonata, navigatore): si riparte. */
+    private var resumeOnGain = false
+    private var noisyRegistered = false
+
+    /**
+     * Il fuoco audio di Android: chi suona lo chiede, e chi lo perde si fa da
+     * parte. La WebView non lo chiede da sola, quindi lo fa il servizio per lei e
+     * traduce i cambi in comandi per il lettore (stessi `rekord:media-action`
+     * della notifica).
+     *
+     * Dalla 8.0 l'abbassamento del volume (duck) lo fa il sistema da se' finche'
+     * `setWillPauseWhenDucked` resta false: qui non serve fare niente.
+     */
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        main.post {
+            when (change) {
+                AudioManager.AUDIOFOCUS_GAIN -> {
+                    hasFocus = true
+                    if (resumeOnGain) {
+                        resumeOnGain = false
+                        RekordMediaBridge.send("play")
+                    }
+                }
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                    resumeOnGain = isPlaying
+                    if (isPlaying) RekordMediaBridge.send("pause")
+                }
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> Unit
+                AudioManager.AUDIOFOCUS_LOSS -> {
+                    // Un'altra app di musica: si mette in pausa e non si riparte da
+                    // soli. Il fuoco si richiede al prossimo play.
+                    resumeOnGain = false
+                    if (isPlaying) RekordMediaBridge.send("pause")
+                    abandonFocus()
+                }
+            }
+        }
+    }
+
+    /** Cuffie scollegate / Bluetooth spento: pausa subito, prima che suoni dall'altoparlante. */
+    private val noisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY && isPlaying) {
+                resumeOnGain = false
+                RekordMediaBridge.send("pause")
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         createChannel()
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         session = MediaSessionCompat(this, "RE-KORD").apply {
             setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay() = RekordMediaBridge.send("play")
+                override fun onPlay() {
+                    if (castTarget == null) requestFocus()
+                    RekordMediaBridge.send("play")
+                }
                 override fun onPause() = RekordMediaBridge.send("pause")
                 override fun onSkipToNext() = RekordMediaBridge.send("nexttrack")
                 override fun onSkipToPrevious() = RekordMediaBridge.send("previoustrack")
@@ -71,6 +133,44 @@ class RekordMediaService : Service() {
             isActive = true
         }
         running = this
+        // Il primo disegno lo fa onStartCommand.
+        applyCastTarget(rerender = false)
+    }
+
+    /**
+     * In trasmissione la musica esce dal Chromecast: niente fuoco audio (un
+     * navigatore o una telefonata non devono mettere in pausa il salotto), niente
+     * pausa quando si staccano le cuffie, e i tasti volume a schermo spento vanno
+     * al dispositivo Cast. La notifica resta, con il nome del dispositivo.
+     */
+    private fun applyCastTarget(rerender: Boolean = true) {
+        if (castTarget != null) {
+            resumeOnGain = false
+            unregisterNoisy()
+            abandonFocus()
+            session.setPlaybackToRemote(castVolume())
+        } else {
+            session.setPlaybackToLocal(AudioManager.STREAM_MUSIC)
+        }
+        if (rerender) latest?.let { render(it) }
+    }
+
+    private fun castVolume(): VolumeProviderCompat {
+        val steps = 20
+        val current = (RekordCast.volume() * steps).toInt().coerceIn(0, steps)
+        return object : VolumeProviderCompat(VOLUME_CONTROL_ABSOLUTE, steps, current) {
+            override fun onSetVolumeTo(volume: Int) {
+                val level = volume.coerceIn(0, steps)
+                RekordCast.setVolume(level / steps.toDouble())
+                currentVolume = level
+            }
+
+            override fun onAdjustVolume(direction: Int) {
+                val level = (currentVolume + direction).coerceIn(0, steps)
+                RekordCast.setVolume(level / steps.toDouble())
+                currentVolume = level
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -120,6 +220,12 @@ class RekordMediaService : Service() {
                 )
                 .build(),
         )
+        if (state.playing && castTarget == null) {
+            requestFocus()
+            registerNoisy()
+        } else {
+            unregisterNoisy()
+        }
         val notification = buildNotification(state)
         if (state.playing) {
             if (inForeground) {
@@ -136,6 +242,64 @@ class RekordMediaService : Service() {
                 inForeground = false
             }
             NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun requestFocus() {
+        if (hasFocus) return
+        val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val request = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build(),
+                )
+                .setAcceptsDelayedFocusGain(true)
+                .setWillPauseWhenDucked(false)
+                .setOnAudioFocusChangeListener(focusListener, main)
+                .build()
+                .also { focusRequest = it }
+            audioManager.requestAudioFocus(request)
+        } else {
+            audioManager.requestAudioFocus(
+                focusListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN,
+            )
+        }
+        // DELAYED (una telefonata in corso): il GAIN arrivera' col listener. Se
+        // viene negato non si ferma l'utente che ha appena premuto play.
+        hasFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    private fun abandonFocus() {
+        hasFocus = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+        } else {
+            audioManager.abandonAudioFocus(focusListener)
+        }
+    }
+
+    private fun registerNoisy() {
+        if (noisyRegistered) return
+        ContextCompat.registerReceiver(
+            this,
+            noisyReceiver,
+            IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        noisyRegistered = true
+    }
+
+    private fun unregisterNoisy() {
+        if (!noisyRegistered) return
+        noisyRegistered = false
+        try {
+            unregisterReceiver(noisyReceiver)
+        } catch (e: IllegalArgumentException) {
+            Logger.warn("RekordMedia: receiver gia' rimosso: ${e.message}")
         }
     }
 
@@ -181,6 +345,7 @@ class RekordMediaService : Service() {
             .setSmallIcon(R.drawable.ic_rekord_note)
             .setContentTitle(state.title)
             .setContentText(subtitle)
+            .setSubText(castTarget?.let { getString(R.string.cast_playing_on, it) })
             .setLargeIcon(art)
             .setContentIntent(open)
             .setDeleteIntent(stop)
@@ -293,6 +458,9 @@ class RekordMediaService : Service() {
         // manda lo fara' ripartire. A svuotarlo ci pensa chi ferma la musica.
         artLoader.shutdownNow()
         main.removeCallbacksAndMessages(null)
+        unregisterNoisy()
+        resumeOnGain = false
+        abandonFocus()
         session.isActive = false
         session.release()
         NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)
@@ -310,6 +478,21 @@ class RekordMediaService : Service() {
 
         @Volatile
         private var latest: NowPlaying? = null
+
+        /** Nome del dispositivo Cast collegato, null quando la musica suona qui. */
+        @Volatile
+        private var castTarget: String? = null
+
+        /**
+         * Chiamata da [RekordCast] quando una sessione Cast parte o finisce. Il
+         * servizio non si accende da qui: lo accende il primo stato «in
+         * riproduzione» che la pagina rispecchia dal receiver.
+         */
+        fun setCastTarget(deviceName: String?) {
+            if (castTarget == deviceName) return
+            castTarget = deviceName
+            running?.applyCastTarget()
+        }
 
         /** Serve a MainActivity per decidere se tenere sveglia la WebView. */
         val isPlaying: Boolean

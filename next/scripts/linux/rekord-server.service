@@ -1,0 +1,49 @@
+# RE-KORD hub come servizio systemd.
+#
+# Installazione (vedi docs/DEPLOY.md, o scripts/linux/install.sh che fa questi passi):
+#   sudo useradd --system --home /var/lib/rekord --shell /usr/sbin/nologin rekord
+#   sudo mkdir -p /opt/rekord /var/lib/rekord && sudo chown rekord:rekord /var/lib/rekord
+#   sudo tar -xzf rekord-server-*-linux-*.tar.gz -C /opt/rekord --strip-components=1
+#   sudo cp /opt/rekord/systemd/rekord-server.service /etc/systemd/system/
+#   sudo cp /opt/rekord/systemd/rekord-server.env /etc/default/rekord-server   # poi modificalo
+#   sudo systemctl daemon-reload && sudo systemctl enable --now rekord-server
+#
+# Log: journalctl -u rekord-server -f
+[Unit]
+Description=RE-KORD music hub
+Documentation=https://re-kord.com
+Wants=network-online.target
+After=network-online.target local-fs.target remote-fs.target
+
+[Service]
+Type=simple
+User=rekord
+Group=rekord
+EnvironmentFile=-/etc/default/rekord-server
+ExecStart=/opt/rekord/run.sh
+Restart=on-failure
+RestartSec=5
+# L'hub chiude il DB in modo ordinato su SIGTERM.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# Indurimento: l'hub scrive solo nella cartella dati e (Studio, download,
+# copertine) nella libreria musicale, che va aggiunta a ReadWritePaths.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+StateDirectory=rekord
+ReadWritePaths=/var/lib/rekord
+# Libreria su un disco esterno o in /home? Aggiungila qui (e togli
+# ProtectHome=read-only se sta in /home e deve essere scrivibile):
+# ReadWritePaths=/srv/music
+
+[Install]
+WantedBy=multi-user.target

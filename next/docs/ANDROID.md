@@ -65,6 +65,8 @@ targets. Every check fails with what to install, before Gradle starts.
 
 ```bash
 cd next
+pnpm pack:android               # release/android/RE-KORD-Client-<v>-android-arm64.apk
+                                # (optimized; your keystore if present, else the debug key)
 pnpm android:build              # debug APK, arm64, signed with the debug key
 pnpm android:build --install    # …and push it to the attached device via adb
 pnpm android:apk                # release, one APK per ABI (needs a keystore)
@@ -90,7 +92,9 @@ into `gen/` and the exception would never be read). We patch that project, and
   Android's default (`usesCleartextTraffic=false` outside debug) would leave the release
   APK unable to reach any hub.
 - **Release signing** from `gen/android/keystore.properties`, absent from git. If the
-  file is missing the release stays unsigned instead of failing the build.
+  file is missing the release is signed with the SDK debug key: still optimized and
+  installable (like the 5.0 APK), but not publishable, and moving to the real key later
+  means uninstalling once.
 
 The Tauri-generated pieces stay out of git thanks to the `.gitignore` files inside
 `gen/android` (`jniLibs/**/*.so`, `assets/tauri.conf.json`, `tauri.build.gradle.kts`,
@@ -113,6 +117,16 @@ PROPS
 ```
 
 `*.jks`, `*.keystore` and `keystore.properties` are ignored inside `gen/android`.
+
+### Coming from the 5.0 APK: uninstall first
+
+The 5.0 (Capacitor) APKs were distributed **signed with the debug key**. Android only
+installs an update over an app signed with the *same* key, so the first next-release APK
+(signed with `rekord.jks`) is refused with `INSTALL_FAILED_UPDATE_INCOMPATIBLE` / "App not
+installed". Uninstall the old RE-KORD first (`adb uninstall app.rekord.client`, or from the
+launcher). Nothing is lost that matters: favourites, playlists and preferences live on the
+hub; the phone only remembers the hub address and the chosen account, which the first
+launch asks again (or reads from the QR). From then on keep the same keystore forever.
 
 ## MediaSession / background playback
 
@@ -176,7 +190,137 @@ track rather than at startup — first there is something to show, then we ask t
 it is refused the music still plays, without controls. `proguard-rekord.pro` keeps the
 `@JavascriptInterface` methods: nothing in Java calls them, and R8 would drop them.
 
-Pairing goes through the first-launch screen above; there is no PWA install path.
+Pairing goes through the first-launch screen above; there is no PWA install path on the
+APK (the PWA exists only for the browser client served by the hub).
+
+### Back button
+
+`MainActivity` sets `handleBackNavigation = false` (WryActivity's own handler finishes the
+activity at the bottom of the history, killing the WebView and the music with it) and
+installs its own `OnBackPressedCallback`:
+
+1. if the WebView can go back, `goBack()` — the client pushes a history entry for every
+   view change and every modal/sheet it opens, so Back closes the sheet, then returns to
+   the previous view;
+2. at the bottom of the history, `moveTaskToBack(true)`: the app goes to the background
+   exactly like Home, the activity is **not** destroyed and playback continues (the
+   foreground service keeps the process alive).
+
+`onDestroy` therefore only runs when the activity really dies (removed from Recents, process
+reclaimed); only then does it stop the media service — the WebView, and the audio in it, is
+gone. Configuration changes do not destroy it (`configChanges` in the manifest).
+
+### Orientation
+
+Phones (`smallestScreenWidthDp < 600`) are locked to portrait, as in 5.0; tablets and TVs
+rotate freely. Decided in `MainActivity.applyOrientationPolicy()` before `super.onCreate`, so
+there is no rotate-then-snap on startup.
+
+### Audio focus, headphones, delivery of commands
+
+`RekordMediaService` owns the audio focus on behalf of the WebView (which does not request
+it on its own):
+
+| Event | Action |
+|-------|--------|
+| a track starts (state `playing` from the page, or Play from the notification) | `requestAudioFocus(GAIN)`, `USAGE_MEDIA` / `CONTENT_TYPE_MUSIC`, delayed gain accepted |
+| `AUDIOFOCUS_LOSS` (another music app) | `pause`, focus abandoned, no auto-resume |
+| `AUDIOFOCUS_LOSS_TRANSIENT` (call, navigator prompt) | `pause`, remembers it was playing |
+| `AUDIOFOCUS_GAIN` after a transient loss | `play` if it was playing |
+| `AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK` | nothing: from Android 8 the system ducks by itself (`setWillPauseWhenDucked(false)`) |
+| `ACTION_AUDIO_BECOMING_NOISY` (headphones unplugged, BT off) | `pause` (receiver registered only while playing) |
+| service destroyed / stop | focus abandoned, receiver removed |
+
+All of these reach the player through the same `rekord:media-action` event as the
+notification buttons. `RekordMediaBridge` delivers each command with a 5 s partial wake lock
+(`WAKE_LOCK` permission) and retries every 250 ms, up to 12 times, until the page answers:
+the injected script returns `true` only when `window.__rekordNativeMediaReady` is set
+(`nativeMedia.ts` raises it after the first state reaches the shell, i.e. the player is
+mounted and listening). A newer command replaces a pending one. Same approach as the 5.0
+`MainActivity.java`.
+
+### Files saved from the page
+
+Backups, profile and theme exports are built in memory and "downloaded" through
+`<a download href="blob:…">`, which the Android WebView ignores. `src/lib/platform/downloads.ts`
+intercepts those clicks inside the shell and streams the bytes in base64 chunks (384 KiB) to
+`RekordFiles.kt` (`window.RekordFilesNative`): on Android 10+ the file goes to **Download**
+through `MediaStore` (no permission), on 8–9 to the app's private
+`Android/data/app.rekord.client/files/Download`. A toast shows where it landed.
+
+### Google Cast
+
+The WebView has no Cast extension, so the web sender (`src/lib/cast/googleCast.ts`) stays
+hidden in the app. The shell carries a native sender instead, ported from the 5.0
+`RekordCastManager`:
+
+- `RekordCast.kt`: Google Cast SDK (`play-services-cast-framework` 22.0.0, the 5.0 version,
+  plus `androidx.mediarouter` 1.6.0). `RekordCastOptionsProvider`, declared in the manifest
+  with the `OPTIONS_PROVIDER_CLASS_NAME` meta-data and kept by `proguard-rekord.pro`, selects
+  the **Default Media Receiver** and turns off the Cast SDK's own notification and
+  MediaSession, so the same track never shows up in two notifications.
+- `window.RekordCastNative` (`RekordCastJs`) has `getStatus()`, `requestSession()`
+  (androidx `MediaRouteChooserDialog`), `endSession(stop)`, `load(json)` (URL, MIME,
+  title/artist/album, cover, start position, autoplay), `play`, `pause`, `seek` and `stop`.
+- Everything comes back as the DOM event `rekord:cast`, the same channel `RekordMediaBridge`
+  uses for the notification:
+  - `status`: cast state, device name, player state, idle reason, position, duration and
+    content id, at about 1 Hz while playing;
+  - `session`: `cancelled`, `startFailed` with an SDK code, or `unavailable`;
+  - `result`: the outcome of a load, matched by id.
+- `src/lib/cast/androidCast.ts` implements `CastBackend` over this bridge, and
+  `androidCastStatus.ts` maps the raw SDK names to `CastStatus` (tested in
+  `castAndroid.test.mjs`). When the bridge exists, `castController` picks this backend on its
+  own. The Cast button, the player hand-off (`player.setRemoteOutput`) and queue advance
+  on `FINISHED` are the same as on the web.
+- **Media URLs**: same as on the web (`castMedia.ts`). In the app the hub is already a LAN
+  address (`http://192.168.x.y:7420`), so the receiver uses it as is. Flac, ogg, opus and wav
+  go through `/api/v1/transcode/…?format=mp3` when the hub's health reports `transcode`.
+  Without the transcoder they are sent as they are, and the receiver may refuse them.
+- **While casting**: local decks are paused (the player's remote output). The notification
+  keeps mirroring the player, which now follows the receiver, so it shows the cast track,
+  its play state and "On <device>". Its buttons, the headphone button and the lock screen
+  control the Chromecast through the usual `rekord:media-action`.
+  `RekordMediaService` drops audio focus and the "becoming noisy" receiver: a phone call or
+  unplugged headphones must not pause the living-room speaker. It also switches the
+  MediaSession to remote volume, so the volume keys move the Chromecast's volume with the
+  screen off. With the app open, `MainActivity.dispatchKeyEvent` does the same. The WebView
+  stays awake in the background for as long as a session is connected, because the page is
+  what moves the queue forward when a track ends.
+- **Ending**: disconnecting from the button ends the session and stops the receiver. The
+  player resumes locally at the last reported position. If the app is killed while
+  casting, the receiver finishes the current track. The SDK resumes the saved session on
+  the next launch, and the page then reloads the current track on it.
+
+**Requirements**: Google Play Services on the phone (Cast framework), and the phone, the
+Chromecast or Google Home and the hub on the **same LAN**. The hub address must be the
+LAN IP, not `localhost`. Without Play Services, or with a version the SDK rejects, the init
+reports `supported:false` and the Cast button never appears. Neither case is an error.
+
+**Not verifiable without a device and a Chromecast**: discovery and the device picker, a
+real session start, playback of `/media` and transcoded URLs on the receiver, cover art on
+the TV or Nest Hub, the 1 Hz progress, queue advance on track end (also with the screen
+off), volume keys, the notification while casting, cancel/start-failed toasts, session
+resume after an app restart, and behaviour on devices without Play Services, such as
+Huawei phones or AOSP TV boxes. Useful while testing:
+
+```bash
+adb logcat | grep -iE "RekordCast|CastContext|MediaRouter"
+```
+
+### Manifest notes
+
+- `CAMERA` is merged from the barcode-scanner plugin and also declared explicitly; the
+  plugin declares `android.hardware.camera.any` as **required**, which would hide the app on
+  the Play Store for TVs and camera-less tablets. The manifest overrides it with
+  `required="false"` (`tools:replace`), plus `android.hardware.camera` and
+  `android.hardware.touchscreen` optional. Verify:
+  `aapt2 dump badging app-universal-release.apk | grep feature`.
+- `LEANBACK_LAUNCHER` now has an `android:banner` (`res/drawable-xhdpi/tv_banner.png`,
+  320×180 dp), required for the Android TV launcher.
+- `android:allowBackup="false"`: Android auto-backup would copy the WebView's localStorage
+  (hub address, chosen account) to another phone where that hub may not exist. The data
+  that matters lives on the hub, which has its own backup.
 
 On device, still to be checked by hand (no emulator on the build machine):
 
@@ -198,10 +342,14 @@ WebView resume in `MainActivity.onPause` is the place to look.
   address has to be typed, which the first-launch screen allows anyway. `R8` keeps the
   plugin: `app/tauri/barcodescanner/BarcodeScannerPlugin` and the ML Kit registrars are in
   `classes.dex` of the minified build.
-- `app.rekord.client`, versionCode from `tauri.conf.json` (5.1.0 → 5001000), minSdk 26,
+- `app.rekord.client`, versionCode from the version Tauri reads from `Cargo.toml` (the
+  workspace version; `tauri.conf.json` no longer carries one — 5.0.0 → 5000000), minSdk 26,
   targetSdk 36, `usesCleartextTraffic=true` in debug and release, signed release verified
   with `apksigner verify --print-certs`.
-- The hub answers with `Access-Control-Allow-Origin: *` (`build_router` in
-  `crates/core/src/lib.rs`), which is what lets the WebView call a different origin at all.
+- The WebView's origin is `http://tauri.localhost` (Android) and the hub is another origin:
+  the hub's CORS policy explicitly allows `tauri://localhost` and `http(s)://tauri.localhost`
+  (see [API.md](API.md#cors)), which is what lets the APK call it at all. A reverse proxy in
+  front of the hub must not strip those headers.
 - Optional modules (Plectr, Nebula, DiscoWall) stay deferred.
-- Cast on Android: not in this phase; Chrome Cast remains web/desktop.
+- **Cast**: native Google Cast is back (it was in the 5.0 APK as `RekordCastManager`); see
+  [Google Cast](#google-cast).

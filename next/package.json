@@ -1,6 +1,6 @@
 {
   "name": "rekord",
-  "version": "5.1.0",
+  "version": "5.0.0",
   "private": true,
   "description": "RE-KORD — modular music hub (server API + client UI)",
   "scripts": {
@@ -11,14 +11,30 @@
     "build:ui": "pnpm build:server-ui && pnpm build:client-ui",
     "dev:client": "pnpm --filter @rekord/client-shell tauri dev",
     "build:client": "pnpm --filter @rekord/client-shell tauri build",
+    "dev:client:server-flavor": "pnpm --filter @rekord/client-shell tauri dev --features hub --config src-tauri/tauri.hub.conf.json",
+    "build:client:server-flavor": "pnpm --filter @rekord/client-shell tauri build --features hub --config src-tauri/tauri.hub.conf.json",
     "server": "cargo run -p rekord-server --manifest-path Cargo.toml",
     "build:server": "cargo build -p rekord-server --release --manifest-path Cargo.toml",
-    "pack:linux": "bash scripts/pack-linux.sh",
-    "pack:windows": "bash scripts/pack-windows.sh",
+    "pack:linux:server": "bash scripts/pack.sh linux server",
+    "pack:linux:client": "bash scripts/pack.sh linux client",
+    "pack:win:server": "bash scripts/pack.sh windows server",
+    "pack:win:client": "bash scripts/pack.sh windows client",
+    "pack:android": "bash scripts/pack.sh android",
+    "pack:all": "bash scripts/pack.sh all",
+    "pack:macos": "bash scripts/pack-macos.sh",
+    "fetch:ytdlp": "bash scripts/fetch-ytdlp.sh",
+    "fetch:cloudflared": "bash scripts/fetch-cloudflared.sh",
+    "fetch:ffmpeg": "bash scripts/fetch-ffmpeg.sh",
+    "fetch:tools": "bash scripts/fetch-tools.sh",
+    "docker:build": "docker build -f Dockerfile -t rekord:$npm_package_version .",
     "android:init": "bash scripts/android-init.sh",
     "android:build": "bash scripts/android-build.sh",
     "android:apk": "bash scripts/android-build.sh --release --split",
-    "android:dev": "pnpm --filter @rekord/client-shell exec tauri android dev"
+    "android:dev": "pnpm --filter @rekord/client-shell exec tauri android dev",
+    "check": "pnpm -r --if-present check",
+    "test": "pnpm -r --if-present test && cargo test --workspace --exclude rekord-client",
+    "version:sync": "node scripts/version.mjs sync",
+    "version:check": "node scripts/version.mjs check"
   },
   "engines": {
     "node": ">=20"

@@ -1,0 +1,43 @@
+# RE-KORD hub (next) con Docker Compose.
+#
+#   cd next && docker compose up -d --build
+#   apri http://<host>:7420  (pannello: http://<host>:7420/admin)
+#
+# Dalla 5.0: la porta passa da 3001 a 7420 e i volumi cambiano (/config → /data).
+# Vedi docs/UPGRADE-FROM-5.0.md.
+services:
+  rekord:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rekord:5.0.0
+    container_name: rekord
+    ports:
+      - "${REKORD_PORT:-7420}:7420"
+    environment:
+      REKORD_BIND: 0.0.0.0:7420
+      REKORD_DATA_DIR: /data
+      REKORD_MUSIC_ROOT: /music
+      # Le "operazioni macchina" (scansione, percorso libreria, restore, tunnel)
+      # richiedono un client locale. Dal container ogni richiesta arriva dalla
+      # rete Docker, quindi senza questa variabile vanno fatte con
+      #   docker exec rekord curl -X POST http://127.0.0.1:7420/api/v1/library/scan
+      # Con 1 le puo' fare l'account Default da qualunque client che raggiunge
+      # l'hub: attivala solo su una rete di cui ti fidi.
+      REKORD_ALLOW_REMOTE_ADMIN: ${REKORD_ALLOW_REMOTE_ADMIN:-0}
+      # Origini web extra ammesse da CORS (oltre a quella dell'hub e ai client Tauri).
+      # REKORD_ALLOWED_ORIGINS: https://musica.example.org
+      # REKORD_PUBLIC_URL: https://musica.example.org
+      # ENABLE_YTDLP: "1"
+      # REKORD_YTDLP_COOKIES: /data/youtube-cookies.txt
+      TZ: ${TZ:-Europe/Rome}
+    volumes:
+      # Database, impostazioni, account. Nella 5.0 era /config.
+      - ${REKORD_DATA_HOST:-./docker-data/data}:/data
+      # Libreria musicale (Artista/Album/brano). Togli :ro se usi Studio/download.
+      - ${REKORD_MUSIC_HOST:-./docker-data/music}:/music
+    restart: unless-stopped
+    # L'utente nel container ha uid 10001: le cartelle montate devono essere
+    # scrivibili da lui (sudo chown -R 10001:10001 docker-data), oppure imposta
+    # qui il tuo uid:gid (id -u / id -g).
+    # user: "1000:1000"

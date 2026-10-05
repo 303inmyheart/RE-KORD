@@ -14,9 +14,11 @@ val tauriProperties = Properties().apply {
 }
 
 // La chiave di firma non sta nel repo: si dichiara in gen/android/keystore.properties,
-// che i .gitignore qui accanto tengono fuori. Se il file manca la release esce non
-// firmata invece di far fallire la build, cosi chi compila solo il debug non deve
-// procurarsi una chiave. `scripts/android-build.sh` spiega come crearla.
+// che i .gitignore qui accanto tengono fuori. Se il file manca la release si firma
+// con la chiave di debug dell'SDK: l'APK resta ottimizzato e si installa subito
+// (come l'APK della 5.0), ma non e' pubblicabile sul Play Store e gli aggiornamenti
+// firmati poi con la chiave vera richiedono di disinstallarlo.
+// `scripts/android-build.sh` spiega come crearla.
 val keystoreFile = rootProject.file("keystore.properties")
 val keystore = Properties().apply {
     if (keystoreFile.exists()) {
@@ -63,8 +65,10 @@ android {
             // http://192.168.1.20:7420: su un IP privato non c'e certificato da avere, e
             // col valore di serie (false) l'APK di release non parla con nessun hub.
             manifestPlaceholders["usesCleartextTraffic"] = "true"
-            if (keystoreFile.exists()) {
-                signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (keystoreFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
             }
             isMinifyEnabled = true
             proguardFiles(
@@ -94,6 +98,11 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
     // MediaSessionCompat, MediaStyle e MediaButtonReceiver per la notifica media.
     implementation("androidx.media:media:1.7.0")
+    // Google Cast nativo (RekordCast.kt): stessa versione della 5.0. Il selettore dei
+    // dispositivi viene da androidx.mediarouter (lo tira gia' dentro il Cast SDK,
+    // qui e' esplicito perche' RekordCast lo usa direttamente).
+    implementation("com.google.android.gms:play-services-cast-framework:22.0.0")
+    implementation("androidx.mediarouter:mediarouter:1.6.0")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

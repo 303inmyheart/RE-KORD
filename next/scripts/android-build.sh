@@ -60,9 +60,10 @@ KEYSTORE="$ANDROID_DIR/keystore.properties"
 if [[ "$PROFILE" == release && ! -f "$KEYSTORE" ]]; then
   cat >&2 <<EOF
 
-Attenzione: manca $KEYSTORE, l'APK di release uscira' NON firmato e Android
-rifiutera' di installarlo. Per creare una chiave tua (una volta sola, e conservala:
-senza la stessa chiave gli aggiornamenti non si installano sopra):
+Nota: manca $KEYSTORE, l'APK di release si firma con la chiave di debug
+dell'SDK. Si installa subito, ma non va sul Play Store e il passaggio poi alla
+chiave vera richiede di disinstallare l'app. Per creare una chiave tua (una volta
+sola, e conservala: senza la stessa chiave gli aggiornamenti non si installano sopra):
 
   keytool -genkey -v -keystore $ANDROID_DIR/rekord.jks \\
     -keyalg RSA -keysize 2048 -validity 10000 -alias rekord

@@ -1,7 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for RE-KORD client",
+  "description": "Permessi comuni a ogni piattaforma: eventi/finestra di base e apertura dei link esterni nel browser di sistema (solo http/https/mailto/tel, come da opener:default)",
+  "platforms": ["linux", "macOS", "windows", "android", "iOS"],
   "windows": ["main"],
-  "permissions": ["core:default", "shell:allow-open"]
+  "permissions": ["core:default", "opener:default"]
 }

@@ -1,5 +1,9 @@
 package app.rekord.client
 
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import org.json.JSONObject
@@ -47,28 +51,102 @@ data class NowPlaying(
  * I comandi della notifica tornano al lettore per la strada che il client ha
  * gia' pronta per i gusci nativi: un evento nel DOM, gli stessi nomi di azione
  * della Media Session (vedi `src/lib/mediaSession.ts`).
+ *
+ * A schermo spento la consegna non e' scontata: la WebView puo' essere sospesa,
+ * la CPU puo' riaddormentarsi prima che lo script giri, la pagina puo' essere
+ * ancora in caricamento. Come nella 5.0: un wake lock di pochi secondi, la
+ * WebView risvegliata, e lo script che risponde `true` solo se il lettore c'e'
+ * (`window.__rekordNativeMediaReady`, alzata da `nativeMedia.ts` al primo stato
+ * inviato). Altrimenti si riprova qualche volta, poi si lascia perdere.
  */
 object RekordMediaBridge {
     @Volatile
     var webView: WebView? = null
 
+    private const val WAKE_MS = 5_000L
+    private const val RETRY_MS = 250L
+    private const val MAX_ATTEMPTS = 12
+
+    private val main = Handler(Looper.getMainLooper())
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    /** Un solo comando in volo: un «play» seguito da «pause» vale come «pause». */
+    private var pending: Pair<String, Double?>? = null
+    private var attempts = 0
+    private val retry = Runnable { deliver() }
+
+    fun attach(context: Context) {
+        if (wakeLock != null) return
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Rekord:MediaCommand").apply {
+            setReferenceCounted(false)
+        }
+    }
+
     fun send(action: String, value: Double? = null) {
-        val view = webView ?: return
+        main.post {
+            pending = action to value
+            attempts = 0
+            main.removeCallbacks(retry)
+            try {
+                wakeLock?.acquire(WAKE_MS)
+            } catch (e: Exception) {
+                Logger.warn("RekordMedia: wake lock non disponibile: ${e.message}")
+            }
+            deliver()
+        }
+    }
+
+    private fun deliver() {
+        val command = pending ?: return
+        val view = webView
+        if (view == null) {
+            scheduleRetry()
+            return
+        }
+        val (action, value) = command
         val detail = if (value == null) {
             "{action:'$action'}"
         } else {
             "{action:'$action',value:$value}"
         }
-        val script =
-            "window.dispatchEvent(new CustomEvent('rekord:media-action',{detail:$detail}))"
-        // evaluateJavascript vuole il thread principale, e i comandi arrivano dal
-        // thread della notifica o del bottone sulle cuffie.
-        view.post {
-            // Con l'app in secondo piano e la musica in pausa la WebView e' sospesa:
-            // un play dalla notifica parlerebbe a un lettore addormentato. Prima si
-            // riaccende, poi le si dice cosa fare.
-            view.onResume()
-            view.evaluateJavascript(script, null)
+        val script = "(function(){if(!window.__rekordNativeMediaReady)return false;" +
+            "window.dispatchEvent(new CustomEvent('rekord:media-action',{detail:$detail}));" +
+            "return true})()"
+        // Con l'app in secondo piano e la musica in pausa la WebView e' sospesa:
+        // un play dalla notifica parlerebbe a un lettore addormentato. Prima si
+        // riaccende, poi le si dice cosa fare.
+        view.onResume()
+        view.resumeTimers()
+        view.evaluateJavascript(script) { result ->
+            if (pending !== command) return@evaluateJavascript
+            if (result == "true") {
+                done()
+            } else {
+                scheduleRetry()
+            }
+        }
+    }
+
+    private fun scheduleRetry() {
+        attempts += 1
+        if (attempts >= MAX_ATTEMPTS) {
+            Logger.warn("RekordMedia: comando ${pending?.first} non consegnato")
+            done()
+            return
+        }
+        main.removeCallbacks(retry)
+        main.postDelayed(retry, RETRY_MS)
+    }
+
+    private fun done() {
+        pending = null
+        attempts = 0
+        main.removeCallbacks(retry)
+        try {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        } catch (e: Exception) {
+            Logger.warn("RekordMedia: wake lock non rilasciato: ${e.message}")
         }
     }
 }

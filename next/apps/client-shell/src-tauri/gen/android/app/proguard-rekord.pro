@@ -3,3 +3,6 @@
 -keepclasseswithmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
+
+# Google Cast: l'OptionsProvider lo istanzia Play Services per nome, dal manifest.
+-keep class app.rekord.client.RekordCastOptionsProvider { *; }
