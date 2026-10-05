@@ -1,8 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use rekord_core::backup;
-use rekord_core::modules::{load_registry, write_default_manifest};
-use rekord_core::{serve, AppConfig, AppState, UiDirs};
+use rekord_core::{prepare_hub_state, run_hub, shutdown_signal, AppConfig, HubOptions, UiDirs};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use tracing::info;
@@ -94,8 +93,7 @@ fn resolve_ui_dirs(args: &Args) -> UiDirs {
     UiDirs { client, admin }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Structured logs + recent-errors buffer exposed via /api/v1/diagnostics.
     tracing_subscriber::registry()
         .with(
@@ -107,71 +105,88 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    let mut config = AppConfig::resolve(args.data_dir.clone(), args.bind, args.modules_manifest.clone());
-    config.ensure_dirs()?;
-    write_default_manifest(&config.modules_manifest)?;
-    config.set_music_root_if_present(args.music_root.as_deref())?;
+    // `run_hub` reads the manifest path from the environment; set it before
+    // the runtime starts any thread.
+    if let Some(manifest) = &args.modules_manifest {
+        std::env::set_var("REKORD_MODULES_MANIFEST", manifest);
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main(args))
+}
 
-    let modules = load_registry(&config.modules_manifest)?;
-    info!(
-        data_dir = %config.data_dir.display(),
-        bind = %config.bind,
-        enabled_modules = ?modules.enabled_ids(),
-        "starting RE-KORD server"
-    );
-
+async fn async_main(args: Args) -> Result<()> {
     let ui = resolve_ui_dirs(&args);
+    let opts = HubOptions {
+        bind: args.bind,
+        data_dir: args
+            .data_dir
+            .clone()
+            .unwrap_or_else(AppConfig::default_data_dir),
+        client_ui_dir: ui.client,
+        admin_ui_dir: ui.admin,
+    };
 
-    let bind = config.bind;
-    let state = AppState::new(config, modules)?;
+    if let Some(root) = args.music_root.as_deref() {
+        let mut config = AppConfig::resolve(Some(opts.data_dir.clone()), opts.bind, None);
+        config.ensure_dirs()?;
+        config.save_music_root(root.to_path_buf())?;
+    }
 
-    if let Some(zip_path) = args.restore_zip {
-        info!(path = %zip_path.display(), "restoring backup zip from disk");
-        let bytes = std::fs::read(&zip_path)?;
-        let report = backup::restore_backup_zip(&state, bytes).await?;
-        info!(
-            version = report.version,
-            favorites = report.favorites,
-            playlists = report.playlists,
-            playlist_tracks = report.playlist_tracks,
-            library_files = report.library_files,
-            scanned_tracks = report.scanned_tracks,
-            album_meta_merged = report.album_meta_merged,
-            track_meta_merged = report.track_meta_merged,
-            "restore finished"
-        );
-        if args.restore_exit {
-            return Ok(());
+    // One-shot maintenance tasks run on their own state before serving.
+    if args.restore_zip.is_some() || args.sync_legacy_meta {
+        let state = prepare_hub_state(&opts, None, args.modules_manifest.clone())?;
+
+        if let Some(zip_path) = args.restore_zip.as_ref() {
+            info!(path = %zip_path.display(), "restoring backup zip from disk");
+            let bytes = std::fs::read(zip_path)?;
+            let report = backup::restore_backup_zip(&state, bytes).await?;
+            info!(
+                version = report.version,
+                favorites = report.favorites,
+                playlists = report.playlists,
+                playlist_tracks = report.playlist_tracks,
+                library_files = report.library_files,
+                scanned_tracks = report.scanned_tracks,
+                album_meta_merged = report.album_meta_merged,
+                track_meta_merged = report.track_meta_merged,
+                "restore finished"
+            );
+            if args.restore_exit {
+                return Ok(());
+            }
+        }
+
+        if args.sync_legacy_meta {
+            let (data_dir, root) = {
+                let cfg = state.config.lock().unwrap();
+                (cfg.data_dir.clone(), cfg.music_root.clone())
+            };
+            let Some(root) = root else {
+                anyhow::bail!(
+                    "--sync-legacy-meta requires music_root (set via settings or --music-root)"
+                );
+            };
+            info!(path = %root.display(), "syncing legacy library metadata + personal data");
+            let report = backup::sync_legacy_library_data(&state.db, &data_dir, &root)?;
+            info!(
+                album_meta_merged = report.album_meta_merged,
+                track_meta_merged = report.track_meta_merged,
+                accounts_moods_synced = report.accounts_moods_synced,
+                moods_imported = report.moods_imported,
+                favorites_linked = report.favorites_linked,
+                playlists_imported = report.playlists_imported,
+                playlist_tracks_linked = report.playlist_tracks_linked,
+                selections_imported = report.selections_imported,
+                accounts_registry = report.accounts_registry,
+                "legacy sync finished"
+            );
+            if args.sync_legacy_exit {
+                return Ok(());
+            }
         }
     }
 
-    if args.sync_legacy_meta {
-        let (data_dir, root) = {
-            let cfg = state.config.lock().unwrap();
-            (cfg.data_dir.clone(), cfg.music_root.clone())
-        };
-        let Some(root) = root else {
-            anyhow::bail!("--sync-legacy-meta requires music_root (set via settings or --music-root)");
-        };
-        info!(path = %root.display(), "syncing legacy library metadata + personal data");
-        let report = backup::sync_legacy_library_data(&state.db, &data_dir, &root)?;
-        info!(
-            album_meta_merged = report.album_meta_merged,
-            track_meta_merged = report.track_meta_merged,
-            accounts_moods_synced = report.accounts_moods_synced,
-            moods_imported = report.moods_imported,
-            favorites_linked = report.favorites_linked,
-            playlists_imported = report.playlists_imported,
-            playlist_tracks_linked = report.playlist_tracks_linked,
-            selections_imported = report.selections_imported,
-            accounts_registry = report.accounts_registry,
-            "legacy sync finished"
-        );
-        if args.sync_legacy_exit {
-            return Ok(());
-        }
-    }
-
-    serve(state, bind, ui).await?;
-    Ok(())
+    run_hub(opts, shutdown_signal()).await
 }

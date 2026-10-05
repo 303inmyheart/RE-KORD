@@ -24,15 +24,77 @@ fn client_version() -> String {
         .unwrap_or_else(|| "1.20241127.01.00".into())
 }
 
-fn innertube_context() -> Value {
+/// Innertube language / region (`hl` / `gl`), from the request locale.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct YtmLocale {
+    pub hl: String,
+    pub gl: String,
+}
+
+impl Default for YtmLocale {
+    /// Legacy default (the app's primary audience).
+    fn default() -> Self {
+        Self {
+            hl: "it".into(),
+            gl: "IT".into(),
+        }
+    }
+}
+
+impl YtmLocale {
+    /// From explicit `hl` / `gl` (or `locale=it-IT`), then `Accept-Language`,
+    /// then the default. Only `[A-Za-z-]` tags are accepted.
+    pub fn from_request(hl: Option<&str>, gl: Option<&str>, accept_language: Option<&str>) -> Self {
+        fn clean(s: &str) -> Option<String> {
+            let t = s.trim().replace('_', "-");
+            (!t.is_empty()
+                && t.len() <= 16
+                && t.chars().all(|c| c.is_ascii_alphabetic() || c == '-'))
+            .then_some(t)
+        }
+        let tag = hl.and_then(clean).or_else(|| {
+            accept_language
+                .and_then(|h| h.split(',').next())
+                .map(|first| first.split(';').next().unwrap_or("").to_string())
+                .and_then(|t| clean(&t))
+        });
+        let Some(tag) = tag else {
+            return Self::default();
+        };
+        let mut parts = tag.split('-');
+        let lang = parts.next().unwrap_or("it").to_ascii_lowercase();
+        let region_from_tag = parts.find(|p| p.len() == 2).map(|r| r.to_ascii_uppercase());
+        let region = gl
+            .and_then(clean)
+            .filter(|g| g.len() == 2)
+            .map(|g| g.to_ascii_uppercase())
+            .or(region_from_tag)
+            .unwrap_or_else(|| match lang.as_str() {
+                "en" => "US".into(),
+                "it" => "IT".into(),
+                other if other.len() == 2 => other.to_ascii_uppercase(),
+                _ => "US".into(),
+            });
+        Self {
+            hl: lang,
+            gl: region,
+        }
+    }
+}
+
+fn innertube_context_for(locale: &YtmLocale) -> Value {
     json!({
         "client": {
             "clientName": "WEB_REMIX",
             "clientVersion": client_version(),
-            "hl": "it",
-            "gl": "IT",
+            "hl": locale.hl,
+            "gl": locale.gl,
         }
     })
+}
+
+fn innertube_context() -> Value {
+    innertube_context_for(&YtmLocale::default())
 }
 
 fn http_client() -> Result<reqwest::Client> {
@@ -284,12 +346,16 @@ fn parse_two_row_item(renderer: &Value) -> Option<ExploreResult> {
 }
 
 pub async fn explore_search(query: &str) -> Result<Vec<ExploreResult>> {
+    explore_search_with(query, &YtmLocale::default()).await
+}
+
+pub async fn explore_search_with(query: &str, locale: &YtmLocale) -> Result<Vec<ExploreResult>> {
     let q = query.trim();
     if q.len() < 2 {
         bail!("query too short");
     }
     let body = json!({
-        "context": innertube_context(),
+        "context": innertube_context_for(locale),
         "query": q,
     });
     let data = innertube_post(YTM_SEARCH_URL, body).await?;
@@ -584,8 +650,13 @@ pub struct CatalogWebDiscover {
     pub artists: Vec<CatalogWebItem>,
     pub albums: Vec<CatalogWebItem>,
     pub songs: Vec<CatalogWebItem>,
+    /// Code of the first feed error (`upstream_rejected`, …), if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Every feed error, structured.
+    pub errors: Vec<DiscoverError>,
+    /// Singles came from the albums feed because the singles feed failed.
+    pub singles_recovered: bool,
 }
 
 fn playlist_id_from_endpoint(ep: &Value) -> String {
@@ -626,9 +697,9 @@ fn resolve_album_url(renderer: &Value) -> String {
     url_from_browse(ep)
 }
 
-async fn browse_new_releases(browse_id: &str) -> Result<Vec<CatalogWebItem>> {
+async fn browse_new_releases(browse_id: &str, locale: &YtmLocale) -> Result<Vec<CatalogWebItem>> {
     let body = json!({
-        "context": innertube_context(),
+        "context": innertube_context_for(locale),
         "browseId": browse_id,
     });
     let data = innertube_post(YTM_BROWSE_URL, body).await?;
@@ -663,57 +734,332 @@ async fn browse_new_releases(browse_id: &str) -> Result<Vec<CatalogWebItem>> {
     Ok(out)
 }
 
-pub async fn catalog_web_discover(local_album_keys: &HashSet<String>) -> CatalogWebDiscover {
-    let albums_res = browse_new_releases(NEW_RELEASES_ALBUMS).await;
-    let singles_res = browse_new_releases(NEW_RELEASES_SINGLES).await;
-    let mut error = None;
-    let mut albums = albums_res.unwrap_or_else(|e| {
-        error = Some(e.to_string());
-        vec![]
-    });
-    let mut songs = singles_res.unwrap_or_else(|e| {
-        if error.is_none() {
-            error = Some(e.to_string());
+/// Release type and artist of a new-releases subtitle («Single • Artist»,
+/// «EP • …», «Album • …»; parity legacy `parseDiscoverSubtitleLine`).
+pub fn parse_discover_subtitle(subtitle: &str) -> (Option<String>, String) {
+    let raw = subtitle.trim();
+    for sep in ['•', '·', '|', '–', '—', '-'] {
+        if let Some((head, tail)) = raw.split_once(sep) {
+            let head = head.trim();
+            let known = ["album", "ep", "single", "singolo", "video"];
+            if known.contains(&head.to_lowercase().as_str()) {
+                return (Some(head.to_string()), tail.trim().to_string());
+            }
         }
-        vec![]
-    });
-    let filter = |items: &mut Vec<CatalogWebItem>| {
-        items.retain(|it| {
-            let key = format!(
-                "{} / {}",
-                it.subtitle.split('•').next().unwrap_or("").trim(),
-                it.title
-            )
-            .to_lowercase();
-            !local_album_keys.iter().any(|k| {
-                let kl = k.to_lowercase();
-                kl.contains(&it.title.to_lowercase()) || key.contains(&kl)
-            })
-        });
-        // Sample up to 36
-        if items.len() > 36 {
-            items.truncate(36);
-        }
+    }
+    (None, raw.to_string())
+}
+
+fn is_watch_single_url(url: &str) -> bool {
+    let Ok(u) = url::Url::parse(url) else {
+        return false;
     };
-    filter(&mut albums);
-    filter(&mut songs);
+    let host = u.host_str().unwrap_or("");
+    if !host.contains("youtube.com") && !host.contains("youtu.be") {
+        return false;
+    }
+    if u.query_pairs().any(|(k, _)| k == "list") {
+        return false;
+    }
+    u.query_pairs().any(|(k, _)| k == "v") || host.contains("youtu.be")
+}
+
+/// `song` or `album` (parity legacy `classifyDiscoverKind`).
+pub fn classify_discover_kind(item: &CatalogWebItem, from_singles_feed: bool) -> &'static str {
+    let (release_type, _) = parse_discover_subtitle(&item.subtitle);
+    let t = release_type.unwrap_or_default().to_lowercase();
+    if t == "single" || t == "singolo" || t == "video" || from_singles_feed {
+        return "song";
+    }
+    if is_watch_single_url(&item.url) {
+        return "song";
+    }
+    "album"
+}
+
+/// Accent / case / punctuation-insensitive label (legacy `normalizeDiscoverLabel`).
+pub fn normalize_discover_label(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut space = false;
+    for c in value.chars() {
+        let base = fold_accent(c);
+        for b in base.to_lowercase() {
+            if b.is_alphanumeric() {
+                if space && !out.is_empty() {
+                    out.push(' ');
+                }
+                space = false;
+                out.push(b);
+            } else {
+                space = true;
+            }
+        }
+    }
+    out
+}
+
+fn fold_accent(c: char) -> char {
+    match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' => 'a',
+        'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'Ā' => 'A',
+        'è' | 'é' | 'ê' | 'ë' | 'ē' => 'e',
+        'È' | 'É' | 'Ê' | 'Ë' | 'Ē' => 'E',
+        'ì' | 'í' | 'î' | 'ï' | 'ī' => 'i',
+        'Ì' | 'Í' | 'Î' | 'Ï' | 'Ī' => 'I',
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' => 'o',
+        'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'Ø' | 'Ō' => 'O',
+        'ù' | 'ú' | 'û' | 'ü' | 'ū' => 'u',
+        'Ù' | 'Ú' | 'Û' | 'Ü' | 'Ū' => 'U',
+        'ñ' => 'n',
+        'Ñ' => 'N',
+        'ç' => 'c',
+        'Ç' => 'C',
+        'ý' | 'ÿ' => 'y',
+        'Ý' => 'Y',
+        other => other,
+    }
+}
+
+/// Library albums as normalized `artist|album` keys.
+pub fn library_album_keys<'a>(
+    albums: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for (artist, album) in albums {
+        let a = normalize_discover_label(artist);
+        let n = normalize_discover_label(album);
+        if !a.is_empty() && !n.is_empty() {
+            out.insert(format!("{a}|{n}"));
+        }
+    }
+    out
+}
+
+/// Exact normalized artist + title match against the library.
+pub fn is_in_library(item: &CatalogWebItem, library: &HashSet<String>) -> bool {
+    let (_, artist) = parse_discover_subtitle(&item.subtitle);
+    // "Artist1 & Artist2 • 2026": keep only the artist part.
+    let artist = artist.split('•').next().unwrap_or("").trim().to_string();
+    let a = normalize_discover_label(&artist);
+    let t = normalize_discover_label(&item.title);
+    !a.is_empty() && !t.is_empty() && library.contains(&format!("{a}|{t}"))
+}
+
+/// Random sample without replacement (partial Fisher–Yates).
+fn random_subset<T>(mut items: Vec<T>, count: usize) -> Vec<T> {
+    let n = count.min(items.len());
+    let mut seed = uuid::Uuid::new_v4().as_u128() as u64 | 1;
+    let mut next = || {
+        // xorshift64*
+        seed ^= seed >> 12;
+        seed ^= seed << 25;
+        seed ^= seed >> 27;
+        seed.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    };
+    for i in 0..n {
+        let span = (items.len() - i) as u64;
+        let j = i + (next() % span) as usize;
+        items.swap(i, j);
+    }
+    items.truncate(n);
+    items
+}
+
+/// Items shown per section.
+pub const DISCOVER_SAMPLE: usize = 36;
+
+/// Structured upstream error of the discover feed.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoverError {
+    /// `albums` / `singles`.
+    pub feed: &'static str,
+    pub code: &'static str,
+    pub message: String,
+}
+
+fn discover_error(feed: &'static str, e: &anyhow::Error) -> DiscoverError {
+    let m = e.to_string();
+    let code = if m.contains("HTTP 4") {
+        "upstream_rejected"
+    } else if m.contains("HTTP 5") {
+        "upstream_unavailable"
+    } else if m.to_lowercase().contains("timed out") {
+        "upstream_timeout"
+    } else {
+        "upstream_failed"
+    };
+    DiscoverError {
+        feed,
+        code,
+        message: m,
+    }
+}
+
+/// New releases (albums + singles) not already in the library, sampled.
+/// When the singles feed fails, singles / EP-less "Single" items are
+/// recovered from the albums feed (legacy `classifyDiscoverKind`).
+pub async fn catalog_web_discover(
+    library: &HashSet<String>,
+    locale: &YtmLocale,
+) -> CatalogWebDiscover {
+    let (albums_res, singles_res) = tokio::join!(
+        browse_new_releases(NEW_RELEASES_ALBUMS, locale),
+        browse_new_releases(NEW_RELEASES_SINGLES, locale)
+    );
+    let mut errors = Vec::new();
+    let album_feed = albums_res.unwrap_or_else(|e| {
+        errors.push(discover_error("albums", &e));
+        vec![]
+    });
+    let singles_ok = singles_res.is_ok();
+    let singles_feed = singles_res.unwrap_or_else(|e| {
+        errors.push(discover_error("singles", &e));
+        vec![]
+    });
+    let mut albums = Vec::new();
+    let mut songs = Vec::new();
+    for it in album_feed {
+        if classify_discover_kind(&it, false) == "song" {
+            songs.push(it);
+        } else {
+            albums.push(it);
+        }
+    }
+    let mut seen: HashSet<String> = songs.iter().map(|s| s.url.clone()).collect();
+    for it in singles_feed {
+        if seen.insert(it.url.clone()) {
+            songs.push(it);
+        }
+    }
+    albums.retain(|it| !is_in_library(it, library));
+    songs.retain(|it| !is_in_library(it, library));
+    let albums = random_subset(albums, DISCOVER_SAMPLE);
+    let songs = random_subset(songs, DISCOVER_SAMPLE);
+    // A failed singles feed recovered from the albums feed is not an error
+    // for the page; it stays listed in `errors`.
+    let blocking_error = errors
+        .iter()
+        .find(|e| e.feed != "singles" || songs.is_empty())
+        .map(|e| e.code.to_string());
     CatalogWebDiscover {
         artists: vec![],
         albums,
         songs,
-        error,
+        error: blocking_error,
+        errors,
+        singles_recovered: !singles_ok,
     }
 }
 
 /// Flat-count helper used by API.
-pub async fn flat_playlist_count(cfg: &AppConfig, url: &str) -> Result<u64> {
+/// `None` when yt-dlp answered but the count is unknown.
+pub async fn flat_playlist_count(cfg: &AppConfig, url: &str) -> Result<Option<u64>> {
     let data = run_json_probe(cfg, url, 30_000).await?;
-    Ok(playlist_track_count(&data).unwrap_or(0))
+    Ok(playlist_track_count(&data))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item(title: &str, subtitle: &str, url: &str) -> CatalogWebItem {
+        CatalogWebItem {
+            id: title.into(),
+            title: title.into(),
+            subtitle: subtitle.into(),
+            url: url.into(),
+            thumbnail_url: None,
+        }
+    }
+
+    #[test]
+    fn discover_classifies_singles_out_of_albums_feed() {
+        let single = item(
+            "Song",
+            "Single • Artist",
+            "https://music.youtube.com/playlist?list=OLAK1",
+        );
+        let album = item(
+            "Record",
+            "Album • Artist",
+            "https://music.youtube.com/playlist?list=OLAK2",
+        );
+        let ep = item(
+            "Five",
+            "EP • Artist",
+            "https://music.youtube.com/playlist?list=OLAK3",
+        );
+        let watch = item(
+            "Clip",
+            "Artist",
+            "https://www.youtube.com/watch?v=abc12345678",
+        );
+        assert_eq!(classify_discover_kind(&single, false), "song");
+        assert_eq!(classify_discover_kind(&album, false), "album");
+        assert_eq!(classify_discover_kind(&ep, false), "album");
+        assert_eq!(classify_discover_kind(&watch, false), "song");
+        assert_eq!(classify_discover_kind(&album, true), "song");
+    }
+
+    #[test]
+    fn library_match_is_exact_normalized() {
+        let lib = library_album_keys([("Beyoncé", "Cowboy Carter"), ("Eagles", "Desperado")]);
+        assert!(is_in_library(
+            &item("COWBOY  CARTER", "Album • Beyonce", ""),
+            &lib
+        ));
+        assert!(is_in_library(&item("Desperado", "Eagles", ""), &lib));
+        // Substrings no longer match.
+        assert!(!is_in_library(
+            &item("Desperado (Live)", "Album • Eagles", ""),
+            &lib
+        ));
+        assert!(!is_in_library(&item("Carter", "Album • Beyoncé", ""), &lib));
+        assert!(!is_in_library(
+            &item("Desperado", "Album • Other", ""),
+            &lib
+        ));
+    }
+
+    #[test]
+    fn random_subset_samples_without_replacement() {
+        let v: Vec<u32> = (0..100).collect();
+        let s = random_subset(v.clone(), 36);
+        assert_eq!(s.len(), 36);
+        let uniq: HashSet<_> = s.iter().collect();
+        assert_eq!(uniq.len(), 36);
+        assert_eq!(random_subset(vec![1, 2], 36).len(), 2);
+    }
+
+    #[test]
+    fn locale_from_request() {
+        assert_eq!(
+            YtmLocale::from_request(Some("en-GB"), None, None),
+            YtmLocale {
+                hl: "en".into(),
+                gl: "GB".into()
+            }
+        );
+        assert_eq!(
+            YtmLocale::from_request(None, None, Some("de-DE,de;q=0.9,en;q=0.8")),
+            YtmLocale {
+                hl: "de".into(),
+                gl: "DE".into()
+            }
+        );
+        assert_eq!(
+            YtmLocale::from_request(Some("en"), Some("ca"), None),
+            YtmLocale {
+                hl: "en".into(),
+                gl: "CA".into()
+            }
+        );
+        assert_eq!(
+            YtmLocale::from_request(Some("<script>"), None, None),
+            YtmLocale::default()
+        );
+    }
 
     #[test]
     fn browse_id_from_skrillex_mpad_url() {

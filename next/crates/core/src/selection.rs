@@ -347,7 +347,11 @@ pub fn filter_albums(albums: Vec<Album>, sel: &LibrarySelection) -> Vec<Album> {
     }
 }
 
-pub fn filter_tracks(tracks: Vec<Track>, albums: &[Album], sel: &LibrarySelection) -> Vec<Track> {
+pub fn filter_tracks<T: AsRef<Track>>(
+    tracks: Vec<T>,
+    albums: &[Album],
+    sel: &LibrarySelection,
+) -> Vec<T> {
     match get_selection_filter_mode(sel) {
         SelectionFilterMode::All => tracks,
         SelectionFilterMode::Empty => Vec::new(),
@@ -357,6 +361,7 @@ pub fn filter_tracks(tracks: Vec<Track>, albums: &[Album], sel: &LibrarySelectio
             tracks
                 .into_iter()
                 .filter(|t| {
+                    let t = t.as_ref();
                     track_set.contains(t.rel_path.as_str())
                         || t.album_id
                             .map(|id| album_ids.contains(&id))
@@ -367,10 +372,64 @@ pub fn filter_tracks(tracks: Vec<Track>, albums: &[Album], sel: &LibrarySelectio
     }
 }
 
-pub fn filter_artists(
+/// Library counters for one account's selection (parity legacy
+/// `filterLibraryIndexBySelection` stats): only albums with at least one
+/// visible track and artists with at least one visible album count.
+pub fn selection_stats(
+    albums: &[Album],
+    tracks: &[crate::db::LibraryTrack],
+    artist_count_all: i64,
+    sel: &LibrarySelection,
+    stats: &mut crate::db::LibraryStats,
+) {
+    let mode = get_selection_filter_mode(sel);
+    let (albums, tracks): (Vec<&Album>, Vec<&crate::db::LibraryTrack>) = match mode {
+        SelectionFilterMode::All => (albums.iter().collect(), tracks.iter().collect()),
+        SelectionFilterMode::Empty => (Vec::new(), Vec::new()),
+        SelectionFilterMode::Filter => {
+            let visible = filter_albums(albums.to_vec(), sel);
+            let ids: HashSet<i64> = visible.iter().map(|a| a.id).collect();
+            let kept: Vec<&crate::db::LibraryTrack> =
+                filter_tracks(tracks.iter().collect::<Vec<_>>(), &visible, sel);
+            let with_tracks: HashSet<i64> = kept.iter().filter_map(|t| t.album_id).collect();
+            (
+                albums
+                    .iter()
+                    .filter(|a| ids.contains(&a.id) && with_tracks.contains(&a.id))
+                    .collect(),
+                kept,
+            )
+        }
+    };
+    let artists: HashSet<&str> = albums.iter().map(|a| a.artist_name.as_str()).collect();
+    stats.track_count = tracks.len() as i64;
+    stats.album_count = albums.len() as i64;
+    stats.artist_count = if mode == SelectionFilterMode::All {
+        artist_count_all
+    } else {
+        artists.len() as i64
+    };
+    stats.albums_without_cover = albums.iter().filter(|a| !a.loose && !a.has_cover).count() as i64;
+    stats.albums_without_meta = albums
+        .iter()
+        .filter(|a| !a.loose && !a.has_album_meta)
+        .count() as i64;
+    stats.tracks_without_meta = tracks
+        .iter()
+        .filter(|t| t.genres.is_empty() && t.release_date.is_none())
+        .count() as i64;
+    stats.loose_album_count = albums.iter().filter(|a| a.loose).count() as i64;
+    stats.genre_count = tracks
+        .iter()
+        .flat_map(|t| t.genres.iter().map(|g| crate::db::text::genre_key(g)))
+        .collect::<HashSet<_>>()
+        .len() as i64;
+}
+
+pub fn filter_artists<T: AsRef<Track>>(
     artists: Vec<Artist>,
     albums: &[Album],
-    tracks: &[Track],
+    tracks: &[T],
     sel: &LibrarySelection,
 ) -> Vec<Artist> {
     match get_selection_filter_mode(sel) {
@@ -380,8 +439,10 @@ pub fn filter_artists(
             let artist_set: HashSet<&str> = sel.artists.iter().map(|s| s.as_str()).collect();
             let album_artist_names: HashSet<&str> =
                 albums.iter().map(|a| a.artist_name.as_str()).collect();
-            let track_artist_names: HashSet<&str> =
-                tracks.iter().map(|t| t.artist_name.as_str()).collect();
+            let track_artist_names: HashSet<&str> = tracks
+                .iter()
+                .map(|t| t.as_ref().artist_name.as_str())
+                .collect();
             artists
                 .into_iter()
                 .filter(|a| {
@@ -392,7 +453,10 @@ pub fn filter_artists(
                 .map(|mut a| {
                     // Recount from filtered albums/tracks for accurate UI badges.
                     let ac = albums.iter().filter(|al| al.artist_name == a.name).count() as i64;
-                    let tc = tracks.iter().filter(|t| t.artist_name == a.name).count() as i64;
+                    let tc = tracks
+                        .iter()
+                        .filter(|t| t.as_ref().artist_name == a.name)
+                        .count() as i64;
                     a.album_count = ac;
                     a.track_count = tc;
                     a

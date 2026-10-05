@@ -3,7 +3,8 @@
 
 use crate::layout::is_audio_name;
 use crate::path_util::{
-    join_under_root, rel_path_looks_like_album_folder, safe_dir_name, safe_rel_path, under_root,
+    has_reserved_segment, join_under_root, rel_path_looks_like_album_folder, safe_dir_name,
+    safe_rel_path, under_root,
 };
 use anyhow::{bail, Result};
 use serde::Serialize;
@@ -48,7 +49,7 @@ pub fn list_dirs(music_root: &Path, rel: &str) -> Result<FsListResponse> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
+        if name.starts_with('.') || has_reserved_segment(&name) {
             continue;
         }
         let child_rel = if path_rel.is_empty() {
@@ -116,7 +117,6 @@ pub fn search_dirs(music_root: &Path, q: &str, limit: usize) -> Result<(Vec<FsSe
     let mut results = Vec::new();
     let mut truncated = false;
     fn walk(
-        root: &Path,
         dir: &Path,
         prefix: &str,
         query: &str,
@@ -146,7 +146,7 @@ pub fn search_dirs(music_root: &Path, q: &str, limit: usize) -> Result<(Vec<FsSe
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') {
+            if name.starts_with('.') || has_reserved_segment(&name) {
                 continue;
             }
             let rel = if prefix.is_empty() {
@@ -163,7 +163,6 @@ pub fn search_dirs(music_root: &Path, q: &str, limit: usize) -> Result<(Vec<FsSe
             // Only descend one level under artist for album search.
             if depth < 2 {
                 walk(
-                    root,
                     &entry.path(),
                     &rel,
                     query,
@@ -176,7 +175,6 @@ pub fn search_dirs(music_root: &Path, q: &str, limit: usize) -> Result<(Vec<FsSe
         }
     }
     walk(
-        music_root,
         music_root,
         "",
         &query,
@@ -218,7 +216,10 @@ pub fn delete_audio_files(music_root: &Path, rels: &[String]) -> DeletedAudio {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if rel.is_empty() || !abs.is_file() || !under_root(&abs, music_root) || !is_audio_name(&name)
+        if rel.is_empty()
+            || !abs.is_file()
+            || !under_root(&abs, music_root)
+            || !is_audio_name(&name)
         {
             out.skipped.push(rel);
             continue;

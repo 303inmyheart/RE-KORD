@@ -122,7 +122,10 @@ fn nothing_outside_the_library_can_be_reached() {
         &owned(&[
             "../../../etc/hosts",
             "..",
-            &format!("Artist/../../{}", outside.file_name().unwrap().to_string_lossy()),
+            &format!(
+                "Artist/../../{}",
+                outside.file_name().unwrap().to_string_lossy()
+            ),
         ]),
     );
 
@@ -174,7 +177,10 @@ fn an_artist_folder_is_not_an_album() {
 
     let outcome = delete_album_folder(&lib.root, "Artist");
 
-    assert!(outcome.is_err(), "one segment deep is the artist, not an album");
+    assert!(
+        outcome.is_err(),
+        "one segment deep is the artist, not an album"
+    );
     assert!(lib.exists("Artist/Album/01.mp3"));
 }
 

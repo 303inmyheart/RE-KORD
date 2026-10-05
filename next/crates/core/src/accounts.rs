@@ -3,15 +3,41 @@
 //! Layout under `data_dir`:
 //! - `accounts.json` — registry
 //! - `accounts/{id}/library-selection.json` — per-account library selection
+//! - `accounts/{id}_info/` — user-state, custom theme background
+//!
+//! Registry reads-modify-writes are serialised per data dir and written
+//! atomically (unique temp file, fsync, rename), so concurrent creates never
+//! lose entries.
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use uuid::Uuid;
 
 pub const DEFAULT_ACCOUNT_ID: &str = "default";
-pub const DEFAULT_ACCOUNT_NAME: &str = "Locale";
+/// Legacy name of the default account (kept when the registry is created;
+/// names chosen by the user are never rewritten).
+pub const DEFAULT_ACCOUNT_NAME: &str = "Default";
+
+/// Per-data-dir registry lock.
+fn registry_lock(data_dir: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let key = fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
+    let mut map = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    map.entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+fn lock_guard(lock: &Mutex<()>) -> MutexGuard<'_, ()> {
+    lock.lock().unwrap_or_else(|e| e.into_inner())
+}
 const ACCOUNTS_SCHEMA: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +62,21 @@ pub struct AccountsSnapshot {
     pub created_account_id: Option<String>,
 }
 
+/// Longest accepted account id (UUIDs are 36 chars).
+pub const MAX_ACCOUNT_ID_LEN: usize = 64;
+
+/// Strict account id shape: `[A-Za-z0-9_-]{1,64}`. Ids end up in file paths
+/// (`accounts/{id}`, `accounts/{id}_info`), so nothing else is accepted.
+pub fn is_valid_account_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_ACCOUNT_ID_LEN
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Registry normalisation: map stray characters to `_` (never `.`/`/`), so a
+/// hand-edited registry cannot produce a path outside `accounts/`.
 fn safe_account_id(account_id: &str) -> Option<String> {
     let id = account_id.trim();
     if id.is_empty() {
@@ -43,19 +84,85 @@ fn safe_account_id(account_id: &str) -> Option<String> {
     }
     let safe: String = id
         .chars()
+        .take(MAX_ACCOUNT_ID_LEN)
         .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
                 c
             } else {
                 '_'
             }
         })
         .collect();
-    if safe.is_empty() {
-        None
-    } else {
+    if is_valid_account_id(&safe) {
         Some(safe)
+    } else {
+        None
     }
+}
+
+/// Why a client-supplied account id was refused.
+#[derive(Debug, thiserror::Error)]
+pub enum AccountIdError {
+    #[error("invalid account id")]
+    Invalid,
+    #[error("account not found")]
+    NotFound,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl AccountIdError {
+    /// HTTP status for the error (400 malformed, 404 unknown, 500 I/O).
+    pub fn status(&self) -> axum::http::StatusCode {
+        match self {
+            Self::Invalid => axum::http::StatusCode::BAD_REQUEST,
+            Self::NotFound => axum::http::StatusCode::NOT_FOUND,
+            Self::Other(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    /// Stable machine-readable code for the JSON envelope.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Invalid => "invalid_account_id",
+            Self::NotFound => "account_not_found",
+            Self::Other(_) => "account_lookup_failed",
+        }
+    }
+}
+
+/// Resolve a requested id against the registry: absent → `default`, malformed
+/// → `Invalid`, unknown → `NotFound` (no silent fallback to Default, which is
+/// the account allowed to run machine operations).
+pub fn lookup_account_id(
+    data_dir: &Path,
+    requested: Option<&str>,
+) -> std::result::Result<String, AccountIdError> {
+    let Some(id) = requested.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(DEFAULT_ACCOUNT_ID.to_string());
+    };
+    if !is_valid_account_id(id) {
+        return Err(AccountIdError::Invalid);
+    }
+    if id == DEFAULT_ACCOUNT_ID {
+        return Ok(id.to_string());
+    }
+    let accounts = ensure_accounts(data_dir)?;
+    if accounts.iter().any(|a| a.id == id) {
+        Ok(id.to_string())
+    } else {
+        Err(AccountIdError::NotFound)
+    }
+}
+
+/// Request account from query/header, validated against the registry.
+pub fn account_from_request(
+    data_dir: &Path,
+    headers: &axum::http::HeaderMap,
+    query_account_id: Option<&str>,
+) -> std::result::Result<String, AccountIdError> {
+    let requested = account_id_from_headers_and_query(headers, query_account_id);
+    lookup_account_id(data_dir, requested.as_deref())
 }
 
 fn clean_account_name(value: &str, fallback: &str) -> String {
@@ -101,7 +208,9 @@ fn normalize_accounts(raw: &[Account]) -> Vec<Account> {
     out
 }
 
+/// Atomic write (caller holds the registry lock).
 fn write_accounts_file(data_dir: &Path, accounts: &[Account]) -> Result<()> {
+    use std::io::Write;
     fs::create_dir_all(data_dir)?;
     let path = accounts_registry_path(data_dir);
     let body = AccountsFile {
@@ -109,10 +218,19 @@ fn write_accounts_file(data_dir: &Path, accounts: &[Account]) -> Result<()> {
         accounts: accounts.to_vec(),
     };
     let raw = serde_json::to_string_pretty(&body)?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, &raw)?;
-    fs::rename(&tmp, &path)?;
-    Ok(())
+    let tmp = data_dir.join(format!(".accounts.{}.tmp", Uuid::new_v4().simple()));
+    let res = (|| -> Result<()> {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(raw.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        fs::rename(&tmp, &path)?;
+        Ok(())
+    })();
+    if res.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    res
 }
 
 fn read_accounts_file(data_dir: &Path) -> Result<Option<Vec<Account>>> {
@@ -136,6 +254,12 @@ fn read_accounts_file(data_dir: &Path) -> Result<Option<Vec<Account>>> {
 /// Ensure registry + default account dir exist; migrate legacy global selection once.
 pub fn ensure_accounts(data_dir: &Path) -> Result<Vec<Account>> {
     fs::create_dir_all(data_dir)?;
+    let lock = registry_lock(data_dir);
+    let _guard = lock_guard(&lock);
+    ensure_accounts_locked(data_dir)
+}
+
+fn ensure_accounts_locked(data_dir: &Path) -> Result<Vec<Account>> {
     let mut accounts = match read_accounts_file(data_dir)? {
         Some(list) => list,
         None => {
@@ -237,6 +361,9 @@ pub fn get_accounts_snapshot(data_dir: &Path) -> Result<AccountsSnapshot> {
 
 /// Replace the accounts registry (used by backup restore). Always keeps `default`.
 pub fn replace_accounts_registry(data_dir: &Path, accounts: &[Account]) -> Result<Vec<Account>> {
+    fs::create_dir_all(data_dir)?;
+    let lock = registry_lock(data_dir);
+    let _guard = lock_guard(&lock);
     let mut list = normalize_accounts(accounts);
     if list.is_empty() {
         list.push(Account {
@@ -287,23 +414,17 @@ pub fn accounts_from_json_value(v: &serde_json::Value) -> Vec<Account> {
     normalize_accounts(&raw)
 }
 
+/// Absent id → `default`; malformed or unknown ids are errors (see
+/// [`lookup_account_id`]).
 pub fn resolve_account_id(data_dir: &Path, requested: Option<&str>) -> Result<String> {
-    let accounts = ensure_accounts(data_dir)?;
-    let req = requested.map(str::trim).filter(|s| !s.is_empty());
-    if let Some(id) = req {
-        if accounts.iter().any(|a| a.id == id) {
-            return Ok(id.to_string());
-        }
-        // Unknown id → fall back to default (compat with absent/stale clients).
-    }
-    Ok(accounts
-        .first()
-        .map(|a| a.id.clone())
-        .unwrap_or_else(|| DEFAULT_ACCOUNT_ID.to_string()))
+    lookup_account_id(data_dir, requested).map_err(|e| anyhow::anyhow!(e.to_string()))
 }
 
 pub fn create_account(data_dir: &Path, name: &str) -> Result<AccountsSnapshot> {
-    let mut accounts = ensure_accounts(data_dir)?;
+    fs::create_dir_all(data_dir)?;
+    let lock = registry_lock(data_dir);
+    let _guard = lock_guard(&lock);
+    let mut accounts = ensure_accounts_locked(data_dir)?;
     let id = Uuid::new_v4().to_string();
     let account = Account {
         id: id.clone(),
@@ -320,7 +441,12 @@ pub fn create_account(data_dir: &Path, name: &str) -> Result<AccountsSnapshot> {
 }
 
 pub fn update_account(data_dir: &Path, id: &str, name: Option<&str>) -> Result<AccountsSnapshot> {
-    let mut accounts = ensure_accounts(data_dir)?;
+    if !is_valid_account_id(id.trim()) {
+        bail!("invalid account id");
+    }
+    let lock = registry_lock(data_dir);
+    let _guard = lock_guard(&lock);
+    let mut accounts = ensure_accounts_locked(data_dir)?;
     let account = accounts
         .iter_mut()
         .find(|a| a.id == id.trim())
@@ -338,27 +464,49 @@ pub fn update_account(data_dir: &Path, id: &str, name: Option<&str>) -> Result<A
 
 pub fn delete_account(data_dir: &Path, id: &str) -> Result<AccountsSnapshot> {
     let account_id = id.trim();
+    if !is_valid_account_id(account_id) {
+        bail!("invalid account id");
+    }
     if account_id == DEFAULT_ACCOUNT_ID {
         bail!("cannot remove the default account");
     }
-    let mut accounts = ensure_accounts(data_dir)?;
+    let lock = registry_lock(data_dir);
+    let _guard = lock_guard(&lock);
+    let mut accounts = ensure_accounts_locked(data_dir)?;
+    if !accounts.iter().any(|a| a.id == account_id) {
+        bail!("account not found");
+    }
     if accounts.len() <= 1 {
         bail!("keep at least one account");
     }
-    let before = accounts.len();
     accounts.retain(|a| a.id != account_id);
-    if accounts.len() == before {
-        bail!("account not found");
-    }
     write_accounts_file(data_dir, &accounts)?;
-    if let Some(dir) = account_dir(data_dir, account_id) {
-        let _ = fs::remove_dir_all(dir);
-    }
+    remove_account_files(data_dir, account_id);
     Ok(AccountsSnapshot {
         default_account_id: DEFAULT_ACCOUNT_ID.to_string(),
         accounts,
         created_account_id: None,
     })
+}
+
+/// Per-account folders: `accounts/{id}` (library selection) and
+/// `accounts/{id}_info` (user-state, theme background). The id is validated,
+/// so neither path can leave `accounts/`.
+fn remove_account_files(data_dir: &Path, account_id: &str) {
+    if !is_valid_account_id(account_id) || account_id == DEFAULT_ACCOUNT_ID {
+        return;
+    }
+    let base = data_dir.join("accounts");
+    for dir in [
+        base.join(account_id),
+        base.join(format!("{account_id}_info")),
+    ] {
+        if dir.exists() {
+            if let Err(e) = fs::remove_dir_all(&dir) {
+                tracing::warn!(path = %dir.display(), error = %e, "account folder not removed");
+            }
+        }
+    }
 }
 
 /// Account id from query `accountId` or headers (compat with old client).
@@ -385,16 +533,84 @@ pub fn is_default_account_id(id: &str) -> bool {
     id.trim() == DEFAULT_ACCOUNT_ID
 }
 
-/// Resolve the request account and require it to be the default (`default` / Locale).
+/// Resolve the request account and require it to be the default (`default`).
 pub fn require_default_account(
     data_dir: &Path,
     headers: &axum::http::HeaderMap,
     query_account_id: Option<&str>,
 ) -> Result<String> {
-    let requested = account_id_from_headers_and_query(headers, query_account_id);
-    let id = resolve_account_id(data_dir, requested.as_deref())?;
+    let id = account_from_request(data_dir, headers, query_account_id)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     if !is_default_account_id(&id) {
         bail!("only the default account can manage this setting");
     }
     Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir() -> PathBuf {
+        let d = std::env::temp_dir().join(format!("rekord-accounts-{}", Uuid::new_v4()));
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn account_ids_are_strict() {
+        assert!(is_valid_account_id("default"));
+        assert!(is_valid_account_id("8c703652-df64-430f-aa66-970d68e82dce"));
+        assert!(!is_valid_account_id("../../x"));
+        assert!(!is_valid_account_id("a.b"));
+        assert!(!is_valid_account_id(""));
+        assert!(!is_valid_account_id(&"a".repeat(65)));
+        assert_eq!(safe_account_id("../x").as_deref(), Some("___x"));
+    }
+
+    #[test]
+    fn delete_removes_account_folders() {
+        let dir = temp_dir();
+        let snap = create_account(&dir, "Ospite").unwrap();
+        let id = snap.created_account_id.unwrap();
+        let info = dir.join("accounts").join(format!("{id}_info"));
+        fs::create_dir_all(&info).unwrap();
+        fs::write(info.join("user-state.json"), "{}").unwrap();
+        fs::write(info.join("theme-bg.jpg"), b"x").unwrap();
+        assert!(dir.join("accounts").join(&id).is_dir());
+        delete_account(&dir, &id).unwrap();
+        assert!(!info.exists());
+        assert!(!dir.join("accounts").join(&id).exists());
+        assert!(dir.join("accounts").join("default").is_dir());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_account_keeps_legacy_name() {
+        let dir = temp_dir();
+        let list = ensure_accounts(&dir).unwrap();
+        assert_eq!(list[0].name, "Default");
+        // A name the user chose stays as is.
+        update_account(&dir, "default", Some("Locale")).unwrap();
+        assert_eq!(ensure_accounts(&dir).unwrap()[0].name, "Locale");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unknown_ids_do_not_fall_back_to_default() {
+        let dir = temp_dir();
+        assert_eq!(lookup_account_id(&dir, None).unwrap(), "default");
+        assert!(matches!(
+            lookup_account_id(&dir, Some("../../etc")),
+            Err(AccountIdError::Invalid)
+        ));
+        assert!(matches!(
+            lookup_account_id(&dir, Some("nobody")),
+            Err(AccountIdError::NotFound)
+        ));
+        let snap = create_account(&dir, "Ospite").unwrap();
+        let id = snap.created_account_id.unwrap();
+        assert_eq!(lookup_account_id(&dir, Some(&id)).unwrap(), id);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

@@ -29,9 +29,10 @@ const LAYOUT_EXCLUDE: &[&str] = &[
 ];
 
 /// Detected / configured folder organisation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PreferredLayout {
     /// `<root>/<artist>/<album>/<track>` — RE-KORD default.
+    #[default]
     #[serde(rename = "artist/album/track")]
     ArtistAlbumTrack,
     /// `<root>/<artist>/<track>` — no album level.
@@ -53,12 +54,6 @@ impl PreferredLayout {
             Self::Flat => "flat",
             Self::Tags => "tags",
         }
-    }
-}
-
-impl Default for PreferredLayout {
-    fn default() -> Self {
-        Self::ArtistAlbumTrack
     }
 }
 

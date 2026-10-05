@@ -1,11 +1,21 @@
-//! Permissions for "machine operations".
+//! Permissions for host-level operations.
 //!
-//! A machine operation touches the host, not personal data: library path, scan,
-//! watcher, layout, restore, credentials, tunnel. It requires the Default account
-//! and, unless `allow_remote_admin` is set, a local (loopback) client.
+//! Two levels (parity legacy `requestAccess.mjs:61-99`, where a loopback
+//! request may run every server mutation):
 //!
-//! Unlike legacy "loopback = admin", remote clients (APK, LAN) stay fully
-//! functional for personal data; only host-level writes are restricted.
+//! - **Library operation** — Studio / library writes (downloads, folders,
+//!   tags, covers, curiosità). Allowed to *any* account on a local request
+//!   (same machine, no proxy/tunnel headers, allowed origin); a remote client
+//!   needs `allow_remote_admin`.
+//! - **Machine operation** — touches the host itself: credentials (cookies,
+//!   Discogs token), library path, restore, tunnel, remote-admin toggle, tool
+//!   updates. Requires the Default account and, unless `allow_remote_admin` is
+//!   set, a local client.
+//!
+//! Refusals are 403 with a stable code: `forbidden_remote` (not local and
+//! remote admin off) or `forbidden_default_account` (machine operation from
+//! another account). Remote clients (APK, LAN) stay fully functional for
+//! personal data.
 
 use crate::accounts;
 use crate::state::AppState;
@@ -61,8 +71,14 @@ fn host_is_local(host: &str) -> bool {
 }
 
 /// True when the request came from this machine and not through a proxy/tunnel.
+///
+/// A request carrying a foreign browser origin (any web page open on the hub
+/// machine) is never local, even from loopback.
 pub fn is_local_request(headers: &HeaderMap, peer: Option<SocketAddr>) -> bool {
     if PROXY_HEADERS.iter().any(|h| headers.contains_key(*h)) {
+        return false;
+    }
+    if crate::origin::classify(headers) == crate::origin::OriginKind::Foreign {
         return false;
     }
     if let Some(host) = headers
@@ -85,15 +101,29 @@ pub struct MachineOp {
     pub local: bool,
 }
 
-fn forbidden(msg: &str) -> Response {
+/// 403: not on the hub machine and remote admin is off.
+pub const FORBIDDEN_REMOTE: &str = "forbidden_remote";
+/// 403: machine operation from an account other than Default.
+pub const FORBIDDEN_DEFAULT_ACCOUNT: &str = "forbidden_default_account";
+
+/// 403 envelope with a stable code (and an English hint for logs).
+pub fn forbidden(code: &'static str) -> Response {
+    let message = match code {
+        FORBIDDEN_REMOTE => {
+            "only available from the hub computer (or enable remote access in the hub panel)"
+        }
+        FORBIDDEN_DEFAULT_ACCOUNT => "only the Default account can run machine operations",
+        _ => "forbidden",
+    };
     (
         StatusCode::FORBIDDEN,
-        Json(json!({ "ok": false, "error": msg })),
+        Json(json!({ "ok": false, "data": null, "error": code, "message": message })),
     )
         .into_response()
 }
 
 /// Authorise a machine operation, or produce the 403 response to return.
+#[allow(clippy::result_large_err)]
 pub fn require_machine_op(
     state: &AppState,
     headers: &HeaderMap,
@@ -104,19 +134,45 @@ pub fn require_machine_op(
         let cfg = state.config.lock().unwrap();
         (cfg.data_dir.clone(), cfg.allow_remote_admin)
     };
-    let account_id = accounts::require_default_account(&data_dir, headers, query_account_id)
-        .map_err(|_| forbidden("Solo l'account Default può eseguire le operazioni di macchina"))?;
     let local = is_local_request(headers, peer);
     if !local && !allow_remote {
-        return Err(forbidden(
-            "Operazione di macchina disponibile solo dal computer dell'hub (abilita l'accesso remoto nel pannello hub)",
-        ));
+        return Err(forbidden(FORBIDDEN_REMOTE));
     }
+    let account_id = accounts::require_default_account(&data_dir, headers, query_account_id)
+        .map_err(|_| forbidden(FORBIDDEN_DEFAULT_ACCOUNT))?;
     Ok(MachineOp { account_id, local })
 }
 
-/// Describe the caller's machine-operation rights (used by the client to show
-/// read-only sections).
+/// Authorise a library / Studio write: any account from the hub machine; a
+/// remote client only with `allow_remote_admin`.
+#[allow(clippy::result_large_err)]
+pub fn require_library_op(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+) -> Result<bool, Response> {
+    let allow_remote = state.config.lock().unwrap().allow_remote_admin;
+    let local = is_local_request(headers, peer);
+    if !local && !allow_remote {
+        return Err(forbidden(FORBIDDEN_REMOTE));
+    }
+    Ok(local)
+}
+
+/// Host-level access without the Default-account requirement (account
+/// registry management). Same rule as [`require_library_op`].
+#[allow(clippy::result_large_err)]
+pub fn require_host_op(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+) -> Result<bool, Response> {
+    require_library_op(state, headers, peer)
+}
+
+/// Describe the caller's rights so the client can gate controls:
+/// `canManageLibrary` (Studio / library writes) and `canManageMachine`
+/// (credentials, library path, restore, tunnel, tool updates).
 pub fn machine_op_status(
     state: &AppState,
     headers: &HeaderMap,
@@ -130,11 +186,22 @@ pub fn machine_op_status(
     let is_default =
         accounts::require_default_account(&data_dir, headers, query_account_id).is_ok();
     let local = is_local_request(headers, peer);
+    let reachable = local || allow_remote;
+    let machine_reason = if !reachable {
+        Some(FORBIDDEN_REMOTE)
+    } else if !is_default {
+        Some(FORBIDDEN_DEFAULT_ACCOUNT)
+    } else {
+        None
+    };
     json!({
         "isDefaultAccount": is_default,
         "local": local,
         "allowRemoteAdmin": allow_remote,
-        "canManageMachine": is_default && (local || allow_remote),
+        "canManageLibrary": reachable,
+        "canManageMachine": is_default && reachable,
+        "libraryDeniedReason": if reachable { None } else { Some(FORBIDDEN_REMOTE) },
+        "machineDeniedReason": machine_reason,
     })
 }
 
@@ -182,6 +249,19 @@ mod tests {
     #[test]
     fn proxy_header_alone_marks_remote() {
         let h = headers(&[("host", "localhost:7420"), ("x-forwarded-for", "8.8.8.8")]);
+        assert!(!is_local_request(&h, addr("127.0.0.1:5000")));
+    }
+
+    #[test]
+    fn foreign_origin_from_loopback_is_not_local() {
+        let h = headers(&[
+            ("host", "127.0.0.1:7420"),
+            ("origin", "https://evil.example"),
+        ]);
+        assert!(!is_local_request(&h, addr("127.0.0.1:5000")));
+        let h = headers(&[("host", "127.0.0.1:7420"), ("origin", "tauri://localhost")]);
+        assert!(is_local_request(&h, addr("127.0.0.1:5000")));
+        let h = headers(&[("host", "127.0.0.1:7420"), ("sec-fetch-site", "cross-site")]);
         assert!(!is_local_request(&h, addr("127.0.0.1:5000")));
     }
 

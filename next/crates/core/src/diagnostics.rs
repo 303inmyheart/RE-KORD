@@ -1,6 +1,7 @@
 //! Diagnostics and activity log.
 
 use crate::accounts;
+use crate::perm::PeerAddr;
 use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
@@ -46,11 +47,80 @@ pub fn append_activity_with_account(
     message: &str,
     account_id: Option<&str>,
 ) {
+    write_activity(data_dir, kind, None, Value::Null, message, account_id);
+}
+
+/// One activity event the panels can translate: `code` is `"{kind}.{action}"`
+/// and `params` fills the placeholders of the translated text. `message`
+/// stays the plain text older clients show.
+pub struct ActivityEvent<'a> {
+    pub kind: &'a str,
+    pub action: &'a str,
+    pub params: Value,
+    pub message: String,
+    pub account_id: Option<&'a str>,
+}
+
+impl<'a> ActivityEvent<'a> {
+    pub fn new(kind: &'a str, action: &'a str, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            action,
+            params: Value::Null,
+            message: message.into(),
+            account_id: None,
+        }
+    }
+
+    pub fn params(mut self, params: Value) -> Self {
+        self.params = params;
+        self
+    }
+
+    pub fn account(mut self, account_id: Option<&'a str>) -> Self {
+        self.account_id = account_id;
+        self
+    }
+}
+
+/// Append a coded activity line.
+///
+/// Schema (JSONL line):
+/// ```json
+/// { "ts": "...", "kind": "scan", "action": "started", "code": "scan.started",
+///   "params": { "mode": "full" }, "message": "library scan started (full)" }
+/// ```
+pub fn log_activity(data_dir: &std::path::Path, event: ActivityEvent<'_>) {
+    write_activity(
+        data_dir,
+        event.kind,
+        Some(event.action),
+        event.params,
+        &event.message,
+        event.account_id,
+    );
+}
+
+fn write_activity(
+    data_dir: &std::path::Path,
+    kind: &str,
+    action: Option<&str>,
+    params: Value,
+    message: &str,
+    account_id: Option<&str>,
+) {
     let path = data_dir.join("activity.jsonl");
     let _ = fs::create_dir_all(data_dir);
     let mut obj = Map::new();
     obj.insert("ts".into(), json!(chrono::Utc::now().to_rfc3339()));
     obj.insert("kind".into(), json!(kind));
+    if let Some(action) = action {
+        obj.insert("action".into(), json!(action));
+        obj.insert("code".into(), json!(format!("{kind}.{action}")));
+        if params.is_object() {
+            obj.insert("params".into(), params);
+        }
+    }
     obj.insert("message".into(), json!(message));
     if let Some(id) = account_id.map(str::trim).filter(|s| !s.is_empty()) {
         obj.insert("accountId".into(), json!(id));
@@ -73,45 +143,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/activity-log", get(activity_log))
 }
 
-/// Probe an external binary for `--version`, returning the first output line.
-fn binary_version(path: &std::path::Path) -> Option<String> {
-    let out = std::process::Command::new(path)
-        .arg("--version")
-        .output()
-        .ok()?;
-    let text = if out.stdout.is_empty() {
-        String::from_utf8_lossy(&out.stderr).to_string()
-    } else {
-        String::from_utf8_lossy(&out.stdout).to_string()
-    };
-    text.lines()
-        .next()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-}
-
-fn which(bin: &str) -> Option<std::path::PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
-    std::env::split_paths(&path_var)
-        .map(|dir| dir.join(bin))
-        .find(|candidate| candidate.is_file())
-}
-
-fn binary_status(explicit: Option<&std::path::Path>, bin: &str) -> Value {
-    let resolved = explicit
-        .filter(|p| p.is_file())
-        .map(|p| p.to_path_buf())
-        .or_else(|| which(bin));
-    match resolved {
-        Some(path) => json!({
-            "available": true,
-            "path": path.display().to_string(),
-            "version": binary_version(&path),
-        }),
-        None => json!({ "available": false, "path": Value::Null, "version": Value::Null }),
-    }
-}
-
 async fn diagnostics(State(state): State<AppState>) -> Response {
     let _ = STARTED_AT.get_or_init(Instant::now);
     let uptime_secs = STARTED_AT.get().map(|t| t.elapsed().as_secs()).unwrap_or(0);
@@ -132,6 +163,23 @@ async fn diagnostics(State(state): State<AppState>) -> Response {
         .music_root
         .as_ref()
         .map(|root| crate::layout::load_layout(root));
+    // Removals the scan guard held back, and user links waiting for their file.
+    let last_prune_skipped = state
+        .db
+        .get_meta("last_prune_skipped")
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty());
+    let (parked_favorites, parked_playlist_tracks) =
+        state.db.parked_user_link_counts().unwrap_or((0, 0));
+    // Tool versions: cached (10 min), probed off the async workers.
+    let ctx = crate::tools::ToolContext::from_config(&cfg);
+    let (ytdlp, ffmpeg, ffprobe, cloudflared) = tokio::join!(
+        crate::tools::resolve(crate::tools::Tool::Ytdlp, &ctx),
+        crate::tools::resolve(crate::tools::Tool::Ffmpeg, &ctx),
+        crate::tools::resolve(crate::tools::Tool::Ffprobe, &ctx),
+        crate::tools::resolve(crate::tools::Tool::Cloudflared, &ctx),
+    );
 
     ok(json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -146,6 +194,11 @@ async fn diagnostics(State(state): State<AppState>) -> Response {
             "lastScanAt": stats.as_ref().and_then(|s| s.last_scan_at.clone()),
             "sizeBytes": db_bytes,
         },
+        "library": {
+            "lastPruneSkipped": last_prune_skipped,
+            "parkedFavorites": parked_favorites,
+            "parkedPlaylistTracks": parked_playlist_tracks,
+        },
         "activeDownloads": state.active_downloads.lock().unwrap().len(),
         "jobs": {
             "active": state.jobs.active_count(),
@@ -153,13 +206,12 @@ async fn diagnostics(State(state): State<AppState>) -> Response {
         },
         "watcher": state.watcher.status(cfg.watch_library),
         "binaries": {
-            "ytdlp": binary_status(cfg.ytdlp_path.as_deref(), "yt-dlp"),
-            "ffmpeg": binary_status(None, "ffmpeg"),
-            "ffprobe": binary_status(None, "ffprobe"),
-            "cloudflared": json!({
-                "available": crate::remote_access::is_cloudflared_available(),
-            }),
+            "ytdlp": crate::tools::status_json(&ytdlp),
+            "ffmpeg": crate::tools::status_json(&ffmpeg),
+            "ffprobe": crate::tools::status_json(&ffprobe),
+            "cloudflared": crate::tools::status_json(&cloudflared),
         },
+        "versionCacheTtlSecs": crate::tools::VERSION_TTL.as_secs(),
         "layout": layout,
         "disk": disk,
         "errors": {
@@ -180,7 +232,16 @@ async fn recent_errors(Query(q): Query<ErrorsQuery>) -> Response {
     ok(json!({ "entries": crate::errors::recent(limit), "count": crate::errors::count() }))
 }
 
-async fn clear_errors() -> Response {
+async fn clear_errors(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    PeerAddr(peer): PeerAddr,
+    Query(q): Query<ActivityLogQuery>,
+) -> Response {
+    if let Err(r) = crate::perm::require_machine_op(&state, &headers, q.account_id.as_deref(), peer)
+    {
+        return r;
+    }
     crate::errors::clear();
     ok(json!({ "cleared": true }))
 }
@@ -315,9 +376,16 @@ async fn activity_log(
     Query(q): Query<ActivityLogQuery>,
 ) -> Response {
     let data_dir = state.config.lock().unwrap().data_dir.clone();
-    let requested = accounts::account_id_from_headers_and_query(&headers, q.account_id.as_deref());
-    let caller_id = accounts::resolve_account_id(&data_dir, requested.as_deref())
-        .unwrap_or_else(|_| accounts::DEFAULT_ACCOUNT_ID.to_string());
+    // Unknown / malformed ids are refused instead of falling back to Default
+    // (which would unlock the full log).
+    let caller_id =
+        match accounts::account_from_request(&data_dir, &headers, q.account_id.as_deref()) {
+            Ok(id) => id,
+            Err(e) => {
+                return (e.status(), Json(json!({ "ok": false, "error": e.code() })))
+                    .into_response()
+            }
+        };
     let is_default = accounts::is_default_account_id(&caller_id);
     let can_select_day = is_default;
 
@@ -455,5 +523,31 @@ mod tests {
         let span = until - since;
         assert!(span <= Duration::hours(25));
         assert!(span >= Duration::hours(23));
+    }
+
+    #[test]
+    fn coded_activity_keeps_the_plain_message_too() {
+        let dir = std::env::temp_dir().join(format!("rekord-activity-{}", uuid::Uuid::new_v4()));
+        log_activity(
+            &dir,
+            ActivityEvent::new("scan", "started", "library scan started (full)")
+                .params(json!({ "mode": "full" }))
+                .account(Some("acc-1")),
+        );
+        append_activity(&dir, "system", "plain line");
+        let raw = fs::read_to_string(dir.join("activity.jsonl")).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        let lines: Vec<Value> = raw
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines[0]["kind"], "scan");
+        assert_eq!(lines[0]["action"], "started");
+        assert_eq!(lines[0]["code"], "scan.started");
+        assert_eq!(lines[0]["params"], json!({ "mode": "full" }));
+        assert_eq!(lines[0]["message"], "library scan started (full)");
+        assert_eq!(lines[0]["accountId"], "acc-1");
+        assert!(lines[1].get("code").is_none());
+        assert_eq!(lines[1]["message"], "plain line");
     }
 }

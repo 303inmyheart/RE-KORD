@@ -113,7 +113,23 @@ impl AppConfig {
 
     fn write_persisted(&self, settings: &PersistedSettings) -> Result<()> {
         let path = self.settings_path();
-        fs::write(path, serde_json::to_string_pretty(settings)?)?;
+        // Keep keys other modules store in settings.json (e.g. tunnel login).
+        let mut merged = fs::read_to_string(&path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .filter(|v| v.is_object())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let (Some(obj), serde_json::Value::Object(ours)) =
+            (merged.as_object_mut(), serde_json::to_value(settings)?)
+        {
+            for (k, v) in ours {
+                obj.insert(k, v);
+            }
+        }
+        // Atomic replace: a crash mid-write must not leave a truncated file.
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, serde_json::to_string_pretty(&merged)?)?;
+        fs::rename(&tmp, &path)?;
         Ok(())
     }
 
@@ -300,10 +316,7 @@ impl AppConfig {
     }
 
     pub fn ytdlp_enabled(&self) -> bool {
-        match std::env::var("ENABLE_YTDLP") {
-            Ok(v) if v.trim() == "0" => false,
-            _ => true,
-        }
+        !matches!(std::env::var("ENABLE_YTDLP"), Ok(v) if v.trim() == "0")
     }
 
     pub fn config_snapshot(&self) -> serde_json::Value {

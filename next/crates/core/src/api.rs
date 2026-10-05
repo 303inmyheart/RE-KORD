@@ -23,6 +23,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/library", get(library_index))
         .route("/api/v1/library/stats", get(library_stats))
         .route("/api/v1/library/search", get(library_search))
+        .route("/api/v1/library/genres", get(library_genres))
         .route("/api/v1/library/albums", get(list_albums))
         .route("/api/v1/library/albums/{id}", get(get_album))
         .route("/api/v1/library/albums/{id}/tracks", get(album_tracks))
@@ -124,14 +125,25 @@ struct AccountQuery {
     account_id: Option<String>,
 }
 
+/// Request account (query / header), validated: malformed → 400, unknown → 404.
+#[allow(clippy::result_large_err)]
 fn resolve_account(
     state: &AppState,
     headers: &HeaderMap,
     q: &AccountQuery,
-) -> Result<String, String> {
+) -> Result<String, Response> {
     let dir = data_dir(state);
-    let requested = accounts::account_id_from_headers_and_query(headers, q.account_id.as_deref());
-    accounts::resolve_account_id(&dir, requested.as_deref()).map_err(|e| e.to_string())
+    accounts::account_from_request(&dir, headers, q.account_id.as_deref())
+        .map_err(|e| err(e.status(), e.code()))
+}
+
+macro_rules! account_or_err {
+    ($state:expr, $headers:expr, $q:expr) => {
+        match resolve_account($state, $headers, $q) {
+            Ok(id) => id,
+            Err(r) => return r,
+        }
+    };
 }
 
 fn load_selection(state: &AppState, account_id: &str) -> Result<LibrarySelection, String> {
@@ -164,11 +176,19 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, body).into_response()
 }
 
+/// HTTP API contract version advertised by `/health` (bump on breaking changes).
+pub const API_VERSION: u32 = 1;
+/// Oldest client release this hub still talks to.
+pub const MIN_CLIENT_VERSION: &str = "5.0.0";
+
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({
         "ok": true,
         "service": "RE-KORD",
         "version": env!("CARGO_PKG_VERSION"),
+        "apiVersion": API_VERSION,
+        "minClientVersion": MIN_CLIENT_VERSION,
+        "transcode": crate::transcode::ffmpeg_available(),
         "modules": state.modules.enabled_ids(),
         "scanning": state.is_scanning(),
     }))
@@ -198,21 +218,24 @@ async fn library_index(
         },
     ) {
         Ok(id) => id,
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(r) => return r,
     };
     let sel = match load_selection(&state, &account_id) {
         Ok(s) => s,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
     };
     match selection::get_selection_filter_mode(&sel) {
-        SelectionFilterMode::Empty => ok(Vec::<crate::db::Track>::new()).into_response(),
-        SelectionFilterMode::All => match state.db.list_tracks(limit, offset) {
+        SelectionFilterMode::Empty => ok(Vec::<crate::db::LibraryTrack>::new()).into_response(),
+        SelectionFilterMode::All => match state.db.list_library_tracks(limit, offset) {
             Ok(tracks) => ok(tracks).into_response(),
             Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         },
         // Filter after a full fetch so limit/offset apply to the personal library, not the FS page.
         SelectionFilterMode::Filter => {
-            match (state.db.list_tracks(50_000, 0), state.db.list_albums()) {
+            match (
+                state.db.list_library_tracks(50_000, 0),
+                state.db.list_albums(),
+            ) {
                 (Ok(tracks), Ok(albums)) => {
                     let albums = selection::filter_albums(albums, &sel);
                     let tracks = selection::filter_tracks(tracks, &albums, &sel);
@@ -246,7 +269,7 @@ async fn tracks_page(
         },
     ) {
         Ok(id) => id,
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(r) => return r,
     };
     let sel = match load_selection(&state, &account_id) {
         Ok(s) => s,
@@ -254,14 +277,17 @@ async fn tracks_page(
     };
     match selection::get_selection_filter_mode(&sel) {
         SelectionFilterMode::Empty => ok(json!({
-            "items": Vec::<crate::db::Track>::new(),
+            "items": Vec::<crate::db::LibraryTrack>::new(),
             "total": 0,
             "limit": limit,
             "offset": offset,
         }))
         .into_response(),
         SelectionFilterMode::All => {
-            match (state.db.list_tracks(limit, offset), state.db.count_tracks()) {
+            match (
+                state.db.list_library_tracks(limit, offset),
+                state.db.count_tracks(),
+            ) {
                 (Ok(items), Ok(total)) => ok(json!({
                     "items": items,
                     "total": total,
@@ -273,7 +299,10 @@ async fn tracks_page(
             }
         }
         SelectionFilterMode::Filter => {
-            match (state.db.list_tracks(i64::MAX, 0), state.db.list_albums()) {
+            match (
+                state.db.list_library_tracks(i64::MAX, 0),
+                state.db.list_albums(),
+            ) {
                 (Ok(tracks), Ok(albums)) => {
                     let albums = selection::filter_albums(albums, &sel);
                     let tracks = selection::filter_tracks(tracks, &albums, &sel);
@@ -312,7 +341,7 @@ async fn artists_page(
         },
     ) {
         Ok(id) => id,
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(r) => return r,
     };
     let sel = match load_selection(&state, &account_id) {
         Ok(s) => s,
@@ -371,7 +400,7 @@ async fn library_changes(
         return ok(json!({
             "revision": revision,
             "full": true,
-            "updated": Vec::<crate::db::Track>::new(),
+            "updated": Vec::<crate::db::LibraryTrack>::new(),
             "removed": Vec::<String>::new(),
         }))
         .into_response();
@@ -392,13 +421,37 @@ async fn library_changes(
     }
 }
 
-async fn library_stats(State(state): State<AppState>) -> impl IntoResponse {
+/// Library counters. With an account (query / header) the counts follow that
+/// account's library selection, like every list endpoint; `catalog_track_count`
+/// is always the whole indexed catalog.
+async fn library_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(aq): Query<AccountQuery>,
+) -> impl IntoResponse {
+    let account_id = account_or_err!(&state, &headers, &aq);
+    let sel = match load_selection(&state, &account_id) {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
     let music_root_path = state.config.lock().unwrap().music_root.clone();
     let music_root = music_root_path
         .as_ref()
         .map(|p| p.to_string_lossy().into_owned());
-    match state.db.stats(music_root) {
-        Ok(mut stats) => {
+    let db = state.db.clone();
+    let computed = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let mut stats = db.stats(music_root)?;
+        if selection::get_selection_filter_mode(&sel) != SelectionFilterMode::All {
+            let albums = db.list_albums()?;
+            let tracks = db.list_library_tracks(i64::MAX, 0)?;
+            let artist_count = stats.artist_count;
+            selection::selection_stats(&albums, &tracks, artist_count, &sel, &mut stats);
+        }
+        Ok(stats)
+    })
+    .await;
+    match computed {
+        Ok(Ok(mut stats)) => {
             stats.scanning = state.is_scanning();
             if let Some(root) = music_root_path.as_ref() {
                 if let Some(space) = crate::disk_space::volume_space(root) {
@@ -408,6 +461,43 @@ async fn library_stats(State(state): State<AppState>) -> impl IntoResponse {
             }
             ok(stats).into_response()
         }
+        Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// Canonical genres of the account's library with track / album / artist
+/// counts, most common first.
+async fn library_genres(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(aq): Query<AccountQuery>,
+) -> impl IntoResponse {
+    let account_id = account_or_err!(&state, &headers, &aq);
+    let sel = match load_selection(&state, &account_id) {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let db = state.db.clone();
+    let computed = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let tracks = db.list_library_tracks(i64::MAX, 0)?;
+        let tracks = match selection::get_selection_filter_mode(&sel) {
+            SelectionFilterMode::All => tracks,
+            _ => {
+                let albums = selection::filter_albums(db.list_albums()?, &sel);
+                selection::filter_tracks(tracks, &albums, &sel)
+            }
+        };
+        Ok(crate::db::count_genres(
+            tracks
+                .iter()
+                .map(|t| (t.genres.as_slice(), t.album_id, t.artist_id)),
+        ))
+    })
+    .await;
+    match computed {
+        Ok(Ok(list)) => ok(list).into_response(),
+        Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -418,17 +508,13 @@ struct SearchQuery {
     limit: Option<i64>,
     #[serde(rename = "accountId")]
     account_id: Option<String>,
+    /// `all`: `{ tracks, albums, artists }` instead of the bare track list.
+    scope: Option<String>,
 }
 
-macro_rules! account_or_err {
-    ($state:expr, $headers:expr, $q:expr) => {
-        match resolve_account($state, $headers, $q) {
-            Ok(id) => id,
-            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
-        }
-    };
-}
-
+/// Track search (FTS over title, artist, album and genre; accents ignored;
+/// file paths never match). `scope=all` also returns albums and artists
+/// matching by name or genre.
 async fn library_search(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -446,25 +532,57 @@ async fn library_search(
         Ok(s) => s,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
     };
-    match selection::get_selection_filter_mode(&sel) {
-        SelectionFilterMode::Empty => ok(Vec::<crate::db::Track>::new()).into_response(),
-        SelectionFilterMode::All => match state.db.search_tracks(&q.q, limit) {
-            Ok(tracks) => ok(tracks).into_response(),
-            Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-        },
-        SelectionFilterMode::Filter => {
-            // Over-fetch then clip so personal selection does not starve the result page.
-            let fetch = (limit.saturating_mul(20)).clamp(limit, 2_000);
-            match (state.db.search_tracks(&q.q, fetch), state.db.list_albums()) {
-                (Ok(tracks), Ok(albums)) => {
-                    let albums = selection::filter_albums(albums, &sel);
-                    let tracks = selection::filter_tracks(tracks, &albums, &sel);
-                    let page: Vec<_> = tracks.into_iter().take(limit as usize).collect();
-                    ok(page).into_response()
-                }
-                (Err(e), _) | (_, Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    let all_scope = q.scope.as_deref().map(str::trim) == Some("all");
+    let mode = selection::get_selection_filter_mode(&sel);
+    if mode == SelectionFilterMode::Empty {
+        return if all_scope {
+            ok(json!({ "tracks": [], "albums": [], "artists": [] })).into_response()
+        } else {
+            ok(Vec::<crate::db::LibraryTrack>::new()).into_response()
+        };
+    }
+    let db = state.db.clone();
+    let query = q.q.clone();
+    let computed = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        // Over-fetch then clip so personal selection does not starve the result page.
+        let fetch = if mode == SelectionFilterMode::All {
+            limit
+        } else {
+            (limit.saturating_mul(20)).clamp(limit, 2_000)
+        };
+        let tracks = db.search_tracks(&query, fetch)?;
+        let (albums, artists) = if all_scope {
+            db.search_albums_artists(&query)?
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        if mode == SelectionFilterMode::All {
+            return Ok((tracks, albums, artists));
+        }
+        let visible = selection::filter_albums(db.list_albums()?, &sel);
+        let mut tracks = selection::filter_tracks(tracks, &visible, &sel);
+        tracks.truncate(limit as usize);
+        let albums = selection::filter_albums(albums, &sel);
+        let visible_artists: std::collections::HashSet<i64> =
+            visible.iter().filter_map(|a| a.artist_id).collect();
+        let artists = artists
+            .into_iter()
+            .filter(|a| visible_artists.contains(&a.id))
+            .collect();
+        Ok((tracks, albums, artists))
+    })
+    .await;
+    match computed {
+        Ok(Ok((tracks, albums, artists))) => {
+            if all_scope {
+                ok(json!({ "tracks": tracks, "albums": albums, "artists": artists }))
+                    .into_response()
+            } else {
+                ok(tracks).into_response()
             }
         }
+        Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
@@ -507,7 +625,7 @@ async fn album_tracks(
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         }
     }
-    match state.db.album_tracks(id) {
+    match state.db.library_album_tracks(id) {
         Ok(v) => ok(v).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -625,7 +743,7 @@ async fn get_track(
         Ok(s) => s,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
     };
-    match state.db.get_track(id) {
+    match state.db.get_library_track(id) {
         Ok(Some(t)) => {
             if selection::get_selection_filter_mode(&sel) == SelectionFilterMode::All {
                 return ok(t).into_response();
@@ -773,10 +891,14 @@ async fn set_library_layout(
     };
     match crate::layout::save_layout(&root, &body) {
         Ok(()) => {
-            crate::diagnostics::append_activity(
+            crate::diagnostics::log_activity(
                 &data_dir(&state),
-                "library",
-                &format!("layout impostato: {}", body.preferred_layout.as_str()),
+                crate::diagnostics::ActivityEvent::new(
+                    "library",
+                    "layout",
+                    format!("layout impostato: {}", body.preferred_layout.as_str()),
+                )
+                .params(json!({ "layout": body.preferred_layout.as_str() })),
             );
             ok(body).into_response()
         }
@@ -814,13 +936,20 @@ async fn set_watch(
     } else {
         crate::watcher::stop(&state);
     }
-    crate::diagnostics::append_activity(
+    crate::diagnostics::log_activity(
         &data_dir(&state),
-        "library",
         if body.enabled {
-            "watcher libreria attivato"
+            crate::diagnostics::ActivityEvent::new(
+                "library",
+                "watchOn",
+                "watcher libreria attivato",
+            )
         } else {
-            "watcher libreria disattivato"
+            crate::diagnostics::ActivityEvent::new(
+                "library",
+                "watchOff",
+                "watcher libreria disattivato",
+            )
         },
     );
     ok(state.watcher.status(body.enabled)).into_response()
@@ -858,13 +987,9 @@ async fn set_machine_access(
     PeerAddr(peer): PeerAddr,
     Json(body): Json<EnabledBody>,
 ) -> Response {
-    let peer = peer;
     let op = machine_op_or_err!(&state, &headers, peer);
     if !op.local {
-        return err(
-            StatusCode::FORBIDDEN,
-            "L'accesso remoto alle operazioni di macchina si abilita solo dal computer dell'hub",
-        );
+        return crate::perm::forbidden(crate::perm::FORBIDDEN_REMOTE);
     }
     if let Err(e) = state
         .config
@@ -874,13 +999,20 @@ async fn set_machine_access(
     {
         return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
-    crate::diagnostics::append_activity(
+    crate::diagnostics::log_activity(
         &data_dir(&state),
-        "system",
         if body.enabled {
-            "operazioni di macchina abilitate da remoto"
+            crate::diagnostics::ActivityEvent::new(
+                "system",
+                "remoteAdminOn",
+                "operazioni di macchina abilitate da remoto",
+            )
         } else {
-            "operazioni di macchina limitate al computer dell'hub"
+            crate::diagnostics::ActivityEvent::new(
+                "system",
+                "remoteAdminOff",
+                "operazioni di macchina limitate al computer dell'hub",
+            )
         },
     );
     ok(crate::perm::machine_op_status(&state, &headers, None, peer)).into_response()
@@ -911,16 +1043,28 @@ async fn sync_legacy_meta(
         return err(StatusCode::BAD_REQUEST, "music_root not set");
     };
     let db = state.db.clone();
-    let job = state
-        .jobs
-        .start("legacy-sync", "Sync metadati legacy", false);
+    let job = state.jobs.start_coded(
+        "legacy-sync",
+        "Sync metadati legacy",
+        "legacySync.title",
+        serde_json::Value::Null,
+        false,
+    );
     match tokio::task::spawn_blocking(move || {
         let out = backup::sync_legacy_library_data(&db, &data_dir, &root);
         match &out {
-            Ok(report) => job.finish(format!(
-                "{} album, {} tracce, {} preferiti",
-                report.album_meta_merged, report.track_meta_merged, report.favorites_linked
-            )),
+            Ok(report) => job.finish_coded(
+                "legacySync.done",
+                json!({
+                    "albums": report.album_meta_merged,
+                    "tracks": report.track_meta_merged,
+                    "favorites": report.favorites_linked,
+                }),
+                format!(
+                    "{} album, {} tracce, {} preferiti",
+                    report.album_meta_merged, report.track_meta_merged, report.favorites_linked
+                ),
+            ),
             Err(e) => job.fail(e.to_string()),
         }
         out
@@ -959,11 +1103,15 @@ async fn add_favorite(
     let account_id = account_or_err!(&state, &headers, &aq);
     match state.db.add_favorite(&account_id, body.track_id) {
         Ok(()) => {
-            crate::diagnostics::append_activity_with_account(
+            crate::diagnostics::log_activity(
                 &data_dir(&state),
-                "favorites",
-                &format!("favorite added: {}", body.track_id),
-                Some(&account_id),
+                crate::diagnostics::ActivityEvent::new(
+                    "favorites",
+                    "added",
+                    format!("favorite added: {}", body.track_id),
+                )
+                .params(json!({ "trackId": body.track_id }))
+                .account(Some(&account_id)),
             );
             ok(json!({ "track_id": body.track_id })).into_response()
         }
@@ -980,11 +1128,15 @@ async fn remove_favorite(
     let account_id = account_or_err!(&state, &headers, &aq);
     match state.db.remove_favorite(&account_id, id) {
         Ok(()) => {
-            crate::diagnostics::append_activity_with_account(
+            crate::diagnostics::log_activity(
                 &data_dir(&state),
-                "favorites",
-                &format!("favorite removed: {id}"),
-                Some(&account_id),
+                crate::diagnostics::ActivityEvent::new(
+                    "favorites",
+                    "removed",
+                    format!("favorite removed: {id}"),
+                )
+                .params(json!({ "trackId": id }))
+                .account(Some(&account_id)),
             );
             ok(json!({ "track_id": id })).into_response()
         }
@@ -1022,11 +1174,15 @@ async fn create_playlist(
     }
     match state.db.create_playlist(&account_id, name) {
         Ok(p) => {
-            crate::diagnostics::append_activity_with_account(
+            crate::diagnostics::log_activity(
                 &data_dir(&state),
-                "playlist",
-                &format!("playlist created: {name}"),
-                Some(&account_id),
+                crate::diagnostics::ActivityEvent::new(
+                    "playlist",
+                    "created",
+                    format!("playlist created: {name}"),
+                )
+                .params(json!({ "name": name }))
+                .account(Some(&account_id)),
             );
             ok(p).into_response()
         }
@@ -1041,7 +1197,7 @@ async fn get_playlist(
     Query(aq): Query<AccountQuery>,
 ) -> impl IntoResponse {
     let account_id = account_or_err!(&state, &headers, &aq);
-    match state.db.playlist_tracks(&account_id, &id) {
+    match state.db.playlist_library_tracks(&account_id, &id) {
         Ok(tracks) => {
             if tracks.is_empty() {
                 // Distinguish empty playlist vs missing: ownership check via list.
@@ -1070,11 +1226,15 @@ async fn rename_playlist(
     let account_id = account_or_err!(&state, &headers, &aq);
     match state.db.rename_playlist(&account_id, &id, body.name.trim()) {
         Ok(true) => {
-            crate::diagnostics::append_activity_with_account(
+            crate::diagnostics::log_activity(
                 &data_dir(&state),
-                "playlist",
-                &format!("playlist renamed: {} → {}", id, body.name.trim()),
-                Some(&account_id),
+                crate::diagnostics::ActivityEvent::new(
+                    "playlist",
+                    "renamed",
+                    format!("playlist renamed: {} → {}", id, body.name.trim()),
+                )
+                .params(json!({ "id": id, "name": body.name.trim() }))
+                .account(Some(&account_id)),
             );
             ok(json!({ "id": id, "name": body.name })).into_response()
         }
@@ -1092,11 +1252,15 @@ async fn delete_playlist(
     let account_id = account_or_err!(&state, &headers, &aq);
     match state.db.delete_playlist(&account_id, &id) {
         Ok(true) => {
-            crate::diagnostics::append_activity_with_account(
+            crate::diagnostics::log_activity(
                 &data_dir(&state),
-                "playlist",
-                &format!("playlist deleted: {id}"),
-                Some(&account_id),
+                crate::diagnostics::ActivityEvent::new(
+                    "playlist",
+                    "deleted",
+                    format!("playlist deleted: {id}"),
+                )
+                .params(json!({ "id": id }))
+                .account(Some(&account_id)),
             );
             ok(json!({ "id": id })).into_response()
         }
@@ -1226,7 +1390,19 @@ async fn get_entity_info(
     }
 }
 
-async fn download_backup(State(state): State<AppState>) -> Response {
+/// The archive carries settings, accounts and credentials (cookies), so it is
+/// a machine operation (legacy: server admin only).
+async fn download_backup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    PeerAddr(peer): PeerAddr,
+    Query(aq): Query<AccountQuery>,
+) -> Response {
+    if let Err(r) =
+        crate::perm::require_machine_op(&state, &headers, aq.account_id.as_deref(), peer)
+    {
+        return r;
+    }
     match tokio::task::spawn_blocking({
         let state = state.clone();
         move || backup::build_backup_zip(&state)
@@ -1263,7 +1439,7 @@ async fn download_theme_export(
 ) -> Response {
     let account_id = match resolve_account(&state, &headers, &aq) {
         Ok(id) => id,
-        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+        Err(r) => return r,
     };
     match tokio::task::spawn_blocking({
         let state = state.clone();
@@ -1303,6 +1479,27 @@ struct RestoreQuery {
     theme_only: bool,
 }
 
+/// Non-admin callers may only import a theme package (legacy 32 MiB policy).
+const THEME_UPLOAD_MAX_BYTES: usize = 32 * 1024 * 1024;
+const RESTORE_UPLOAD_MAX_BYTES: usize = 512 * 1024 * 1024;
+
+/// True when the zip contains `rekord-theme.json` (any folder), i.e. a theme
+/// package rather than a full backup. Reads only the central directory.
+fn zip_is_theme_package(bytes: &[u8]) -> bool {
+    let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(bytes)) else {
+        return false;
+    };
+    (0..archive.len()).any(|i| {
+        archive.by_index_raw(i).is_ok_and(|f| {
+            !f.is_dir()
+                && std::path::Path::new(f.name())
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    == Some("rekord-theme.json")
+        })
+    })
+}
+
 async fn upload_restore(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1313,25 +1510,41 @@ async fn upload_restore(
     let aq = AccountQuery {
         account_id: rq.account_id.clone(),
     };
-    let peer = peer;
+    let account_id = match resolve_account(&state, &headers, &aq) {
+        Ok(id) => id,
+        Err(r) => return r,
+    };
+    // Size policy is decided before reading: full restores need host rights.
+    let machine_op =
+        crate::perm::require_machine_op(&state, &headers, rq.account_id.as_deref(), peer);
+    let max_bytes = if machine_op.is_ok() && !rq.theme_only {
+        RESTORE_UPLOAD_MAX_BYTES
+    } else {
+        THEME_UPLOAD_MAX_BYTES
+    };
+
+    // Stream the file field into one buffer (no intermediate copies).
     let mut file_bytes: Option<Vec<u8>> = None;
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Ok(Some(mut field)) = multipart.next_field().await {
         let name = field.name().unwrap_or("").to_string();
-        if name == "file" || name.is_empty() {
-            match field.bytes().await {
-                Ok(b) => {
-                    if b.len() > 512 * 1024 * 1024 {
-                        return err(
-                            StatusCode::PAYLOAD_TOO_LARGE,
-                            "backup zip too large (>512MiB)",
-                        );
+        if name != "file" && !name.is_empty() {
+            continue;
+        }
+        let mut buf = Vec::new();
+        loop {
+            match field.chunk().await {
+                Ok(Some(chunk)) => {
+                    if buf.len() + chunk.len() > max_bytes {
+                        return err(StatusCode::PAYLOAD_TOO_LARGE, "Archive is too large");
                     }
-                    file_bytes = Some(b.to_vec());
-                    break;
+                    buf.extend_from_slice(&chunk);
                 }
+                Ok(None) => break,
                 Err(e) => return err(StatusCode::BAD_REQUEST, e.to_string()),
             }
         }
+        file_bytes = Some(buf);
+        break;
     }
     let Some(bytes) = file_bytes else {
         return err(StatusCode::BAD_REQUEST, "missing multipart file field");
@@ -1341,43 +1554,73 @@ async fn upload_restore(
     }
 
     // Theme package? Apply only theme settings to the current account (legacy parity).
-    let account_id = match resolve_account(&state, &headers, &aq) {
-        Ok(id) => id,
-        Err(e) => return err(StatusCode::BAD_REQUEST, e),
-    };
-    match backup::try_import_theme_zip(&state, &account_id, bytes.clone()) {
-        Ok(Some(report)) => return ok(report).into_response(),
-        Ok(None) => {
-            if rq.theme_only {
-                return err(
-                    StatusCode::BAD_REQUEST,
-                    "Not a RE-KORD theme archive (missing rekord-theme.json)",
-                );
+    if zip_is_theme_package(&bytes) {
+        let st = state.clone();
+        let imported = tokio::task::spawn_blocking(move || {
+            backup::try_import_theme_zip(&st, &account_id, bytes)
+        })
+        .await
+        .unwrap_or_else(|e| Err(anyhow::anyhow!(e.to_string())));
+        return match imported {
+            Ok(Some(report)) => ok(report).into_response(),
+            Ok(None) => err(
+                StatusCode::BAD_REQUEST,
+                "Not a RE-KORD theme archive (missing rekord-theme.json)",
+            ),
+            Err(e) => {
+                let msg = e.to_string();
+                let status = if msg.contains("too large") {
+                    StatusCode::PAYLOAD_TOO_LARGE
+                } else if msg.contains("Invalid theme") || msg.contains("Unsupported image") {
+                    StatusCode::BAD_REQUEST
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                };
+                err(status, msg)
             }
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            let status = if msg.contains("too large") {
-                StatusCode::PAYLOAD_TOO_LARGE
-            } else if msg.contains("Invalid theme") || msg.contains("Unsupported image") {
-                StatusCode::BAD_REQUEST
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            return err(status, msg);
-        }
+        };
+    }
+    if rq.theme_only {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "Not a RE-KORD theme archive (missing rekord-theme.json)",
+        );
     }
 
     // Theme packages are personal (handled above); a full restore rewrites the
     // machine's library and accounts, so it is a machine operation.
-    let _op = machine_op_or_err!(&state, &headers, peer);
-    let job = state.jobs.start("restore", "Restore backup", false);
-    match backup::restore_backup_zip(&state, bytes).await {
+    if let Err(r) = machine_op {
+        return r;
+    }
+    let job = state.jobs.start_coded(
+        "restore",
+        "Restore backup",
+        "restore.title",
+        serde_json::Value::Null,
+        false,
+    );
+    // Restore unzips and rewrites the DB/library: keep it off the async workers.
+    let handle = tokio::runtime::Handle::current();
+    let st = state.clone();
+    let restored = tokio::task::spawn_blocking(move || {
+        handle.block_on(backup::restore_backup_zip(&st, bytes))
+    })
+    .await
+    .unwrap_or_else(|e| Err(anyhow::anyhow!(e.to_string())));
+    match restored {
         Ok(report) => {
-            job.finish(format!(
-                "{} tracce, {} preferiti, {} playlist",
-                report.scanned_tracks, report.favorites, report.playlists
-            ));
+            job.finish_coded(
+                "restore.done",
+                json!({
+                    "tracks": report.scanned_tracks,
+                    "favorites": report.favorites,
+                    "playlists": report.playlists,
+                }),
+                format!(
+                    "{} tracce, {} preferiti, {} playlist",
+                    report.scanned_tracks, report.favorites, report.playlists
+                ),
+            );
             ok(report).into_response()
         }
         Err(e) => {
@@ -1433,11 +1676,14 @@ async fn patch_my_library_selection(
     let merged = selection::merge_selection_patch(&cur, &patch, &keys);
     match selection::write_library_selection(&dir, &account_id, &merged) {
         Ok(saved) => {
-            crate::diagnostics::append_activity_with_account(
+            crate::diagnostics::log_activity(
                 &dir,
-                "library",
-                "library selection updated",
-                Some(&account_id),
+                crate::diagnostics::ActivityEvent::new(
+                    "library",
+                    "selection",
+                    "library selection updated",
+                )
+                .account(Some(&account_id)),
             );
             ok(saved).into_response()
         }
@@ -1452,48 +1698,78 @@ async fn list_accounts(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+/// Registry changes need host access (legacy: server admin, any account).
+macro_rules! host_op_or_err {
+    ($state:expr, $headers:expr, $peer:expr) => {
+        if let Err(response) = crate::perm::require_host_op($state, $headers, $peer) {
+            return response;
+        }
+    };
+}
+
 async fn create_account(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    PeerAddr(peer): PeerAddr,
     Json(body): Json<NameBody>,
-) -> impl IntoResponse {
+) -> Response {
+    host_op_or_err!(&state, &headers, peer);
     let dir = data_dir(&state);
     match accounts::create_account(&dir, body.name.trim()) {
         Ok(snap) => {
             let aid = snap.created_account_id.as_deref().unwrap_or_default();
-            crate::diagnostics::append_activity_with_account(
+            crate::diagnostics::log_activity(
                 &dir,
-                "account",
-                &format!("account created: {}", body.name.trim()),
-                if aid.is_empty() { None } else { Some(aid) },
+                crate::diagnostics::ActivityEvent::new(
+                    "account",
+                    "created",
+                    format!("account created: {}", body.name.trim()),
+                )
+                .params(json!({ "name": body.name.trim() }))
+                .account(if aid.is_empty() { None } else { Some(aid) }),
             );
             (StatusCode::CREATED, ok(snap)).into_response()
         }
-        Err(e) => err(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => {
+            tracing::warn!(error = %e, "account create failed");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "account_create_failed")
+        }
     }
 }
 
 async fn update_account(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    PeerAddr(peer): PeerAddr,
     Path(id): Path<String>,
     Json(body): Json<NameBody>,
-) -> impl IntoResponse {
+) -> Response {
+    host_op_or_err!(&state, &headers, peer);
+    if !accounts::is_valid_account_id(id.trim()) {
+        return err(StatusCode::BAD_REQUEST, "invalid_account_id");
+    }
     let dir = data_dir(&state);
     match accounts::update_account(&dir, &id, Some(body.name.trim())) {
         Ok(snap) => {
-            crate::diagnostics::append_activity_with_account(
+            crate::diagnostics::log_activity(
                 &dir,
-                "account",
-                &format!("account renamed: {}", body.name.trim()),
-                Some(&id),
+                crate::diagnostics::ActivityEvent::new(
+                    "account",
+                    "renamed",
+                    format!("account renamed: {}", body.name.trim()),
+                )
+                .params(json!({ "name": body.name.trim() }))
+                .account(Some(&id)),
             );
             ok(snap).into_response()
         }
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("not found") {
-                err(StatusCode::NOT_FOUND, msg)
+                err(StatusCode::NOT_FOUND, "account_not_found")
             } else {
-                err(StatusCode::BAD_REQUEST, msg)
+                tracing::warn!(error = %e, "account update failed");
+                err(StatusCode::BAD_REQUEST, "account_update_failed")
             }
         }
     }
@@ -1501,41 +1777,78 @@ async fn update_account(
 
 async fn delete_account(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    PeerAddr(peer): PeerAddr,
     Path(id): Path<String>,
-) -> impl IntoResponse {
+) -> Response {
+    host_op_or_err!(&state, &headers, peer);
+    if !accounts::is_valid_account_id(id.trim()) {
+        return err(StatusCode::BAD_REQUEST, "invalid_account_id");
+    }
     let dir = data_dir(&state);
     match accounts::delete_account(&dir, &id) {
         Ok(snap) => {
-            let _ = state.db.delete_account_user_data(&id);
-            crate::diagnostics::append_activity_with_account(
+            if let Err(e) = state.db.delete_account_user_data(&id) {
+                tracing::warn!(account = %id, error = %e, "account rows not deleted");
+            }
+            crate::diagnostics::log_activity(
                 &dir,
-                "account",
-                &format!("account deleted: {id}"),
-                Some(&id),
+                crate::diagnostics::ActivityEvent::new(
+                    "account",
+                    "deleted",
+                    format!("account deleted: {id}"),
+                )
+                .params(json!({ "id": id }))
+                .account(Some(&id)),
             );
             ok(snap).into_response()
         }
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("not found") {
-                err(StatusCode::NOT_FOUND, msg)
-            } else if msg.contains("default") || msg.contains("at least one") {
-                err(StatusCode::FORBIDDEN, msg)
+                err(StatusCode::NOT_FOUND, "account_not_found")
+            } else if msg.contains("default") {
+                err(StatusCode::FORBIDDEN, "cannot_delete_default_account")
+            } else if msg.contains("at least one") {
+                err(StatusCode::FORBIDDEN, "last_account")
             } else {
-                err(StatusCode::BAD_REQUEST, msg)
+                tracing::warn!(error = %e, "account delete failed");
+                err(StatusCode::BAD_REQUEST, "account_delete_failed")
             }
         }
     }
 }
 
-async fn export_account_profile(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+/// A profile holds personal data: callers may export their own account; any
+/// other account needs a machine operation.
+async fn export_account_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    PeerAddr(peer): PeerAddr,
+    Query(aq): Query<AccountQuery>,
+    Path(id): Path<String>,
+) -> Response {
+    if !accounts::is_valid_account_id(id.trim()) {
+        return err(StatusCode::BAD_REQUEST, "invalid_account_id");
+    }
+    let caller = match resolve_account(&state, &headers, &aq) {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    if caller != id {
+        if let Err(r) =
+            crate::perm::require_machine_op(&state, &headers, aq.account_id.as_deref(), peer)
+        {
+            return r;
+        }
+    }
     let dir = data_dir(&state);
     let snap = match accounts::get_accounts_snapshot(&dir) {
         Ok(s) => s,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
     let Some(account) = snap.accounts.iter().find(|a| a.id == id) else {
-        return err(StatusCode::NOT_FOUND, "account not found");
+        return err(StatusCode::NOT_FOUND, "account_not_found");
     };
     let selection = match selection::read_library_selection(&dir, &id) {
         Ok(s) => s,

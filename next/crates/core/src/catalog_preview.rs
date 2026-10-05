@@ -7,10 +7,10 @@
 use crate::config::AppConfig;
 use crate::youtube_music::{browse_payload, browse_response_title, walk_collect};
 use crate::ytdlp::{
-    guess_youtube_url_from_entry_id, javascript_args, pick_flat_entry_url, resolve_ytdlp_path,
-    run_json_probe,
+    classify_ytdlp_error, guess_youtube_url_from_entry_id, javascript_args, pick_flat_entry_url,
+    run_json_probe, ytdlp_program,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -21,10 +21,34 @@ use tokio::process::Command;
 
 /// Long enough to cover an audition that stalls, short enough to stay ephemeral:
 /// the browser re-requests ranges with the same token while it plays.
-const TOKEN_TTL: Duration = Duration::from_secs(300);
-/// Audio first; `best` is the fallback that keeps working when YouTube SABR
-/// hides standalone audio URLs (the same reason downloads need it).
-const PREVIEW_FORMAT: &str = "bestaudio[acodec^=mp4a]/bestaudio/best";
+pub const TOKEN_TTL: Duration = Duration::from_secs(300);
+/// Audio only (AAC first, it plays everywhere). A muxed video format is never
+/// used: no audio-only format → `no_audio_format`.
+const PREVIEW_FORMAT: &str = "bestaudio[acodec^=mp4a]/bestaudio";
+
+/// Why an audition could not be prepared.
+#[derive(Debug, thiserror::Error)]
+pub enum PreviewError {
+    #[error("invalid URL")]
+    InvalidUrl,
+    #[error("yt-dlp not found")]
+    YtdlpNotFound,
+    #[error("yt-dlp timed out")]
+    Timeout,
+    #[error("{message}")]
+    Resolve { code: &'static str, message: String },
+}
+
+impl PreviewError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidUrl => "invalid_catalog_url",
+            Self::YtdlpNotFound => "ytdlp_not_found",
+            Self::Timeout => "preview_timeout",
+            Self::Resolve { code, .. } => code,
+        }
+    }
+}
 /// Clients stop at ~30s, so a first chunk is enough to fill the preview.
 const DEFAULT_INITIAL_RANGE_BYTES: u64 = 512 * 1024;
 
@@ -41,7 +65,11 @@ pub struct CatalogWebTrack {
 pub struct CatalogWebTracks {
     pub tracks: Vec<CatalogWebTrack>,
     pub title: Option<String>,
+    /// Stable code (`no_tracks_found`, `ytdlp_disabled`, …) when the list is empty.
     pub error: Option<String>,
+    /// Untranslated detail for the error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// Accept only public YouTube pages and drop tracking/api params.
@@ -330,7 +358,7 @@ async fn tracks_via_ytdlp(cfg: &AppConfig, page_url: &str) -> Result<Vec<Catalog
 pub async fn release_tracks(cfg: &AppConfig, page_url: &str) -> CatalogWebTracks {
     let Some(url) = normalize_catalog_web_url(page_url) else {
         return CatalogWebTracks {
-            error: Some("Invalid URL".into()),
+            error: Some("invalid_catalog_url".into()),
             ..Default::default()
         };
     };
@@ -358,12 +386,14 @@ pub async fn release_tracks(cfg: &AppConfig, page_url: &str) -> CatalogWebTracks
                         title: Some(browse_response_title(&json)).filter(|t| !t.is_empty()),
                         tracks,
                         error: None,
+                        message: None,
                     };
                 }
             }
             Err(e) if !crate::ytdlp::ytdlp_enabled() => {
                 return CatalogWebTracks {
-                    error: Some(e.to_string()),
+                    error: Some("upstream_failed".into()),
+                    message: Some(e.to_string()),
                     ..Default::default()
                 };
             }
@@ -377,13 +407,14 @@ pub async fn release_tracks(cfg: &AppConfig, page_url: &str) -> CatalogWebTracks
                 tracks,
                 title: Some(title).filter(|t| !t.is_empty()),
                 error: None,
+                message: None,
             };
         }
     }
 
     if !crate::ytdlp::ytdlp_enabled() {
         return CatalogWebTracks {
-            error: Some("Track list requires yt-dlp (ENABLE_YTDLP)".into()),
+            error: Some("ytdlp_disabled".into()),
             ..Default::default()
         };
     }
@@ -398,12 +429,19 @@ pub async fn release_tracks(cfg: &AppConfig, page_url: &str) -> CatalogWebTracks
     };
     match tracks_via_ytdlp(cfg, &fetch_url).await {
         Ok(tracks) => CatalogWebTracks {
-            error: tracks.is_empty().then(|| "No tracks found".to_string()),
+            error: tracks.is_empty().then(|| "no_tracks_found".to_string()),
             tracks,
             title: None,
+            message: None,
         },
         Err(e) => CatalogWebTracks {
-            error: Some(e.to_string()),
+            error: Some(
+                e.downcast_ref::<crate::ytdlp::ProbeError>()
+                    .map(|p| p.code())
+                    .unwrap_or("track_list_failed")
+                    .to_string(),
+            ),
+            message: Some(e.to_string()),
             ..Default::default()
         },
     }
@@ -425,8 +463,11 @@ fn prune_tokens(map: &mut HashMap<String, TokenEntry>) {
 }
 
 /// Resolve the audio stream for a watch URL and hand back an opaque token.
-pub async fn create_preview_token(cfg: &AppConfig, watch_url: &str) -> Result<String> {
-    let url = normalize_catalog_web_url(watch_url).context("Invalid URL")?;
+pub async fn create_preview_token(
+    cfg: &AppConfig,
+    watch_url: &str,
+) -> std::result::Result<String, PreviewError> {
+    let url = normalize_catalog_web_url(watch_url).ok_or(PreviewError::InvalidUrl)?;
     let fetch_url = {
         let coerced = url_for_ytdlp_fetch(&url);
         if coerced.is_empty() {
@@ -435,7 +476,7 @@ pub async fn create_preview_token(cfg: &AppConfig, watch_url: &str) -> Result<St
             coerced
         }
     };
-    let program = resolve_ytdlp_path(cfg);
+    let program = ytdlp_program(cfg).await;
     let mut args = vec![
         "-g".to_string(),
         "-f".to_string(),
@@ -457,16 +498,33 @@ pub async fn create_preview_token(cfg: &AppConfig, watch_url: &str) -> Result<St
 
     let mut cmd = Command::new(&program);
     cmd.args(&args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let child = cmd
-        .spawn()
-        .with_context(|| format!("spawn {}", program.display()))?;
-    let output = tokio::time::timeout(Duration::from_millis(30_000), child.wait_with_output())
-        .await
-        .context("yt-dlp preview timeout")?
-        .context("yt-dlp preview")?;
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(PreviewError::YtdlpNotFound)
+        }
+        Err(e) => {
+            return Err(PreviewError::Resolve {
+                code: "preview_resolve_failed",
+                message: e.to_string(),
+            })
+        }
+    };
+    let output =
+        match tokio::time::timeout(Duration::from_millis(30_000), child.wait_with_output()).await {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => {
+                return Err(PreviewError::Resolve {
+                    code: "preview_resolve_failed",
+                    message: e.to_string(),
+                })
+            }
+            Err(_) => return Err(PreviewError::Timeout),
+        };
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stream_url = stdout
         .lines()
@@ -478,11 +536,21 @@ pub async fn create_preview_token(cfg: &AppConfig, watch_url: &str) -> Result<St
             .lines()
             .rev()
             .find(|l| !l.trim().is_empty())
-            .unwrap_or("");
-        if detail.is_empty() {
-            bail!("Could not resolve preview stream (yt-dlp)");
-        }
-        bail!("Could not resolve preview stream: {detail}");
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let code = match classify_ytdlp_error(&detail) {
+            "unknown" => "preview_resolve_failed",
+            c => c,
+        };
+        return Err(PreviewError::Resolve {
+            code,
+            message: if detail.is_empty() {
+                "Could not resolve preview stream (yt-dlp)".into()
+            } else {
+                detail
+            },
+        });
     };
 
     let token = uuid::Uuid::new_v4().to_string();
@@ -496,6 +564,13 @@ pub async fn create_preview_token(cfg: &AppConfig, watch_url: &str) -> Result<St
         },
     );
     Ok(token)
+}
+
+/// Drop a token whose upstream URL stopped working.
+pub fn forget_token(token: &str) {
+    if let Ok(mut map) = token_cache().lock() {
+        map.remove(token.trim());
+    }
 }
 
 pub fn preview_stream_url(token: &str) -> Option<String> {

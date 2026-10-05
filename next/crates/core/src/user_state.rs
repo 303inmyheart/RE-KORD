@@ -1,15 +1,17 @@
 //! Per-account user state with optimistic revision locking.
 
 use crate::state::AppState;
-use axum::extract::{Multipart, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,38 +54,57 @@ struct AccountQuery {
     account_id: Option<String>,
 }
 
-fn account_id(headers: &HeaderMap, q: &AccountQuery) -> String {
-    if let Some(h) = headers
-        .get("x-rekord-account-id")
-        .or_else(|| headers.get("x-kord-account-id"))
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        return h.to_string();
+/// Validated request account: malformed → 400, unknown → 404.
+#[allow(clippy::result_large_err)]
+fn request_account(
+    data_dir: &Path,
+    headers: &HeaderMap,
+    q: &AccountQuery,
+) -> Result<String, Response> {
+    crate::accounts::account_from_request(data_dir, headers, q.account_id.as_deref())
+        .map_err(|e| err(e.status(), e.code()))
+}
+
+/// Path component for an account id. Handlers validate ids strictly first;
+/// this only guarantees that no id can ever leave `accounts/`.
+fn account_component(account: &str) -> String {
+    let t = account.trim();
+    if crate::accounts::is_valid_account_id(t) {
+        return t.to_string();
     }
-    q.account_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("default")
-        .to_string()
+    let safe: String = t
+        .chars()
+        .take(crate::accounts::MAX_ACCOUNT_ID_LEN)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if safe.is_empty() {
+        "_invalid".into()
+    } else {
+        safe
+    }
 }
 
 pub fn user_state_path(data_dir: &std::path::Path, account: &str) -> PathBuf {
-    data_dir
-        .join("accounts")
-        .join(format!("{account}_info"))
-        .join("user-state.json")
+    account_info_dir(data_dir, account).join("user-state.json")
 }
 
 const THEME_BG_BASENAME: &str = "theme-bg";
 const THEME_BG_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif"];
 /// Aligned with legacy `THEME_BG_MAX_BYTES` (32 MiB).
 pub const THEME_BG_MAX_BYTES: usize = 32 * 1024 * 1024;
+/// Request body cap for the upload route (image + multipart envelope).
+const THEME_BG_BODY_LIMIT: usize = THEME_BG_MAX_BYTES + 1024 * 1024;
 
 pub fn account_info_dir(data_dir: &std::path::Path, account: &str) -> PathBuf {
-    data_dir.join("accounts").join(format!("{account}_info"))
+    data_dir
+        .join("accounts")
+        .join(format!("{}_info", account_component(account)))
 }
 
 /// Default path used when the extension is unknown (jpg). Prefer `find_theme_bg_path`.
@@ -237,12 +258,87 @@ pub fn delete_theme_bg(data_dir: &std::path::Path, account: &str) -> bool {
     removed
 }
 
+/// Per-file write lock: check-revision + write must be atomic per account.
+fn state_lock(path: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let mut map = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    map.entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+/// Read without locking. A file that does not parse is moved aside
+/// (`user-state.json.corrupt-<ms>`) instead of being silently replaced.
+fn read_state_file(path: &Path) -> UserStateV1 {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(path = %path.display(), error = %e, "user-state read failed");
+            }
+            return UserStateV1::default();
+        }
+    };
+    match serde_json::from_str(&raw) {
+        Ok(state) => state,
+        Err(e) => {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let mut aside = path.as_os_str().to_owned();
+            aside.push(format!(".corrupt-{stamp}"));
+            let aside = PathBuf::from(aside);
+            match fs::rename(path, &aside) {
+                Ok(()) => tracing::error!(
+                    path = %path.display(),
+                    moved_to = %aside.display(),
+                    error = %e,
+                    "corrupt user-state moved aside; starting fresh"
+                ),
+                Err(re) => tracing::error!(
+                    path = %path.display(),
+                    error = %e,
+                    rename_error = %re,
+                    "corrupt user-state could not be moved aside"
+                ),
+            }
+            UserStateV1::default()
+        }
+    }
+}
+
+/// Atomic write: temp file in the same dir, fsync, rename over the target.
+fn write_state_file(path: &Path, state: &UserStateV1) -> anyhow::Result<()> {
+    use std::io::Write;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("user-state path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let tmp = parent.join(format!(".user-state.{}.tmp", uuid::Uuid::new_v4().simple()));
+    let body = serde_json::to_vec_pretty(state)?;
+    let res = (|| -> anyhow::Result<()> {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(&body)?;
+        f.sync_all()?;
+        drop(f);
+        fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    if res.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    res
+}
+
 pub fn load_user_state(data_dir: &std::path::Path, account: &str) -> UserStateV1 {
     let path = user_state_path(data_dir, account);
-    match fs::read_to_string(&path) {
-        Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
-        Err(_) => UserStateV1::default(),
-    }
+    let lock = state_lock(&path);
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    read_state_file(&path)
 }
 
 pub fn save_user_state(
@@ -251,11 +347,46 @@ pub fn save_user_state(
     state: &UserStateV1,
 ) -> anyhow::Result<()> {
     let path = user_state_path(data_dir, account);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    let lock = state_lock(&path);
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    write_state_file(&path, state)
+}
+
+/// Outcome of a guarded read-modify-write.
+#[derive(Debug)]
+pub enum UpdateOutcome {
+    Saved(UserStateV1),
+    /// `expectedRevision` did not match: carries the current stored state.
+    Conflict(UserStateV1),
+}
+
+/// Read-modify-write under the per-account lock. When `expected_revision` is
+/// set and differs from the stored revision nothing is written. The revision
+/// is bumped by one on every successful write.
+pub fn update_user_state(
+    data_dir: &std::path::Path,
+    account: &str,
+    expected_revision: Option<u64>,
+    apply: impl FnOnce(&mut UserStateV1),
+) -> anyhow::Result<UpdateOutcome> {
+    let path = user_state_path(data_dir, account);
+    let lock = state_lock(&path);
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let current = read_state_file(&path);
+    if let Some(expected) = expected_revision {
+        if expected != current.revision {
+            return Ok(UpdateOutcome::Conflict(current));
+        }
     }
-    fs::write(path, serde_json::to_string_pretty(state)?)?;
-    Ok(())
+    let revision = current.revision;
+    let mut next = current;
+    apply(&mut next);
+    next.version = 1;
+    next.revision = revision.saturating_add(1);
+    next.track_moods =
+        crate::track_moods::normalize_track_moods_map(std::mem::take(&mut next.track_moods));
+    write_state_file(&path, &next)?;
+    Ok(UpdateOutcome::Saved(next))
 }
 
 fn normalize_rel_path(p: &str) -> String {
@@ -275,13 +406,15 @@ fn normalize_rel_path(p: &str) -> String {
 /// until the caller remaps them after a library scan.
 pub fn user_state_from_legacy_json(raw: &str) -> anyhow::Result<UserStateV1> {
     let v: Value = serde_json::from_str(raw)?;
-    let mut out = UserStateV1::default();
-    out.version = 1;
-    out.revision = v
-        .get("revision")
-        .and_then(|x| x.as_u64())
-        .unwrap_or(0)
-        .max(1);
+    let mut out = UserStateV1 {
+        version: 1,
+        revision: v
+            .get("revision")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0)
+            .max(1),
+        ..Default::default()
+    };
 
     if let Some(obj) = v.get("trackPlayCounts").and_then(|x| x.as_object()) {
         for (k, n) in obj {
@@ -428,18 +561,6 @@ pub fn user_state_from_legacy_json(raw: &str) -> anyhow::Result<UserStateV1> {
     Ok(out)
 }
 
-fn load_state(data_dir: &std::path::Path, account: &str) -> UserStateV1 {
-    load_user_state(data_dir, account)
-}
-
-fn save_state(
-    data_dir: &std::path::Path,
-    account: &str,
-    state: &UserStateV1,
-) -> anyhow::Result<()> {
-    save_user_state(data_dir, account, state)
-}
-
 fn ok<T: Serialize>(data: T) -> Response {
     Json(json!({ "ok": true, "data": data })).into_response()
 }
@@ -447,6 +568,38 @@ fn ok<T: Serialize>(data: T) -> Response {
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     let body = Json(json!({ "ok": false, "error": msg.into() }));
     (status, body).into_response()
+}
+
+/// 409 body: the client rebases on `current` and retries.
+fn conflict(current: UserStateV1) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({ "ok": false, "error": "revision_conflict", "current": current })),
+    )
+        .into_response()
+}
+
+fn data_dir_of(state: &AppState) -> PathBuf {
+    state.config.lock().unwrap().data_dir.clone()
+}
+
+/// Run a user-state update on the blocking pool and map the outcome.
+async fn run_update(
+    data_dir: PathBuf,
+    account: String,
+    expected_revision: Option<u64>,
+    apply: impl FnOnce(&mut UserStateV1) + Send + 'static,
+) -> Result<UserStateV1, Response> {
+    let res = tokio::task::spawn_blocking(move || {
+        update_user_state(&data_dir, &account, expected_revision, apply)
+    })
+    .await;
+    match res {
+        Ok(Ok(UpdateOutcome::Saved(next))) => Ok(next),
+        Ok(Ok(UpdateOutcome::Conflict(current))) => Err(conflict(current)),
+        Ok(Err(e)) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        Err(e) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
 }
 
 pub fn routes() -> Router<AppState> {
@@ -467,13 +620,15 @@ pub fn routes() -> Router<AppState> {
             "/api/v1/user-state/custom-theme-bg",
             get(get_custom_theme_bg)
                 .post(post_custom_theme_bg)
-                .delete(delete_custom_theme_bg),
+                .delete(delete_custom_theme_bg)
+                .layer(DefaultBodyLimit::max(THEME_BG_BODY_LIMIT)),
         )
         .route(
             "/api/user-state/custom-theme-bg",
             get(get_custom_theme_bg)
                 .post(post_custom_theme_bg)
-                .delete(delete_custom_theme_bg),
+                .delete(delete_custom_theme_bg)
+                .layer(DefaultBodyLimit::max(THEME_BG_BODY_LIMIT)),
         )
 }
 
@@ -482,9 +637,15 @@ async fn get_user_state(
     headers: HeaderMap,
     Query(q): Query<AccountQuery>,
 ) -> Response {
-    let account = account_id(&headers, &q);
-    let data_dir = state.config.lock().unwrap().data_dir.clone();
-    ok(load_state(&data_dir, &account))
+    let data_dir = data_dir_of(&state);
+    let account = match request_account(&data_dir, &headers, &q) {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    match tokio::task::spawn_blocking(move || load_user_state(&data_dir, &account)).await {
+        Ok(s) => ok(s),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 #[derive(Deserialize)]
@@ -500,23 +661,19 @@ async fn put_user_state(
     Query(q): Query<AccountQuery>,
     Json(body): Json<PutBody>,
 ) -> Response {
-    let account = account_id(&headers, &q);
-    let data_dir = state.config.lock().unwrap().data_dir.clone();
-    let current = load_state(&data_dir, &account);
-    if let Some(expected) = body.expected_revision {
-        if expected != current.revision {
-            return err(
-                StatusCode::CONFLICT,
-                format!("revision conflict: have {}", current.revision),
-            );
-        }
-    }
-    let mut next = body.state;
-    next.version = 1;
-    next.revision = current.revision.saturating_add(1);
-    match save_state(&data_dir, &account, &next) {
-        Ok(()) => ok(next),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    let data_dir = data_dir_of(&state);
+    let account = match request_account(&data_dir, &headers, &q) {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let replacement = body.state;
+    match run_update(data_dir, account, body.expected_revision, move |cur| {
+        *cur = replacement;
+    })
+    .await
+    {
+        Ok(next) => ok(next),
+        Err(r) => r,
     }
 }
 
@@ -538,59 +695,79 @@ struct PatchBody {
     settings: Option<serde_json::Map<String, Value>>,
 }
 
+/// Partial update. `expectedRevision` is optional (older clients omit it);
+/// when present a stale revision yields 409 `revision_conflict` + `current`.
 async fn patch_user_state(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<AccountQuery>,
     Json(body): Json<PatchBody>,
 ) -> Response {
-    let account = account_id(&headers, &q);
-    let data_dir = state.config.lock().unwrap().data_dir.clone();
-    let mut current = load_state(&data_dir, &account);
-    if let Some(expected) = body.expected_revision {
-        if expected != current.revision {
-            return err(
-                StatusCode::CONFLICT,
-                format!("revision conflict: have {}", current.revision),
-            );
-        }
-    }
-    if let Some(v) = body.play_counts {
-        current.play_counts = v;
-    }
-    if let Some(v) = body.recent_rel_paths {
-        current.recent_rel_paths = v;
-    }
-    if let Some(v) = body.track_moods {
-        current.track_moods = v;
-    }
-    if let Some(v) = body.excluded_rel_paths {
-        current.excluded_rel_paths = v;
-    }
-    if let Some(v) = body.excluded_album_ids {
-        current.excluded_album_ids = v;
-    }
-    let settings_touched = body.settings.is_some();
-    if let Some(v) = body.settings {
-        // Merge keys so a partial settings patch cannot wipe theme/locale/etc.
-        for (k, val) in v {
-            current.settings.insert(k, val);
-        }
-    }
-    current.revision = current.revision.saturating_add(1);
-    match save_state(&data_dir, &account, &current) {
-        Ok(()) => {
+    let data_dir = data_dir_of(&state);
+    let account = match request_account(&data_dir, &headers, &q) {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    // Queue/cursor and browse/sort prefs change on every listen: not worth an
+    // activity-log line each time.
+    const QUIET_SETTINGS: &[&str] = &[
+        "queue",
+        "queueCursor",
+        "legacyQueue",
+        "libBrowse",
+        "libOverviewSort",
+        "artistAlbumSort",
+    ];
+    let settings_touched = body
+        .settings
+        .as_ref()
+        .is_some_and(|m| m.keys().any(|k| !QUIET_SETTINGS.contains(&k.as_str())));
+    let expected = body.expected_revision;
+    let res = run_update(
+        data_dir.clone(),
+        account.clone(),
+        expected,
+        move |current| {
+            if let Some(v) = body.play_counts {
+                current.play_counts = v;
+            }
+            if let Some(v) = body.recent_rel_paths {
+                current.recent_rel_paths = v;
+            }
+            if let Some(v) = body.track_moods {
+                current.track_moods = v;
+            }
+            if let Some(v) = body.excluded_rel_paths {
+                current.excluded_rel_paths = v;
+            }
+            if let Some(v) = body.excluded_album_ids {
+                current.excluded_album_ids = v;
+            }
+            if let Some(v) = body.settings {
+                // Merge keys so a partial settings patch cannot wipe theme/locale/etc.
+                for (k, val) in v {
+                    current.settings.insert(k, val);
+                }
+            }
+        },
+    )
+    .await;
+    match res {
+        Ok(next) => {
             if settings_touched {
-                crate::diagnostics::append_activity_with_account(
+                crate::diagnostics::log_activity(
                     &data_dir,
-                    "settings",
-                    "settings updated",
-                    Some(&account),
+                    crate::diagnostics::ActivityEvent::new(
+                        "settings",
+                        "updated",
+                        "settings updated",
+                    )
+                    .account(Some(&account)),
                 );
             }
-            ok(current)
+            ok(next)
         }
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(r) => r,
     }
 }
 
@@ -599,12 +776,15 @@ async fn get_custom_theme_bg(
     headers: HeaderMap,
     Query(q): Query<AccountQuery>,
 ) -> Response {
-    let account = account_id(&headers, &q);
-    let data_dir = state.config.lock().unwrap().data_dir.clone();
+    let data_dir = data_dir_of(&state);
+    let account = match request_account(&data_dir, &headers, &q) {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
     let Some(path) = find_theme_bg_path(&data_dir, &account) else {
         return err(StatusCode::NOT_FOUND, "Custom theme background not found");
     };
-    match fs::read(&path) {
+    match tokio::fs::read(&path).await {
         Ok(bytes) => {
             let mut res = bytes.into_response();
             let headers = res.headers_mut();
@@ -627,9 +807,12 @@ async fn post_custom_theme_bg(
     Query(q): Query<AccountQuery>,
     mut multipart: Multipart,
 ) -> Response {
-    let account = account_id(&headers, &q);
-    let data_dir = state.config.lock().unwrap().data_dir.clone();
-    let mut file_bytes: Option<Vec<u8>> = None;
+    let data_dir = data_dir_of(&state);
+    let account = match request_account(&data_dir, &headers, &q) {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let mut file_bytes: Option<bytes::Bytes> = None;
     let mut content_type = String::new();
     let mut original_name = String::new();
     while let Ok(Some(field)) = multipart.next_field().await {
@@ -640,7 +823,7 @@ async fn post_custom_theme_bg(
         content_type = field.content_type().unwrap_or("").to_string();
         original_name = field.file_name().unwrap_or("").to_string();
         match field.bytes().await {
-            Ok(b) => file_bytes = Some(b.to_vec()),
+            Ok(b) => file_bytes = Some(b),
             Err(e) => return err(StatusCode::BAD_REQUEST, e.to_string()),
         }
     }
@@ -656,7 +839,12 @@ async fn post_custom_theme_bg(
             ),
         );
     }
-    match save_theme_bg(&data_dir, &account, &bytes, &content_type, &original_name) {
+    let saved = tokio::task::spawn_blocking(move || {
+        save_theme_bg(&data_dir, &account, &bytes, &content_type, &original_name)
+    })
+    .await
+    .unwrap_or_else(|e| Err(anyhow::anyhow!(e.to_string())));
+    match saved {
         Ok(bg_image) => {
             let rev = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -682,8 +870,71 @@ async fn delete_custom_theme_bg(
     headers: HeaderMap,
     Query(q): Query<AccountQuery>,
 ) -> Response {
-    let account = account_id(&headers, &q);
-    let data_dir = state.config.lock().unwrap().data_dir.clone();
-    delete_theme_bg(&data_dir, &account);
+    let data_dir = data_dir_of(&state);
+    let account = match request_account(&data_dir, &headers, &q) {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let _ = tokio::task::spawn_blocking(move || delete_theme_bg(&data_dir, &account)).await;
     ok(Value::Null)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir() -> PathBuf {
+        let d = std::env::temp_dir().join(format!("rekord-user-state-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn traversal_ids_stay_inside_accounts_dir() {
+        let dir = temp_dir();
+        let p = user_state_path(&dir, "../../x");
+        assert!(p.starts_with(dir.join("accounts")));
+        assert!(!p.to_string_lossy().contains(".."));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stale_revision_conflicts_and_writes_nothing() {
+        let dir = temp_dir();
+        let first = update_user_state(&dir, "default", None, |s| {
+            s.recent_rel_paths = vec!["A/B/01.mp3".into()];
+        })
+        .unwrap();
+        let UpdateOutcome::Saved(first) = first else {
+            panic!("expected save")
+        };
+        assert_eq!(first.revision, 1);
+        let out =
+            update_user_state(&dir, "default", Some(0), |s| s.recent_rel_paths.clear()).unwrap();
+        match out {
+            UpdateOutcome::Conflict(cur) => assert_eq!(cur.recent_rel_paths.len(), 1),
+            UpdateOutcome::Saved(_) => panic!("expected conflict"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_file_is_moved_aside() {
+        let dir = temp_dir();
+        let path = user_state_path(&dir, "default");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"{ not json").unwrap();
+        let s = load_user_state(&dir, "default");
+        assert_eq!(s.revision, 0);
+        let aside = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("user-state.json.corrupt-")
+            });
+        assert!(aside, "corrupt copy kept for recovery");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

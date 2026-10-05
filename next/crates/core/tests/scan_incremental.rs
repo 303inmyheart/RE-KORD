@@ -176,7 +176,10 @@ fn a_deleted_track_leaves_the_playlist_without_a_hole() {
         let id = db.track_id_by_rel(rel).unwrap().unwrap();
         db.add_to_playlist("default", &playlist.id, id).unwrap();
     }
-    assert_eq!(db.playlist_tracks("default", &playlist.id).unwrap().len(), 2);
+    assert_eq!(
+        db.playlist_tracks("default", &playlist.id).unwrap().len(),
+        2
+    );
 
     fs::remove_file(lib.root.join("Artist/Album/01.mp3")).unwrap();
     scan_library(&db, &lib.root).unwrap();
@@ -200,7 +203,7 @@ fn an_empty_library_scans_without_complaining() {
 }
 
 #[test]
-fn everything_gone_means_everything_pruned() {
+fn everything_gone_needs_a_full_rescan_to_prune() {
     let lib = TempLibrary::new("prune-all");
     lib.track("Artist/Album/01.mp3");
     lib.track("Other/Album/01.mp3");
@@ -210,9 +213,17 @@ fn everything_gone_means_everything_pruned() {
     for dir in ["Artist", "Other"] {
         fs::remove_dir_all(lib.root.join(dir)).unwrap();
     }
+    // An empty root looks exactly like an unmounted drive: keep everything.
     let report = scan_library(&db, &lib.root).unwrap();
+    assert_eq!(report.removed_tracks, 0);
+    assert_eq!(report.missing_tracks, 2);
+    assert!(report.prune_skipped.is_some());
+    assert_eq!(track_count(&db), 2);
 
+    // The explicit full rescan is the confirmation.
+    let report = scan_library_with(&db, &lib.root, ScanMode::Full).unwrap();
     assert_eq!(report.removed_tracks, 2);
+    assert!(report.prune_skipped.is_none());
     assert_eq!(track_count(&db), 0);
     assert_eq!(album_count(&db), 0);
 }
@@ -260,10 +271,18 @@ fn favorites_survive_an_incremental_scan() {
     scan_library(&db, &lib.root).unwrap();
     assert_eq!(db.list_favorites("default").unwrap().len(), 1);
 
-    // Removing the file drops the favorite with it.
-    fs::remove_file(lib.root.join("Artist/Album/01.mp3")).unwrap();
+    // Removing the file hides the favorite with it…
+    let path = lib.root.join("Artist/Album/01.mp3");
+    fs::remove_file(&path).unwrap();
     scan_library(&db, &lib.root).unwrap();
     assert!(db.list_favorites("default").unwrap().is_empty());
+
+    // …and putting it back brings the favorite back.
+    lib.track("Artist/Album/01.mp3");
+    scan_library(&db, &lib.root).unwrap();
+    let favs = db.list_favorites("default").unwrap();
+    assert_eq!(favs.len(), 1);
+    assert_eq!(favs[0].rel_path, "Artist/Album/01.mp3");
 }
 
 #[test]

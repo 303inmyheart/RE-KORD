@@ -3,14 +3,15 @@
 //! Long operations (scan, thumbnail backfill, restore, legacy sync, downloads)
 //! register here so the admin panel can show progress and cancel them.
 
+use crate::perm::PeerAddr;
 use crate::state::AppState;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -48,6 +49,25 @@ pub struct Job {
     pub finished_at: Option<String>,
     pub error: Option<String>,
     pub cancelable: bool,
+    /// Stable code for `label` (`scan.title`, …) the panels translate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_code: Option<String>,
+    /// Stable code for `message` (`scan.done`, `cancelRequested`, …).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail_code: Option<String>,
+    /// Stable code for `error` when the hub wrote it (`interrupted`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// Placeholders for the coded texts (`{ "mode": "full", "indexed": 533 }`).
+    #[serde(skip_serializing_if = "Map::is_empty")]
+    pub params: Map<String, Value>,
+}
+
+/// Merge an object of params into the job's (other values are ignored).
+fn merge_params(into: &mut Map<String, Value>, params: Value) {
+    if let Value::Object(map) = params {
+        into.extend(map);
+    }
 }
 
 pub struct JobRegistry {
@@ -70,7 +90,32 @@ impl JobRegistry {
     }
 
     pub fn start(self: &Arc<Self>, kind: &str, label: &str, cancelable: bool) -> JobHandle {
+        self.start_job(kind, label, None, Value::Null, cancelable)
+    }
+
+    /// Like [`start`](Self::start), with a translatable title code and params.
+    pub fn start_coded(
+        self: &Arc<Self>,
+        kind: &str,
+        label: &str,
+        title_code: &str,
+        params: Value,
+        cancelable: bool,
+    ) -> JobHandle {
+        self.start_job(kind, label, Some(title_code), params, cancelable)
+    }
+
+    fn start_job(
+        self: &Arc<Self>,
+        kind: &str,
+        label: &str,
+        title_code: Option<&str>,
+        params: Value,
+        cancelable: bool,
+    ) -> JobHandle {
         let id = Uuid::new_v4().to_string();
+        let mut job_params = Map::new();
+        merge_params(&mut job_params, params);
         let job = Job {
             id: id.clone(),
             kind: kind.to_string(),
@@ -82,6 +127,10 @@ impl JobRegistry {
             finished_at: None,
             error: None,
             cancelable,
+            title_code: title_code.map(str::to_string),
+            detail_code: None,
+            error_code: None,
+            params: job_params,
         };
         let cancel = Arc::new(AtomicBool::new(false));
         {
@@ -133,12 +182,29 @@ impl JobRegistry {
                 if let Ok(mut jobs) = self.jobs.lock() {
                     if let Some(job) = jobs.iter_mut().find(|j| j.id == id) {
                         job.message = Some("annullamento richiesto".into());
+                        job.detail_code = Some("cancelRequested".into());
                     }
                 }
                 true
             }
             None => false,
         }
+    }
+
+    /// One job by id (running or in history).
+    pub fn get(&self, id: &str) -> Option<Job> {
+        self.jobs
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|j| j.id == id)
+            .cloned()
+    }
+
+    /// Flag every cancelable running job (hub shutdown).
+    pub fn cancel_all(&self) -> usize {
+        let ids: Vec<String> = self.cancels.lock().unwrap().keys().cloned().collect();
+        ids.iter().filter(|id| self.cancel(id)).count()
     }
 
     pub fn clear_finished(&self) -> usize {
@@ -200,24 +266,59 @@ impl JobHandle {
     }
 
     pub fn progress(&self, value: f32, message: impl Into<String>) {
-        let msg = message.into();
+        self.set_progress(value, None, Value::Null, message.into());
+    }
+
+    /// Progress with a translatable detail code; `message` is the plain text.
+    pub fn progress_coded(
+        &self,
+        value: f32,
+        code: &str,
+        params: Value,
+        message: impl Into<String>,
+    ) {
+        self.set_progress(value, Some(code), params, message.into());
+    }
+
+    fn set_progress(&self, value: f32, code: Option<&str>, params: Value, msg: String) {
         self.registry.update(&self.id, |job| {
             job.progress = Some(value.clamp(0.0, 1.0));
             job.message = Some(msg);
+            job.detail_code = code.map(str::to_string);
+            merge_params(&mut job.params, params);
         });
     }
 
     pub fn message(&self, message: impl Into<String>) {
-        let msg = message.into();
-        self.registry
-            .update(&self.id, |job| job.message = Some(msg));
+        self.set_message(None, Value::Null, message.into());
+    }
+
+    /// Detail line with a translatable code; `message` is the plain text.
+    pub fn message_coded(&self, code: &str, params: Value, message: impl Into<String>) {
+        self.set_message(Some(code), params, message.into());
+    }
+
+    fn set_message(&self, code: Option<&str>, params: Value, msg: String) {
+        self.registry.update(&self.id, |job| {
+            job.message = Some(msg);
+            job.detail_code = code.map(str::to_string);
+            merge_params(&mut job.params, params);
+        });
     }
 
     pub fn finish(&self, message: impl Into<String>) {
+        self.settle_done(None, Value::Null, message.into());
+    }
+
+    /// Finish with a translatable detail code; `message` is the plain text.
+    pub fn finish_coded(&self, code: &str, params: Value, message: impl Into<String>) {
+        self.settle_done(Some(code), params, message.into());
+    }
+
+    fn settle_done(&self, code: Option<&str>, params: Value, msg: String) {
         if self.settled.swap(true, Ordering::SeqCst) {
             return;
         }
-        let msg = message.into();
         let canceled = self.is_canceled();
         self.registry.update(&self.id, |job| {
             job.status = if canceled {
@@ -227,6 +328,8 @@ impl JobHandle {
             };
             job.progress = Some(1.0);
             job.message = Some(msg);
+            job.detail_code = code.map(str::to_string);
+            merge_params(&mut job.params, params);
             job.finished_at = Some(chrono::Utc::now().to_rfc3339());
         });
         self.registry.cancels.lock().unwrap().remove(&self.id);
@@ -256,6 +359,7 @@ impl Drop for JobHandle {
             if job.status == JobStatus::Running {
                 job.status = JobStatus::Failed;
                 job.error = Some("interrotto".into());
+                job.error_code = Some("interrupted".into());
                 job.finished_at = Some(chrono::Utc::now().to_rfc3339());
             }
         });
@@ -269,15 +373,46 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/jobs", get(list_jobs).delete(clear_jobs))
         .route("/api/jobs", get(list_jobs).delete(clear_jobs))
+        .route("/api/v1/jobs/{id}", get(get_job))
+        .route("/api/jobs/{id}", get(get_job))
         .route("/api/v1/jobs/{id}/cancel", post(cancel_job))
         .route("/api/jobs/{id}/cancel", post(cancel_job))
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct AccountQuery {
+    #[serde(rename = "accountId")]
+    account_id: Option<String>,
 }
 
 async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({ "ok": true, "data": state.jobs.list() }))
 }
 
-async fn cancel_job(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn get_job(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.jobs.get(&id) {
+        Some(job) => Json(json!({ "ok": true, "data": job })).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": "job non trovato" })),
+        )
+            .into_response(),
+    }
+}
+
+/// Cancelling / clearing jobs acts on host-wide work: machine operation
+/// (legacy `ADMIN_MUTATION_PATHS` `/api/jobs/:id/cancel`).
+async fn cancel_job(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    PeerAddr(peer): PeerAddr,
+    Query(q): Query<AccountQuery>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(r) = crate::perm::require_machine_op(&state, &headers, q.account_id.as_deref(), peer)
+    {
+        return r;
+    }
     if state.jobs.cancel(&id) {
         Json(json!({ "ok": true, "data": { "id": id } })).into_response()
     } else {
@@ -289,9 +424,18 @@ async fn cancel_job(State(state): State<AppState>, Path(id): Path<String>) -> Re
     }
 }
 
-async fn clear_jobs(State(state): State<AppState>) -> impl IntoResponse {
+async fn clear_jobs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    PeerAddr(peer): PeerAddr,
+    Query(q): Query<AccountQuery>,
+) -> Response {
+    if let Err(r) = crate::perm::require_machine_op(&state, &headers, q.account_id.as_deref(), peer)
+    {
+        return r;
+    }
     let removed = state.jobs.clear_finished();
-    Json(json!({ "ok": true, "data": { "removed": removed } }))
+    Json(json!({ "ok": true, "data": { "removed": removed } })).into_response()
 }
 
 #[cfg(test)]
@@ -310,6 +454,35 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].status, JobStatus::Done);
         assert_eq!(jobs[0].progress, Some(1.0));
+    }
+
+    #[test]
+    fn coded_jobs_carry_codes_and_params_next_to_the_text() {
+        let reg = Arc::new(JobRegistry::new());
+        let handle = reg.start_coded(
+            "scan",
+            "Scan libreria (full)",
+            "scan.title",
+            json!({ "mode": "full" }),
+            true,
+        );
+        handle.progress_coded(0.8, "scan.metadata", Value::Null, "metadati");
+        assert_eq!(reg.list()[0].detail_code.as_deref(), Some("scan.metadata"));
+        handle.finish_coded(
+            "scan.done",
+            json!({ "indexed": 533, "removed": 0 }),
+            "533 tracce indicizzate, 0 rimosse",
+        );
+        let job = serde_json::to_value(&reg.list()[0]).unwrap();
+        assert_eq!(job["label"], "Scan libreria (full)");
+        assert_eq!(job["titleCode"], "scan.title");
+        assert_eq!(job["detailCode"], "scan.done");
+        assert_eq!(job["message"], "533 tracce indicizzate, 0 rimosse");
+        assert_eq!(
+            job["params"],
+            json!({ "mode": "full", "indexed": 533, "removed": 0 })
+        );
+        assert!(job.get("errorCode").is_none());
     }
 
     #[test]
@@ -431,7 +604,10 @@ mod tests {
         let finished = jobs.iter().filter(|j| j.status.is_terminal()).count();
         assert_eq!(finished, MAX_HISTORY);
         assert!(jobs.iter().any(|j| j.label == "In corso"));
-        assert!(!jobs.iter().any(|j| j.id == ids[0]), "oldest one goes first");
+        assert!(
+            !jobs.iter().any(|j| j.id == ids[0]),
+            "oldest one goes first"
+        );
         assert!(jobs.iter().any(|j| j.id == *ids.last().unwrap()));
         running.finish("ok");
     }

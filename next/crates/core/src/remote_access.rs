@@ -13,7 +13,7 @@ use serde_json::json;
 use std::net::UdpSocket;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -87,6 +87,10 @@ impl RemoteAccessManager {
             inner: Mutex::new(RemoteInner::default()),
         }
     }
+
+    fn lock(&self) -> MutexGuard<'_, RemoteInner> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 fn manager() -> &'static RemoteAccessManager {
@@ -102,14 +106,151 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(json!({ "ok": false, "error": msg.into() }))).into_response()
 }
 
-fn guess_lan_ip() -> Option<String> {
+/// One LAN address the hub can be reached on, best first (parity legacy
+/// `server/lanNetwork.mjs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LanCandidate {
+    pub addr: std::net::Ipv4Addr,
+    pub score: i32,
+    pub iface: String,
+}
+
+/// Private home ranges first (192.168 > 10 > 172.16/12), CGNAT and public
+/// addresses after, link-local last; loopback is never a LAN address.
+pub fn score_lan_ipv4(ip: std::net::Ipv4Addr) -> i32 {
+    let [a0, a1, _, _] = ip.octets();
+    match (a0, a1) {
+        (127, _) | (0, _) => 0,
+        (192, 168) => 100,
+        (10, _) => 80,
+        (172, 16..=31) => 40,
+        (100, 64..=127) => 20,
+        (169, 254) => 5,
+        _ => 15,
+    }
+}
+
+/// Interfaces that only ever lead to containers, VMs or tunnels: never offered.
+const SKIPPED_IFACE_PREFIXES: &[&str] = &[
+    "docker", "veth", "br-", "virbr", "cni", "flannel", "cali", "vboxnet", "vmnet", "tun", "tap",
+    "wg", "utun", "ppp", "ipsec", "zt",
+];
+/// Virtual adapters that might still be reachable (legacy list): ranked last.
+const VIRTUAL_IFACE_PREFIXES: &[&str] = &[
+    "loopback",
+    "vethernet",
+    "wsl",
+    "hyper-v",
+    "vmware",
+    "virtualbox",
+    "virtual",
+    "npcap",
+    "bluetooth",
+    "tailscale",
+    "zerotier",
+    "hamachi",
+];
+const PHYSICAL_IFACE_PREFIXES: &[&str] = &[
+    "ethernet", "eth", "eno", "enp", "ens", "enx", "wi-fi", "wifi", "wlan", "wlp", "wlo",
+    "wireless",
+];
+
+/// Score adjustment for an interface name; `None` means "skip it".
+fn iface_bonus(name: &str) -> Option<i32> {
+    let n = name.trim().to_ascii_lowercase();
+    // Checked first: Windows `vEthernet (…)` must not fall into the `veth` skip.
+    if VIRTUAL_IFACE_PREFIXES.iter().any(|p| n.starts_with(p)) {
+        return Some(-60);
+    }
+    if n.contains("vpn") || SKIPPED_IFACE_PREFIXES.iter().any(|p| n.starts_with(p)) {
+        return None;
+    }
+    // macOS `en0`, `en1`… are the physical ports.
+    let mac_en = n
+        .strip_prefix("en")
+        .is_some_and(|rest| rest.chars().next().is_some_and(|c| c.is_ascii_digit()));
+    if mac_en || PHYSICAL_IFACE_PREFIXES.iter().any(|p| n.starts_with(p)) {
+        return Some(12);
+    }
+    Some(0)
+}
+
+/// Rank `(interface name, IPv4)` pairs: best first, unusable ones dropped,
+/// each address once.
+pub fn rank_lan_candidates(
+    addrs: impl IntoIterator<Item = (String, std::net::Ipv4Addr)>,
+) -> Vec<LanCandidate> {
+    let mut cands: Vec<LanCandidate> = addrs
+        .into_iter()
+        .filter(|(_, ip)| !ip.is_loopback() && !ip.is_unspecified())
+        .filter_map(|(iface, addr)| {
+            let score = score_lan_ipv4(addr) + iface_bonus(&iface)?;
+            (score > 0).then_some(LanCandidate { addr, score, iface })
+        })
+        .collect();
+    cands.sort_by_key(|c| std::cmp::Reverse(c.score));
+    let mut seen = std::collections::HashSet::new();
+    cands.retain(|c| seen.insert(c.addr));
+    cands
+}
+
+/// IPv4 LAN candidates of this host, best first.
+pub fn list_lan_ipv4_candidates() -> Vec<LanCandidate> {
+    let ifaces = match if_addrs::get_if_addrs() {
+        Ok(list) => list,
+        Err(e) => {
+            warn!(error = %e, "cannot enumerate network interfaces");
+            return Vec::new();
+        }
+    };
+    rank_lan_candidates(ifaces.into_iter().filter_map(|i| match i.addr {
+        if_addrs::IfAddr::V4(v4) => Some((i.name, v4.ip)),
+        if_addrs::IfAddr::V6(_) => None,
+    }))
+}
+
+/// Address of the default route (what a VPN usually hijacks): last resort only.
+fn default_route_ip() -> Option<String> {
     let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
     sock.connect("8.8.8.8:80").ok()?;
     sock.local_addr().ok().map(|a| a.ip().to_string())
 }
 
+/// `http://ip:port` for every LAN candidate, best first (cached a few seconds:
+/// the status endpoint is polled).
+pub fn lan_urls_for_port(port: u16) -> Vec<String> {
+    type Cached = Option<(std::time::Instant, u16, Vec<String>)>;
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Cached>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((at, p, urls)) = guard.as_ref() {
+            if *p == port && at.elapsed() < Duration::from_secs(10) {
+                return urls.clone();
+            }
+        }
+    }
+    let urls = lan_urls_uncached(port);
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((std::time::Instant::now(), port, urls.clone()));
+    }
+    urls
+}
+
+fn lan_urls_uncached(port: u16) -> Vec<String> {
+    let urls: Vec<String> = list_lan_ipv4_candidates()
+        .into_iter()
+        .map(|c| format!("http://{}:{port}", c.addr))
+        .collect();
+    if urls.is_empty() {
+        return default_route_ip()
+            .map(|ip| vec![format!("http://{ip}:{port}")])
+            .unwrap_or_default();
+    }
+    urls
+}
+
 pub fn lan_url_for_port(port: u16) -> Option<String> {
-    guess_lan_ip().map(|ip| format!("http://{ip}:{port}"))
+    lan_urls_for_port(port).into_iter().next()
 }
 
 /// Extract an IPv4/IPv6 literal from a JSON or plain-text lookup response.
@@ -154,7 +295,7 @@ pub async fn resolve_public_ip() -> Option<String> {
         ))
     });
     {
-        let guard = cache.lock().unwrap();
+        let guard = cache.lock().unwrap_or_else(PoisonError::into_inner);
         if guard.1.elapsed() < std::time::Duration::from_secs(300) {
             if let Some(ip) = guard.0.clone() {
                 return Some(ip);
@@ -174,12 +315,12 @@ pub async fn resolve_public_ip() -> Option<String> {
         }
         let Ok(body) = res.text().await else { continue };
         if let Some(ip) = parse_public_ip(&body) {
-            let mut guard = cache.lock().unwrap();
+            let mut guard = cache.lock().unwrap_or_else(PoisonError::into_inner);
             *guard = (Some(ip.clone()), std::time::Instant::now());
             return Some(ip);
         }
     }
-    let mut guard = cache.lock().unwrap();
+    let mut guard = cache.lock().unwrap_or_else(PoisonError::into_inner);
     *guard = (None, std::time::Instant::now());
     None
 }
@@ -239,103 +380,79 @@ fn cloudflared_bin_name() -> &'static str {
     }
 }
 
-fn candidate_bundled_paths() -> Vec<PathBuf> {
-    let name = cloudflared_bin_name();
-    let mut out = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        out.push(cwd.join("server/bin").join(name));
-        out.push(cwd.join("../server/bin").join(name));
-        out.push(cwd.join("../../server/bin").join(name));
-        out.push(cwd.join("bin").join(name));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            out.push(dir.join(name));
-            out.push(dir.join("bin").join(name));
-            out.push(dir.join("../server/bin").join(name));
-            out.push(dir.join("../../server/bin").join(name));
-        }
-    }
-    out
-}
-
-fn resolve_cloudflared_path() -> PathBuf {
-    if let Ok(configured) = std::env::var("REKORD_CLOUDFLARED_BIN") {
-        let t = configured.trim();
-        if !t.is_empty() {
-            return PathBuf::from(t);
-        }
-    }
-    for p in candidate_bundled_paths() {
-        if p.is_file() {
-            return p;
-        }
-    }
-    PathBuf::from(cloudflared_bin_name())
-}
-
 fn expected_cloudflared_install_path() -> String {
-    candidate_bundled_paths()
-        .into_iter()
-        .next()
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            exe.parent()
+                .map(|d| d.join("bin").join(cloudflared_bin_name()))
+        })
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| cloudflared_bin_name().to_string())
 }
 
-fn cloudflared_version_ok(path: &Path) -> bool {
-    std::process::Command::new(path)
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
+/// Never blocks: the cached probe result when there is one, otherwise whether
+/// a candidate binary exists (a background probe refreshes the cache).
 pub fn is_cloudflared_available() -> bool {
-    let path = resolve_cloudflared_path();
-    cloudflared_version_ok(&path)
+    let ctx = crate::tools::ToolContext::default();
+    match crate::tools::peek(crate::tools::Tool::Cloudflared, &ctx) {
+        Some(r) => {
+            crate::tools::spawn_refresh(crate::tools::Tool::Cloudflared, &ctx);
+            r.available
+        }
+        None => crate::tools::quick_path(crate::tools::Tool::Cloudflared, &ctx).is_some(),
+    }
 }
 
-fn load_logged_in(data_dir: &Path) -> bool {
-    let path = data_dir.join("settings.json");
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return false;
-    };
-    v.get("cloudflareLoggedIn")
-        .and_then(|x| x.as_bool())
+/// Cloudflare "logged in" flag lives in its own file: `settings.json` is
+/// rewritten wholesale by the config layer, which used to drop the key.
+const REMOTE_STATE_FILE: &str = "remote-access.json";
+
+fn read_json_object(path: &Path) -> Option<serde_json::Value> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .filter(|v| v.is_object())
+}
+
+/// Persisted Cloudflare login flag (falls back to the key older builds kept
+/// in `settings.json`).
+pub fn load_cloudflare_logged_in(data_dir: &Path) -> bool {
+    let flag = |v: serde_json::Value| v.get("cloudflareLoggedIn").and_then(|x| x.as_bool());
+    if let Some(v) = read_json_object(&data_dir.join(REMOTE_STATE_FILE)).and_then(flag) {
+        return v;
+    }
+    read_json_object(&data_dir.join("settings.json"))
+        .and_then(flag)
         .unwrap_or(false)
 }
 
 fn persist_logged_in(data_dir: &Path, value: bool) -> Result<(), String> {
-    let path = data_dir.join("settings.json");
-    let mut v = if path.exists() {
-        std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_else(|| json!({}))
-    } else {
-        json!({})
-    };
-    if !v.is_object() {
-        v = json!({});
-    }
+    let path = data_dir.join(REMOTE_STATE_FILE);
+    let mut v = read_json_object(&path).unwrap_or_else(|| json!({}));
     v["cloudflareLoggedIn"] = json!(value);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
+    std::fs::create_dir_all(data_dir).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
     std::fs::write(
-        &path,
+        &tmp,
         serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
     Ok(())
 }
 
-fn snapshot_json(inner: &RemoteInner, lan_url: Option<String>, bind: String) -> serde_json::Value {
+/// Persist the Cloudflare login flag and update the live state (used by the
+/// legacy-config migration and backup restore).
+pub fn set_cloudflare_logged_in(data_dir: &Path, value: bool) -> anyhow::Result<()> {
+    persist_logged_in(data_dir, value).map_err(anyhow::Error::msg)?;
+    let mut inner = manager().lock();
+    inner.cloudflare_logged_in = value;
+    inner.logged_in_loaded = true;
+    Ok(())
+}
+
+fn snapshot_json(inner: &RemoteInner, lan_urls: Vec<String>, bind: String) -> serde_json::Value {
     let public_url = match inner.status {
         RemoteStatus::Running => inner.public_url.clone(),
         RemoteStatus::Starting => None,
@@ -354,7 +471,8 @@ fn snapshot_json(inner: &RemoteInner, lan_url: Option<String>, bind: String) -> 
         "startedAt": inner.started_at.clone(),
         "cloudflaredPath": inner.cloudflared_path.as_ref().map(|p| p.display().to_string()),
         "cloudflareLoggedIn": inner.cloudflare_logged_in,
-        "lanUrl": lan_url,
+        "lanUrl": lan_urls.first(),
+        "lanUrls": lan_urls,
         "bind": bind,
         "cloudflaredAvailable": is_cloudflared_available(),
     })
@@ -364,7 +482,7 @@ fn ensure_logged_in_loaded(inner: &mut RemoteInner, data_dir: &Path) {
     if inner.logged_in_loaded {
         return;
     }
-    inner.cloudflare_logged_in = load_logged_in(data_dir);
+    inner.cloudflare_logged_in = load_cloudflare_logged_in(data_dir);
     inner.logged_in_loaded = true;
 }
 
@@ -392,8 +510,8 @@ fn mark_error(inner: &mut RemoteInner, msg: impl Into<String>) {
     }
 }
 
-async fn stop_inner() {
-    let mut inner = manager().inner.lock().unwrap();
+fn stop_inner() {
+    let mut inner = manager().lock();
     inner.generation = inner.generation.wrapping_add(1);
     kill_child(&mut inner);
     inner.enabled = false;
@@ -403,9 +521,22 @@ async fn stop_inner() {
     inner.started_at = None;
 }
 
+/// Stop the tunnel and its `cloudflared` child on hub shutdown (called by
+/// `run_hub`). Idempotent; safe when no tunnel was ever started.
+pub async fn shutdown() {
+    let was_active = matches!(
+        manager().lock().status,
+        RemoteStatus::Running | RemoteStatus::Starting
+    );
+    stop_inner();
+    if was_active {
+        info!("Cloudflare tunnel stopped for shutdown");
+    }
+}
+
 fn apply_found_url(generation: u64, url: String, data_dir: &Path) -> bool {
     let normalized = normalize_url_simple(&url).unwrap_or(url);
-    let mut inner = manager().inner.lock().unwrap();
+    let mut inner = manager().lock();
     if inner.generation != generation || inner.status != RemoteStatus::Starting {
         return false;
     }
@@ -413,7 +544,15 @@ fn apply_found_url(generation: u64, url: String, data_dir: &Path) -> bool {
     inner.public_url = Some(normalized.clone());
     inner.error = None;
     info!(public_url = %normalized, "Cloudflare tunnel URL ready");
-    crate::diagnostics::append_activity(data_dir, "remote", &format!("tunnel url: {normalized}"));
+    crate::diagnostics::log_activity(
+        data_dir,
+        crate::diagnostics::ActivityEvent::new(
+            "remote",
+            "tunnelUrl",
+            format!("tunnel url: {normalized}"),
+        )
+        .params(json!({ "url": normalized })),
+    );
     true
 }
 
@@ -425,8 +564,8 @@ fn append_output(buffer: &mut String, line: &str) {
     }
 }
 
-fn start_tunnel(port: u16, data_dir: PathBuf) {
-    let mut inner = manager().inner.lock().unwrap();
+fn start_tunnel(port: u16, data_dir: PathBuf, cloudflared: Option<PathBuf>) {
+    let mut inner = manager().lock();
     if inner.status == RemoteStatus::Running || inner.status == RemoteStatus::Starting {
         return;
     }
@@ -440,18 +579,31 @@ fn start_tunnel(port: u16, data_dir: PathBuf) {
             inner.public_url = Some(normalized.clone());
             inner.error = None;
             inner.started_at = Some(chrono::Utc::now().to_rfc3339());
-            crate::diagnostics::append_activity(
+            crate::diagnostics::log_activity(
                 &data_dir,
-                "remote",
-                &format!("public url set: {normalized}"),
+                crate::diagnostics::ActivityEvent::new(
+                    "remote",
+                    "publicUrl",
+                    format!("public url set: {normalized}"),
+                )
+                .params(json!({ "url": normalized })),
             );
             return;
         }
     }
 
-    let path = resolve_cloudflared_path();
+    let Some(path) = cloudflared else {
+        mark_error(
+            &mut inner,
+            format!(
+                "Cloudflared non trovato (atteso in {}). Reinstalla RE-KORD Server.",
+                expected_cloudflared_install_path()
+            ),
+        );
+        return;
+    };
     inner.cloudflared_path = Some(path.clone());
-    if !cloudflared_version_ok(&path) {
+    if !path.is_file() {
         mark_error(
             &mut inner,
             format!(
@@ -495,7 +647,14 @@ fn start_tunnel(port: u16, data_dir: PathBuf) {
     inner.child = Some(child);
     drop(inner);
 
-    crate::diagnostics::append_activity(&data_dir, "remote", "cloudflared tunnel start requested");
+    crate::diagnostics::log_activity(
+        &data_dir,
+        crate::diagnostics::ActivityEvent::new(
+            "remote",
+            "startRequested",
+            "cloudflared tunnel start requested",
+        ),
+    );
 
     tokio::spawn(async move {
         let mut buffer = String::new();
@@ -507,7 +666,7 @@ fn start_tunnel(port: u16, data_dir: PathBuf) {
 
         while !url_found {
             if tokio::time::Instant::now() >= deadline {
-                let mut inner = manager().inner.lock().unwrap();
+                let mut inner = manager().lock();
                 if inner.generation == generation && inner.status == RemoteStatus::Starting {
                     mark_error(
                         &mut inner,
@@ -521,7 +680,7 @@ fn start_tunnel(port: u16, data_dir: PathBuf) {
             let stdout_done = stdout_lines.is_none();
             let stderr_done = stderr_lines.is_none();
             if stdout_done && stderr_done {
-                let mut inner = manager().inner.lock().unwrap();
+                let mut inner = manager().lock();
                 if inner.generation == generation && inner.status == RemoteStatus::Starting {
                     mark_error(&mut inner, "Tunnel terminato prima di essere pronto");
                     kill_child(&mut inner);
@@ -578,7 +737,7 @@ fn start_tunnel(port: u16, data_dir: PathBuf) {
         let child_wait = async {
             let child = loop {
                 let taken: Option<Option<Child>> = {
-                    let mut guard = manager().inner.lock().unwrap();
+                    let mut guard = manager().lock();
                     if guard.generation != generation {
                         None
                     } else {
@@ -595,7 +754,7 @@ fn start_tunnel(port: u16, data_dir: PathBuf) {
                 let mut child = child;
                 child.wait().await
             };
-            let mut guard = manager().inner.lock().unwrap();
+            let mut guard = manager().lock();
             if guard.generation != generation {
                 return;
             }
@@ -639,6 +798,7 @@ struct AccountQuery {
 
 /// Managing the tunnel changes what the host exposes to the internet, so it is
 /// a machine operation.
+#[allow(clippy::result_large_err)]
 fn require_machine_op(
     state: &AppState,
     headers: &HeaderMap,
@@ -655,12 +815,12 @@ async fn remote_status(
     Query(q): Query<AccountQuery>,
 ) -> Response {
     let cfg = state.config.lock().unwrap().clone();
-    let lan = lan_url_for_port(cfg.bind.port());
+    let lan = lan_urls_for_port(cfg.bind.port());
     let bind = cfg.bind.to_string();
     let data_dir = cfg.data_dir.clone();
     let access = crate::perm::machine_op_status(&state, &headers, q.account_id.as_deref(), peer);
     let mut snap = {
-        let mut inner = manager().inner.lock().unwrap();
+        let mut inner = manager().lock();
         ensure_logged_in_loaded(&mut inner, &data_dir);
         snapshot_json(&inner, lan, bind)
     };
@@ -682,17 +842,26 @@ async fn remote_start(
     let cfg = state.config.lock().unwrap().clone();
     let port = cfg.bind.port();
     let data_dir = cfg.data_dir.clone();
-    let lan = lan_url_for_port(port);
+    let lan = lan_urls_for_port(port);
     let bind = cfg.bind.to_string();
     {
-        let mut inner = manager().inner.lock().unwrap();
+        let mut inner = manager().lock();
         ensure_logged_in_loaded(&mut inner, &data_dir);
         if inner.status == RemoteStatus::Running || inner.status == RemoteStatus::Starting {
             return ok(snapshot_json(&inner, lan, bind));
         }
     }
-    start_tunnel(port, data_dir);
-    let inner = manager().inner.lock().unwrap();
+    let cloudflared = crate::tools::resolve(
+        crate::tools::Tool::Cloudflared,
+        &crate::tools::ToolContext::default(),
+    )
+    .await;
+    start_tunnel(
+        port,
+        data_dir,
+        cloudflared.available.then_some(cloudflared.path),
+    );
+    let inner = manager().lock();
     if inner.status == RemoteStatus::Error
         && !is_cloudflared_available()
         && std::env::var("REKORD_PUBLIC_URL")
@@ -702,8 +871,12 @@ async fn remote_start(
         let msg = inner
             .error
             .clone()
-            .unwrap_or_else(|| "cloudflared non trovato".into());
-        return err(StatusCode::SERVICE_UNAVAILABLE, msg);
+            .unwrap_or_else(|| "cloudflared not found".into());
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "ok": false, "error": "cloudflared_not_found", "message": msg })),
+        )
+            .into_response();
     }
     ok(snapshot_json(&inner, lan, bind))
 }
@@ -719,11 +892,14 @@ async fn remote_stop(
     }
     let cfg = state.config.lock().unwrap().clone();
     let data_dir = cfg.data_dir.clone();
-    let lan = lan_url_for_port(cfg.bind.port());
+    let lan = lan_urls_for_port(cfg.bind.port());
     let bind = cfg.bind.to_string();
-    stop_inner().await;
-    crate::diagnostics::append_activity(&data_dir, "remote", "tunnel stopped");
-    let mut inner = manager().inner.lock().unwrap();
+    stop_inner();
+    crate::diagnostics::log_activity(
+        &data_dir,
+        crate::diagnostics::ActivityEvent::new("remote", "stopped", "tunnel stopped"),
+    );
+    let mut inner = manager().lock();
     ensure_logged_in_loaded(&mut inner, &data_dir);
     ok(snapshot_json(&inner, lan, bind))
 }
@@ -741,7 +917,7 @@ async fn remote_login(
     if let Err(e) = persist_logged_in(&data_dir, true) {
         return err(StatusCode::INTERNAL_SERVER_ERROR, e);
     }
-    let mut inner = manager().inner.lock().unwrap();
+    let mut inner = manager().lock();
     inner.cloudflare_logged_in = true;
     inner.logged_in_loaded = true;
     ok(json!({
@@ -762,16 +938,19 @@ async fn remote_logout(
     }
     let cfg = state.config.lock().unwrap().clone();
     let data_dir = cfg.data_dir.clone();
-    let lan = lan_url_for_port(cfg.bind.port());
+    let lan = lan_urls_for_port(cfg.bind.port());
     let bind = cfg.bind.to_string();
-    stop_inner().await;
+    stop_inner();
     if let Err(e) = persist_logged_in(&data_dir, false) {
         return err(StatusCode::INTERNAL_SERVER_ERROR, e);
     }
-    let mut inner = manager().inner.lock().unwrap();
+    let mut inner = manager().lock();
     inner.cloudflare_logged_in = false;
     inner.logged_in_loaded = true;
-    crate::diagnostics::append_activity(&data_dir, "remote", "cloudflare logout");
+    crate::diagnostics::log_activity(
+        &data_dir,
+        crate::diagnostics::ActivityEvent::new("remote", "logout", "cloudflare logout"),
+    );
     ok(snapshot_json(&inner, lan, bind))
 }
 
@@ -795,6 +974,59 @@ mod tests {
             extract_cloudflare_tunnel_url(buf).as_deref(),
             Some("https://xyz-123.trycloudflare.com")
         );
+    }
+
+    fn cand(iface: &str, ip: &str) -> (String, std::net::Ipv4Addr) {
+        (iface.to_string(), ip.parse().unwrap())
+    }
+
+    #[test]
+    fn lan_ranking_prefers_physical_private_addresses_over_vpn() {
+        let ranked = rank_lan_candidates(vec![
+            cand("tun0", "10.8.0.2"),
+            cand("wg0", "10.66.66.2"),
+            cand("docker0", "172.17.0.1"),
+            cand("veth12ab", "169.254.3.3"),
+            cand("lo", "127.0.0.1"),
+            cand("wlp3s0", "10.0.0.20"),
+            cand("enp4s0", "192.168.1.10"),
+            cand("vEthernet (WSL)", "192.168.80.1"),
+            cand("NordVPN", "10.5.0.2"),
+            cand("enp4s0", "192.168.1.10"),
+        ]);
+        let order: Vec<String> = ranked.iter().map(|c| c.addr.to_string()).collect();
+        assert_eq!(order, vec!["192.168.1.10", "10.0.0.20", "192.168.80.1"]);
+        assert_eq!(ranked[0].iface, "enp4s0");
+    }
+
+    #[test]
+    fn lan_scores_follow_legacy_ranges() {
+        let s = |ip: &str| score_lan_ipv4(ip.parse().unwrap());
+        assert!(s("192.168.0.2") > s("10.1.2.3"));
+        assert!(s("10.1.2.3") > s("172.20.0.1"));
+        assert!(s("172.20.0.1") > s("100.64.1.1"));
+        assert!(s("100.64.1.1") > s("169.254.1.1"));
+        assert_eq!(s("127.0.0.1"), 0);
+        assert_eq!(s("172.32.0.1"), 15);
+    }
+
+    #[test]
+    fn mac_style_en_ports_count_as_physical() {
+        assert_eq!(iface_bonus("en0"), Some(12));
+        assert_eq!(iface_bonus("Wi-Fi"), Some(12));
+        assert_eq!(iface_bonus("utun3"), None);
+        assert_eq!(iface_bonus("Local Area Connection"), Some(0));
+    }
+
+    #[test]
+    fn login_flag_prefers_its_own_file_over_settings() {
+        let dir = std::env::temp_dir().join(format!("rekord-remote-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.json"), r#"{"cloudflareLoggedIn": true}"#).unwrap();
+        assert!(load_cloudflare_logged_in(&dir));
+        persist_logged_in(&dir, false).unwrap();
+        assert!(!load_cloudflare_logged_in(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

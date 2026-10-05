@@ -8,7 +8,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -74,8 +74,12 @@ impl WatcherRuntime {
         }
     }
 
+    fn lock_inner(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     pub fn status(&self, enabled: bool) -> WatcherStatus {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
         WatcherStatus {
             enabled,
             running: self.running.load(Ordering::SeqCst),
@@ -101,7 +105,7 @@ impl WatcherRuntime {
     }
 
     fn stop(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
         inner.watcher = None;
         inner.root = None;
         inner.error = None;
@@ -175,7 +179,7 @@ fn restart_on(state: &AppState, root: &Path) {
             Ok(w) => w,
             Err(err) => {
                 warn!(error = %err, "could not create filesystem watcher");
-                let mut inner = runtime.inner.lock().unwrap();
+                let mut inner = runtime.lock_inner();
                 inner.error = Some(err.to_string());
                 return;
             }
@@ -183,13 +187,13 @@ fn restart_on(state: &AppState, root: &Path) {
 
     if let Err(err) = watcher.watch(root, RecursiveMode::Recursive) {
         warn!(error = %err, path = %root.display(), "watch failed");
-        let mut inner = runtime.inner.lock().unwrap();
+        let mut inner = runtime.lock_inner();
         inner.error = Some(err.to_string());
         return;
     }
 
     {
-        let mut inner = runtime.inner.lock().unwrap();
+        let mut inner = runtime.lock_inner();
         inner.watcher = Some(watcher);
         inner.root = Some(root.to_path_buf());
         inner.error = None;

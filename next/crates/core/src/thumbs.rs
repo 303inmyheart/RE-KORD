@@ -96,13 +96,23 @@ pub async fn run_backfill(state: AppState) -> Result<()> {
     if covers.is_empty() {
         return Ok(());
     }
-    let job = state.jobs.start("thumbs", "Miniature copertine", true);
+    let job = state.jobs.start_coded(
+        "thumbs",
+        "Miniature copertine",
+        "thumbs.title",
+        serde_json::Value::Null,
+        true,
+    );
     let total = covers.len();
     let handle = tokio::task::spawn_blocking(move || {
         let mut made = 0u64;
         for (index, path) in covers.into_iter().enumerate() {
             if job.is_canceled() {
-                job.finish(format!("annullato dopo {made} miniature"));
+                job.finish_coded(
+                    "thumbs.canceled",
+                    serde_json::json!({ "made": made }),
+                    format!("annullato dopo {made} miniature"),
+                );
                 return made;
             }
             if !path.is_file() {
@@ -117,13 +127,19 @@ pub async fn run_backfill(state: AppState) -> Result<()> {
                 }
             }
             if index % 25 == 0 {
-                job.progress(
+                job.progress_coded(
                     (index as f32 + 1.0) / total as f32,
+                    "thumbs.progress",
+                    serde_json::json!({ "done": index + 1, "total": total }),
                     format!("{}/{total} copertine", index + 1),
                 );
             }
         }
-        job.finish(format!("{made} miniature pronte"));
+        job.finish_coded(
+            "thumbs.done",
+            serde_json::json!({ "made": made }),
+            format!("{made} miniature pronte"),
+        );
         made
     })
     .await;
