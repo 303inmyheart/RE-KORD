@@ -1,61 +1,27 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-release
-coverage
-test-results
-playwright-report
-# Screenshot di confronto e di prova: si guardano una volta e poi restano lì a pesare.
-.tmp-screenshots
-*-shots
-*.tsbuildinfo
-.vite
-
-# Env / local config (keep secrets out of git)
+target/
+node_modules/
+dist/
+.DS_Store
+*.db
+*.db-*
+.vite/
+# `gen/*` e non `gen/`: con la barra git salta la cartella e non ci entra, e
+# l'eccezione qui sotto non verrebbe nemmeno letta.
+apps/client-shell/src-tauri/gen/*
+# Eccezione: il progetto Android nativo si versiona. Dentro ci mettiamo mano
+# (permessi del manifest, servizio in foreground per l'audio) e `tauri android init`
+# lo rigenererebbe da zero su ogni macchina, cancellando quelle modifiche. I pezzi
+# che la CLI riscrive a ogni build — .so, tauri.conf.json degli asset,
+# tauri.build.gradle.kts — restano esclusi dai .gitignore interni di gen/android.
+!apps/client-shell/src-tauri/gen/android/
+apps/client-shell/src-tauri/target/
+release/
 .env
 .env.*
-!.env.example
-!.env.docker.example
 
-# Docker bind-mount data (local)
+# Volumi di docker-compose.yml (dati e musica di prova)
 docker-data/
 
-*.local
-
-# Server runtime — percorsi libreria, cookie, account, backup config (mai in git)
-server/music-root.config.json*
-server/youtube-cookies.txt
-server/accounts/
-
-# Log attività (percorsi assoluti, cartelle, URL) — anche legacy in server/
-**/kord-activity.log.jsonl
-**/rekord-activity.log.jsonl
-
-# One-shot rebrand migration scripts (local only, not shipped)
-scripts/rename-to-rekord.mjs
-scripts/fix-rekord-overreplace.mjs
-scripts/fix-rekord-final.mjs
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-server/bin/yt-dlp
-server/bin/yt-dlp.exe
-!server/bin/.gitkeep
+# Local editor / assistant state
+.cursor/
+.claude/

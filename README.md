@@ -1,279 +1,150 @@
-<p align="center">
-  <img src="public/REKORDlogo.png" alt="RE-KORD" width="128" />
-</p>
+# RE-KORD
 
-<p align="center">
-  <a href="https://re-kord.com"><strong>re-kord.com</strong></a>
-  &nbsp;·&nbsp;
-  <a href="https://www.reddit.com/r/RE_KORD/"><strong>r/RE_KORD</strong></a>
-</p>
+Nuova implementazione modulare (staging in `next/`). Stesso nome prodotto; sostituirà l’app attuale quando pronta.
 
-<h1 align="center">RE-KORD 5.0</h1>
+## Architettura
 
-<p align="center">
-  <strong>Your music. Your server. Your rules.</strong><br />
-  A self-hosted music hub that turns a folder of audio files into a complete
-  listening, curation, and play experience — on your disk, on your network,
-  under your control.
-</p>
+| App | Ruolo |
+|-----|--------|
+| **rekord-server** | Backend API + SQLite + scan + stream media + SPA client (stesso origin) |
+| **client-ui** | Frontend completo (player, libreria, preferiti, playlist) via API |
+| **client-shell** | Shell Tauri 2 (desktop + Android) che impacchetta `client-ui`; con la feature `hub` diventa "RE-KORD Server" (hub incorporato) |
+| **@rekord/ui** | Componenti grafici condivisi (Button, Panel, Field, …) |
 
-<p align="center"><em>UI in English and Italian · exact semver in <code>package.json</code></em></p>
+In produzione / accesso remoto il hub serve `client-ui` su `/` (same-origin con `/api/v1` e `/media`), come il server legacy. In dev puoi ancora usare Vite su `:7422` con proxy.
 
----
+### UI components
 
-## What is RE-KORD
+Tutti gli elementi grafici passano da componenti in `packages/ui` (condivisi) o da componenti di app in `apps/*/src/components`. Le view restano sottili e orchestrano solo layout + stato.
 
-RE-KORD is **not a cloud service** — it's a home for your audio. Point it at a
-folder and it becomes your personal music server: a fast library with rich
-metadata, a serious player with visualizers and synced lyrics, studio tools to
-grow and maintain your collection, and even a rhythm game generated from your
-own tracks. Everything stays on your machine; every device on your network can
-join in.
+## Requisiti
 
-One install gives you the **server + web app**. Around it: a **desktop app**
-(Server or thin Client), a **Docker image**, an installable **PWA**, and — since
-4.0 — a native **Android client**.
+- Rust (stable recente; la CI usa `stable`)
+- Node 20+ / pnpm 9 (`corepack enable`)
+- ffmpeg nel PATH sull'hub (transcodifica per Cast, anteprime)
+- Per il client desktop: dipendenze Tauri 2 ([docs](https://v2.tauri.app/start/prerequisites/)).
+  Linux (Debian/Ubuntu): `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev
+  libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libssl-dev patchelf file`
+- Per Android: Android SDK + NDK e JDK 17+ (vedi [docs/ANDROID.md](docs/ANDROID.md))
 
-## Highlights
-
-🎧 **Listen like you mean it**
-Persistent player with queue, smart shuffle, repeat and crossfade; synced
-**LRC lyrics**; 8 audio-reactive **visualizers** (bars, waves, DiscoWall,
-karaoke…); **sleep timer** with 30s fade-out; **Cast to Google Home**
-(Chrome + Android APK); OS media integration (lock screen, headphone and car
-controls, Android Auto-friendly).
-
-🗂️ **A library that stays healthy**
-Browse by artist, genre, or **mood**; instant search; quality alerts for
-missing covers and metadata; per-track and per-album metadata editors;
-multi-source artwork and trivia lookup; bulk scans and title cleanup. The
-library index and album/track metadata live in a local **SQLite** database
-(`rekord.db`) with cached artwork thumbnails and filesystem watching.
-
-🛠️ **Studio built in**
-Discover and download new music (bundled `yt-dlp`), enrich metadata from
-MusicBrainz/iTunes and friends, manage covers, curate a per-profile catalog —
-all from the same UI, with the library re-indexed automatically.
-
-🎮 **Plectr**
-A rhythm game charted on the fly from *your* tracks: three difficulties,
-holds and swipes, per-track records, and live sync with whatever is playing.
-
-📊 **Know your habits**
-Play counts, top artists/albums/genres, favorites, listening streaks — plus an
-achievements system with XP, levels, and 60+ badges.
-
-🎨 **Make it yours**
-18 theme presets plus a fully custom theme (colors or background image),
-a unified **Pro Workspace** layout (icon rail, flat surfaces, organized
-canvas), **glass surfaces with adjustable opacity**, and **shareable themes**:
-export your look as a file, import it on any other server or profile.
-
-🌐 **Anywhere you are**
-LAN access out of the box, one-click **Cloudflare tunnel** with QR code for
-remote listening, multiple local profiles, full **backup/restore**, and a
-self-updating client model: update the server once, every client follows.
-
-## New in 5.0
-
-Major stability and quality release: safer runtime, better test coverage, clearer
-architecture, and improved operability — without changing what RE-KORD does for
-your music.
-
-- 🏗️ **Structural refactor** — Studio split into lazy panels (`StudioView`:
-  Catalog, Download, Enrichment, Maintenance, Album editor); API client split by
-  domain; Library and Settings as section shells; player logic extracted into
-  `src/player/` modules.
-- 🛡️ **Reliability** — graceful shutdown (drain writes, close HTTP/DB/watchers);
-  optimistic **user-state revision** with conflict detection (HTTP 409); SQLite
-  WAL mode; in-process **job queue** with `/api/jobs` status API.
-- 🔍 **Observability** — structured logging (Pino) with request IDs;
-  **Diagnostics** panel in Settings (`/api/diagnostics`: version, uptime, DB
-  health, recent errors, job list).
-- 🧪 **Quality gates** — GitHub Actions CI (lint, typecheck, 367+ unit tests,
-  integration tests, Playwright E2E); version sync script across package,
-  Android, Docker.
-- 📴 **Offline PWA** — service worker caches the app shell and static assets;
-  offline banner in the UI (API and media stay network-only).
-- 🏷️ **Naming cleanup** — one-shot migration of legacy `kord-*` / `wpp-*`
-  localStorage keys to `rekord-*` on first launch.
-- 📖 **Docs** — [CHANGELOG.md](CHANGELOG.md) and [upgrade guide](docs/UPGRADE-5.0.md).
-
-See [docs/FEATURES.md](docs/FEATURES.md) for the full feature map.
-
-## Since 4.4
-
-- 🖼️ **Instant covers** — real 128/256px thumbnails generated server-side with
-  the bundled ffmpeg (no extra dependencies): album grids and cards load
-  kilobytes instead of megabytes, with automatic backfill for existing
-  libraries at startup.
-
-## Since 4.3
-
-- 🌌 **Sonic Nebula** — explore your library as an interactive galaxy: every
-  track is a star positioned by BPM (horizontal) and energy (vertical), with
-  colored nebulae for mood clusters; pan, zoom, fullscreen; click to play,
-  Shift+click for local radio; new **Nebula** tab in Library plus a dashboard
-  card with live mini-preview.
-- 📻 **Smart Radio on Dashboard** — quick-listen grid built from recent plays
-  and favorites (one track per album, up to 19 tiles + Random); start smart
-  radio from any tile or jump to Studio.
-- 📲 **APK background resilience** — when the Android client returns from
-  background, automatic server health probe and state refresh; unreachable-server
-  gate with manual retry; reconnect on visibility, online, and Capacitor
-  `appStateChange`.
-
-## Since 4.2
-
-- 📂 **Adaptive library scan** — detects how your music folder is organized
-  (`artist/album/track`, loose tracks per artist, flat files, or ID3 tags) and
-  indexes accordingly; layout config in `.kord/library-layout.json`; structure
-  probe when setting `MUSIC_ROOT`.
-- 🧭 **Real vs logical paths** — loose tracks keep the on-disk path (`file_path`)
-  separate from the library path (`rel_path`); albums store `folder_rel_path`
-  for the actual folder; incremental scans diff against a `files` table.
-- 🔄 **Loose-track migration** — schema v6 aligns legacy `Tracce` → `Tracks`
-  paths in SQLite; client state migrates old loose paths in queue, favorites,
-  and recent plays.
-- 💿 **Discogs integration** — optional personal token (Settings or
-  `REKORD_DISCOGS_TOKEN`); release search with scored candidates and a picker
-  when several matches exist; album enrichment (label, country, genres, format,
-  catalog no., community stats, lowest price); tracklist applied to files
-  (track/disc numbers, duration); automatic fallback to MusicBrainz / TheAudioDB
-  / iTunes when Discogs is unavailable.
-
-## Since 4.1
-
-- 🗄️ **SQLite library core** — `MUSIC_ROOT/.kord/rekord.db` is the source of
-  truth for the library index, album/track metadata, and artwork thumbnails.
-  One-shot bootstrap from the legacy JSON cache or a full filesystem scan on
-  first run.
-- 🖼️ **Artwork cache** — cover images copied into `.kord/artwork/` and served
-  from `/api/library/artwork/:id`; falls back to `/api/cover` on disk when needed.
-- 🧹 **Library metadata cleanup** — Studio → Tools migrates useful fields from
-  legacy JSON sidecars into the DB, removes per-track sidecars, and compacts
-  album files (trivia/`infoItems` stay on disk).
-- 📂 **Track order by filename** — album track lists follow download/filename
-  order; tag-based track numbers are no longer used for sorting.
-- 🔁 **Watcher + epochs** — filesystem changes trigger rescans; clients poll
-  `/api/library/changes` for index updates. Paginated library APIs are ready
-  for large collections.
-- 🔊 **Cast to Google Home** — stream to Chromecast/speakers from Chrome on
-  LAN or the Android APK. Lossless formats the speaker can't decode (FLAC,
-  OGG, WAV…) are transcoded on the fly via bundled **ffmpeg**.
-- ⏱️ **Sleep timer** — fade out over 30 seconds then stop; presets or a
-  custom duration (1 min – 12 h) from the Listen view.
-- 📲 **ExoPlayer on Android** — optional native playback in the APK
-  (Settings); disables crossfade, falls back to WebView audio on error.
-  Foreground **MediaService** keeps playback alive in the background.
-- 🎮 **Plectr on low-end devices** — lighter canvas backdrop, smoother song
-  clock sync, less stutter while charts generate in a Web Worker.
-- 📡 **Large FLAC over tunnel** — robust HTTP **Range** streaming for big
-  lossless files through the Cloudflare tunnel (seek-friendly).
-- 🖥️ **Pro Workspace UI** — redesigned shell: 56px icon rail, flat card
-  surfaces, content canvas with max-width — the old Classic/Modern style
-  toggle is gone; one consistent layout for everyone.
-
-## Since 4.0
-
-- 📱 **Android client (APK)** — connects to your server like the desktop
-  client, with **QR pairing** straight from Settings → Network: scan, pick a
-  profile, play. Native playback widget and media controls, portrait-locked,
-  hardware back navigation.
-- 🎨 **Theme sharing** — one-click theme export (colors, glass, background
-  image) into a portable file anyone can import.
-- 🪟 **Adjustable glass** — a transparency slider for glass surfaces, with
-  text contrast that adapts automatically.
-- 📐 **Mobile, polished** — every page reviewed and tightened for phones:
-  full-height layout on every device, stacked toolbars, denser dashboards,
-  instant cover placeholders.
-- 🖥️ **Cross-platform packaging fixes** — proper app icon on Windows builds
-  made from Linux, one-command Android packaging.
-
-## Get RE-KORD
-
-| Flavor | What it is | How |
-| --- | --- | --- |
-| **Server** (desktop) | Full app: server + UI + bundled yt-dlp/cloudflared | Downloads on [re-kord.com](https://re-kord.com) |
-| **Client** (desktop) | Thin UI that connects to an existing server | Downloads on [re-kord.com](https://re-kord.com) |
-| **Android client** | Native APK, QR pairing, media widget | `npm run pack:android:client` → `release/` |
-| **Docker** | Single container: server + built UI | See below |
-| **PWA** | Install the web app from any browser on your network | Open the server URL → install |
-
-### Docker quick start
+## Avvio rapido (dev)
 
 ```bash
-cp .env.docker.example .env       # set REKORD_MUSIC_HOST to your music folder
-npm run docker:build && npm run docker:up
-# → http://localhost:3001
+cd next
+pnpm install
+
+# Terminale 1 — server API
+cargo run -p rekord-server
+
+# Terminale 2 — pannello hub (opzionale in dev: http://127.0.0.1:7421/admin/)
+pnpm dev:server-ui
+
+# Terminale 3 — client UI nel browser
+pnpm dev:client-ui
+# oppure shell Tauri:
+pnpm --filter @rekord/client-shell tauri dev
 ```
 
-Bind mounts: `REKORD_MUSIC_HOST → /music` (library) and
-`REKORD_CONFIG_HOST → /config` (accounts, settings, cookies). Useful knobs:
-`REKORD_PORT`, `REKORD_LISTEN_HOST=127.0.0.1` (loopback only), `MUSIC_ROOT`
-(lock the library path).
+Default hub: `http://127.0.0.1:7420` (bind `0.0.0.0:7420` → raggiungibile in LAN).  
+Per solo localhost: `REKORD_BIND=127.0.0.1:7420`.
 
-### From source
+1. Apri il client su `http://127.0.0.1:7420/` (UI servita dal hub se `apps/client-ui/dist` è presente) oppure Vite (`pnpm dev:client-ui`)
+2. Il pannello hub è su `http://127.0.0.1:7420/admin`: cartella musica, struttura libreria, scansioni, job, diagnostica, log, backup, account, integrazioni e rete
+3. Imposta la libreria dal pannello hub (o `PUT /api/v1/library/path`), avvia lo scan e ascolta
+4. Accesso remoto: pannello hub → Rete (URL in LAN / tunnel Cloudflare) — apri l’URL dal telefono; API e UI sullo stesso origin
+5. Le operazioni che toccano la macchina (cartella musica, scansioni, credenziali, ripristini, tunnel) richiedono l’account Default e una richiesta locale; per abilitarle da remoto usa l’interruttore in Rete → Operazioni di macchina
+
+## Build e pacchetti
+
+Un comando per piattaforma e versione, come nella 5.0. I pacchetti finiscono in
+`release/<piattaforma>/` con `SHA256SUMS` e `build.log`.
+
+| Comando | Cosa produce |
+|---------|--------------|
+| `pnpm pack:linux:server` | `RE-KORD-Server-<v>-linux-x64.AppImage` / `.deb` (app con hub incorporato) + `…-headless.tar.gz` (hub senza finestra, systemd) |
+| `pnpm pack:linux:client` | `RE-KORD-Client-<v>-linux-x64.AppImage` / `.deb` |
+| `pnpm pack:win:server` | `RE-KORD-Server-<v>-windows-x64.zip`: cartella con `RE-KORD Server.exe` (hub incorporato), si estrae e si avvia, nessun installer |
+| `pnpm pack:win:client` | `RE-KORD-Client-<v>-windows-x64.exe`: exe unico, si avvia e basta |
+| `pnpm pack:android` | `RE-KORD-Client-<v>-android-arm64.apk` (ottimizzato; firmato con `keystore.properties` se presente, altrimenti con la chiave di debug) |
+| `pnpm pack:all` | tutto quanto sopra |
+| `pnpm pack:macos` | solo su un Mac: tarball hub + `.dmg` |
+
+- Le versioni **server** includono yt-dlp, cloudflared e ffmpeg (LGPL), scaricati dalle
+  release ufficiali a versioni fissate e verificati con gli hash di
+  `scripts/third-party.sha256`. `-- --no-tools` li toglie (l'hub usa quelli del PATH).
+- **Linux e Windows** si compilano in un container Docker
+  (`scripts/docker/builder.Dockerfile`, Ubuntu 24.04: webkit2gtk, GStreamer, cargo-xwin): sulla macchina
+  basta Docker. La prima volta l'immagine richiede qualche minuto e cargo-xwin scarica
+  la CRT/Windows SDK di Microsoft (accettandone la licenza); le cache stanno in
+  `~/.cache/rekord-builder`. Con `-- --native` si usa la toolchain locale.
+- **Android** usa SDK/NDK locali ([docs/ANDROID.md](docs/ANDROID.md)).
+
+Build singole per lo sviluppo:
 
 ```bash
-npm install
-npm run dev          # browser: Vite :5173 + API :3001
-npm run dev:app      # Electron desktop + server
-
-npm test && npm run lint && npm run build
-
-# optional quality gates
-npm run test:integration   # API integration (supertest)
-npm run test:e2e           # Playwright (needs build + server)
-npm run check:version      # package.json vs Gradle vs Docker
+pnpm build:ui
+pnpm build:server
+pnpm build:client                 # client desktop Tauri (bundle in target/release/bundle)
+pnpm build:client:server-flavor   # "RE-KORD Server": client + hub incorporato
+pnpm android:build --install      # APK debug arm64 sul telefono collegato
+docker compose up -d --build      # hub in container (porta 7420, volumi /data e /music)
 ```
 
-On a fresh **Ubuntu/Debian** machine, if `npm run dev` fails on `better-sqlite3`,
-install build tools then rebuild the native module:
+Dettagli su systemd, Docker, server flavor e reverse proxy in [docs/DEPLOY.md](docs/DEPLOY.md).
+
+### Versione
+
+Una sola versione per tutto (package.json, Cargo workspace, Cargo.lock, `version.ts`):
 
 ```bash
-sudo apt update && sudo apt install -y build-essential python3
-npm run rebuild:native:dev
+pnpm version:sync 5.2.0   # scrive ovunque
+pnpm version:check        # verifica (anche in CI)
 ```
 
-If the **AppImage** opens but shows “cannot reach the server”, check
-`~/.config/rekord/rekord-server.log`. A common cause on external drives is
-**EACCES** (library folder not writable): RE-KORD needs to create `MUSIC_ROOT/.kord/`.
-Fix permissions, e.g. `sudo chown -R $USER:$USER /path/to/music`, then restart.
+`tauri.conf.json` non porta una versione: Tauri la eredita da `Cargo.toml` (e da li'
+anche il versionCode Android). L'hub annuncia in `/api/v1/health` `version`,
+`apiVersion` e `minClientVersion`; i client impacchettati (desktop, Android) mostrano un
+avviso quando sono troppo vecchi per l'hub o quando c'e' una versione piu' nuova.
 
-Library root: `MUSIC_ROOT` env or in-app Settings. Per-profile state and the
-library database live in `MUSIC_ROOT/.kord/` (`rekord.db` plus account data) and
-survive reinstalls. Upgrading from 4.x? See [docs/UPGRADE-5.0.md](docs/UPGRADE-5.0.md).
-After upgrading from 4.0, run **Library metadata cleanup**
-once in Studio → Maintenance to migrate legacy JSON sidecars.
+### Client desktop: note di piattaforma
 
-### Packaging 5.0
+- CSP attiva (`tauri.conf.json`): script solo dal bundle, `connect-src`/`img-src`/
+  `media-src` aperti a `http:`/`https:` per raggiungere qualunque hub in LAN o remoto.
+- Link esterni e `window.open` verso altri siti si aprono nel browser di sistema
+  (plugin opener); i file generati nella pagina (backup, profilo, tema) si salvano con
+  una finestra «Salva con nome» (desktop) o in Download (Android).
+- Una sola istanza: il secondo avvio porta in primo piano la finestra esistente.
+- Hub in chiaro (`http://192.168.x.x:7420`) da UI `tauri://localhost`: su WebKitGTK/macOS
+  c'e' un rischio di blocco "mixed content". Procedura di prova in
+  [docs/UPGRADE-FROM-5.0.md](docs/UPGRADE-FROM-5.0.md#7-known-risk-desktop-apps-and-plain-http-hubs-mixed-content).
 
-```bash
-npm run pack:linux:server -- 5.0.0   # → release/RE-KORD-Server-5.0.1-linux-x86_64.AppImage
-npm run pack:win:server  -- 5.0.1    # Windows server (NSIS on Windows hosts, .7z from Linux)
-npm run pack:linux:client -- 5.0.0   # thin desktop client
-npm run pack:win:client  -- 5.0.1
-npm run pack:android:client -- 5.0.0 # → release/RE-KORD-Client-5.0.1-android.apk
-npm run sync:version                 # propagate version from package.json
-```
+### Client web (PWA)
 
-Server packs bundle **yt-dlp** and **cloudflared** for the target OS. Windows
-builds made from Linux get the correct app icon automatically. On Linux
-without `libfuse2`, run AppImages via `./scripts/run-linux-appimage.sh`.
+Servito dall'hub su `/`, e' installabile come app (manifest + service worker che mette in
+cache solo il guscio dell'app; API, audio e copertine sempre dalla rete). I service worker
+esistono solo in contesti sicuri: HTTPS (tunnel, reverse proxy) o `localhost`; su
+`http://<ip-lan>:7420` il client funziona uguale ma non si installa. I font sono quelli di
+sistema (nessuna richiesta a Google Fonts).
 
-## Tech, in one line
+## CI
 
-React 19 + Vite on the front, Express + **SQLite** (`better-sqlite3`) on the
-back, Electron for desktop, Capacitor for Android, Docker for servers — a single
-codebase, local-first storage, no telemetry.
+`.github/workflows/next.yml` (push/PR che toccano `next/`): versioni, `cargo fmt --check`,
+`clippy -D warnings`, `cargo test`, `pnpm -r check|test`, build UI, bundle Tauri Linux,
+APK Android debug, build dell'immagine Docker.
 
-## Disclaimer
+## Dalla 5.0
 
-RE-KORD and its creators **are not responsible** for what users download,
-import, or manage. Each user is **solely responsible** for copyright and local
-law compliance. Use only content you have the rights or permission to use.
+Porta 3001 → 7420, cartella dati, restore del backup, reinstallazione dei client (Android:
+disinstallare prima, cambia la chiave di firma), volumi Docker: vedi
+[docs/UPGRADE-FROM-5.0.md](docs/UPGRADE-FROM-5.0.md).
 
----
+Il progetto Android nativo è versionato in `apps/client-shell/src-tauri/gen/android`:
+dettagli e firma di release in [docs/ANDROID.md](docs/ANDROID.md).
 
-<p align="center"><em>RE-KORD 5.0 by Creiv — local music, serious tools, play on the beat.</em></p>
+## Moduli opzionali
+
+Vedi [docs/MODULES.md](docs/MODULES.md). Tutti disabilitati nell’MVP.
+
+## API
+
+Vedi [docs/API.md](docs/API.md).

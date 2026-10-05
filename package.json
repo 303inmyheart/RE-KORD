@@ -1,161 +1,43 @@
 {
   "name": "rekord",
-  "description": "RE-KORD — local hub for listening to, organizing, and maintaining a personal music library",
-  "author": "RE-KORD",
-  "private": true,
   "version": "5.0.0",
-  "type": "module",
-  "main": "electron/main.mjs",
+  "private": true,
+  "description": "RE-KORD — modular music hub (server API + client UI)",
   "scripts": {
-    "dev": "node scripts/ensure-native-dev.mjs && concurrently -n srv,vite -c blue,magenta \"node server/index.mjs\" \"vite\"",
-    "dev:server": "node scripts/ensure-native-dev.mjs && node server/index.mjs",
-    "dev:vite": "vite",
-    "dev:app": "concurrently -k -n vite,el -c green,magenta \"vite\" \"wait-on -t 120000 http://127.0.0.1:5173 && electron .\"",
-    "build": "tsc -b && vite build",
-    "start": "node server/index.mjs",
-    "rebuild:native:dev": "node scripts/rebuild-native-dev.mjs",
-    "pack": "node scripts/pack-release.mjs server win",
-    "pack:linux": "node scripts/pack-release.mjs server linux",
-    "pack:android:client": "node scripts/pack-android.mjs",
-    "pack:linux:server": "node scripts/pack-release.mjs server linux",
-    "pack:linux:client": "node scripts/pack-release.mjs client linux",
-    "pack:win:server": "node scripts/pack-release.mjs server win",
-    "pack:win:client": "node scripts/pack-release.mjs client win",
-    "pack:mac:server": "node scripts/pack-release.mjs server mac",
-    "pack:mac:client": "node scripts/pack-release.mjs client mac",
-    "ytdlp:fetch": "node scripts/fetch-ytdlp.mjs",
-    "cloudflared:fetch": "node scripts/fetch-cloudflared.mjs",
-    "pack:win": "node scripts/pack-release.mjs server win",
-    "pack:mac": "node scripts/pack-release.mjs server mac",
-    "lint": "eslint .",
-    "typecheck": "tsc -b",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:integration": "vitest run server/test-integration",
-    "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test",
-    "verify": "node scripts/verify-all.mjs",
-    "verify:e2e": "node scripts/verify-all.mjs --e2e",
-    "qa:mobile": "node scripts/optional/mobile-qa/adb-mobile-qa.mjs",
-    "qa:mobile:studio": "node scripts/optional/mobile-qa/adb-mobile-qa.mjs --only studio",
-    "qa:mobile:perf": "node scripts/optional/mobile-qa/adb-mobile-qa.mjs --perf",
-    "check:version": "node scripts/check-version.mjs",
-    "sync:version": "node scripts/sync-version.mjs",
-    "preview": "vite preview",
-    "docker:build": "docker compose build",
-    "docker:up": "docker compose up -d",
-    "docker:down": "docker compose down",
-    "docker:logs": "docker compose logs -f rekord"
+    "dev:server-ui": "pnpm --filter @rekord/server-ui dev",
+    "dev:client-ui": "pnpm --filter @rekord/client-ui dev",
+    "build:server-ui": "pnpm --filter @rekord/server-ui build",
+    "build:client-ui": "pnpm --filter @rekord/client-ui build",
+    "build:ui": "pnpm build:server-ui && pnpm build:client-ui",
+    "dev:client": "pnpm --filter @rekord/client-shell tauri dev",
+    "build:client": "pnpm --filter @rekord/client-shell tauri build",
+    "dev:client:server-flavor": "pnpm --filter @rekord/client-shell tauri dev --features hub --config src-tauri/tauri.hub.conf.json",
+    "build:client:server-flavor": "pnpm --filter @rekord/client-shell tauri build --features hub --config src-tauri/tauri.hub.conf.json",
+    "server": "cargo run -p rekord-server --manifest-path Cargo.toml",
+    "build:server": "cargo build -p rekord-server --release --manifest-path Cargo.toml",
+    "pack:linux:server": "bash scripts/pack.sh linux server",
+    "pack:linux:client": "bash scripts/pack.sh linux client",
+    "pack:win:server": "bash scripts/pack.sh windows server",
+    "pack:win:client": "bash scripts/pack.sh windows client",
+    "pack:android": "bash scripts/pack.sh android",
+    "pack:all": "bash scripts/pack.sh all",
+    "pack:macos": "bash scripts/pack-macos.sh",
+    "fetch:ytdlp": "bash scripts/fetch-ytdlp.sh",
+    "fetch:cloudflared": "bash scripts/fetch-cloudflared.sh",
+    "fetch:ffmpeg": "bash scripts/fetch-ffmpeg.sh",
+    "fetch:tools": "bash scripts/fetch-tools.sh",
+    "docker:build": "docker build -f Dockerfile -t rekord:$npm_package_version .",
+    "android:init": "bash scripts/android-init.sh",
+    "android:build": "bash scripts/android-build.sh",
+    "android:apk": "bash scripts/android-build.sh --release --split",
+    "android:dev": "pnpm --filter @rekord/client-shell exec tauri android dev",
+    "check": "pnpm -r --if-present check",
+    "test": "pnpm -r --if-present test && cargo test --workspace --exclude rekord-client",
+    "version:sync": "node scripts/version.mjs sync",
+    "version:check": "node scripts/version.mjs check"
   },
-  "dependencies": {
-    "@capacitor/android": "^8.4.0",
-    "@capacitor/app": "^8.1.0",
-    "@capacitor/barcode-scanner": "^3.0.2",
-    "@capacitor/core": "^8.4.0",
-    "@tanstack/react-virtual": "^3.14.2",
-    "@types/better-sqlite3": "^7.6.13",
-    "archiver": "^7.0.1",
-    "better-sqlite3": "^12.10.1",
-    "chokidar": "^5.0.0",
-    "express": "^5.2.1",
-    "multer": "^2.1.1",
-    "music-metadata": "^11.13.0",
-    "pino": "^10.3.1",
-    "pino-roll": "^4.0.0",
-    "qrcode": "^1.5.4",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5",
-    "unzipper": "^0.12.3"
+  "engines": {
+    "node": ">=20"
   },
-  "devDependencies": {
-    "@capacitor/cli": "^8.4.0",
-    "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.55.0",
-    "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.1",
-    "@types/express": "^5.0.6",
-    "@types/node": "^24.12.2",
-    "@types/qrcode": "^1.5.6",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@types/supertest": "^6.0.3",
-    "@vitejs/plugin-react": "^6.0.1",
-    "@vitest/coverage-v8": "^4.1.5",
-    "concurrently": "^10.0.3",
-    "electron": "^39.0.0",
-    "electron-builder": "^26.0.0",
-    "eslint": "^10.2.1",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.2",
-    "globals": "^17.5.0",
-    "jsdom": "^29.0.2",
-    "supertest": "^7.1.4",
-    "tar": "^7.5.19",
-    "typescript": "~6.0.2",
-    "typescript-eslint": "^8.58.2",
-    "vite": "^8.0.10",
-    "vitest": "^4.1.5",
-    "wait-on": "^8.0.0"
-  },
-  "build": {
-    "appId": "com.rekord.app",
-    "productName": "RE-KORD",
-    "icon": "public/REKORDlogo.png",
-    "copyright": "Copyright RE-KORD",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "package.json",
-      "dist",
-      "public/REKORDlogo.png",
-      "electron",
-      "server",
-      "node_modules"
-    ],
-    "win": {
-      "icon": "public/icon.ico",
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "linux": {
-      "icon": "public/REKORDlogo.png",
-      "target": [
-        "AppImage"
-      ],
-      "category": "Audio"
-    },
-    "mac": {
-      "icon": "public/REKORDlogo.png",
-      "target": [
-        "dmg"
-      ],
-      "category": "public.app-category.music"
-    },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false
-    },
-    "asar": true,
-    "npmRebuild": true,
-    "asarUnpack": [
-      "node_modules",
-      "server",
-      "dist"
-    ],
-    "artifactName": "${name}-${version}-${os}-${arch}.${ext}"
-  }
+  "packageManager": "pnpm@9.15.0"
 }
