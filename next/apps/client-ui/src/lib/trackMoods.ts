@@ -36,6 +36,15 @@ export const TRACK_MOOD_COLORS: Record<TrackMoodId, string> = {
   motivational_drive: "#d1d5db",
 };
 
+/** i18n key of a mood's label (same keys as legacy: `trackMeta.mood.<id>`). */
+export function trackMoodLabelKey(id: TrackMoodId): string {
+  return `trackMeta.mood.${id}`;
+}
+
+/**
+ * Italian fallback labels. UI should translate with `t(trackMoodLabelKey(id))`;
+ * kept for callers that have no i18n at hand.
+ */
 export const TRACK_MOOD_LABELS: Record<TrackMoodId, string> = {
   energy_boost: "Energia / boost",
   party_dance: "Party / dance",
@@ -52,6 +61,13 @@ export const TRACK_MOOD_LABELS: Record<TrackMoodId, string> = {
   soulful_groovy: "Soulful / groovy",
   motivational_drive: "Motivazionale",
 };
+
+/**
+ * Data key of the "no genre" bucket in genre groupings. A sentinel, never shown:
+ * the UI translates it (`library.noGenre`), and it cannot clash with a real
+ * genre named like the translated label.
+ */
+export const NO_GENRE_KEY = "\u0000no-genre";
 
 export const GENRE_POOL = [
   "Hip-Hop",

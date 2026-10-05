@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   import { formatTime } from "../lib/player";
 
   let {
@@ -11,53 +12,120 @@
     onseek: (seconds: number) => void;
   } = $props();
 
+  /** Arrow keys step by this much; Page Up / Down by `BIG_STEP_S`. */
+  const STEP_S = 5;
+  const BIG_STEP_S = 30;
+
   let railEl: HTMLDivElement | null = $state(null);
+  /** Position under the finger while dragging; the seek happens on release. */
+  let dragTime = $state<number | null>(null);
+  let dragPointer: number | null = null;
 
-  const pct = $derived(duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0);
+  const shownTime = $derived(dragTime ?? currentTime);
+  /** 0..1 — drives transforms only, so a tick never triggers layout. */
+  const ratio = $derived(duration > 0 ? Math.min(1, Math.max(0, shownTime / duration)) : 0);
 
-  function seekFromClientX(clientX: number) {
-    if (!railEl || duration <= 0) return;
+  function timeFromClientX(clientX: number): number | null {
+    if (!railEl || duration <= 0) return null;
     const rect = railEl.getBoundingClientRect();
+    if (rect.width <= 0) return null;
     const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-    onseek(ratio * duration);
+    return ratio * duration;
   }
 
   function onPointerDown(e: PointerEvent) {
+    if (dragPointer != null || (e.pointerType === "mouse" && e.button !== 0)) return;
+    const at = timeFromClientX(e.clientX);
+    if (at == null) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    seekFromClientX(e.clientX);
+    dragPointer = e.pointerId;
+    dragTime = at;
   }
 
   function onPointerMove(e: PointerEvent) {
-    if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return;
-    seekFromClientX(e.clientX);
+    if (e.pointerId !== dragPointer) return;
+    const at = timeFromClientX(e.clientX);
+    if (at != null) dragTime = at;
+  }
+
+  function endDrag(e: PointerEvent, commit: boolean) {
+    if (e.pointerId !== dragPointer) return;
+    const el = e.currentTarget as HTMLElement;
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    const at = commit ? (timeFromClientX(e.clientX) ?? dragTime) : null;
+    dragPointer = null;
+    dragTime = null;
+    if (at != null) onseek(at);
+  }
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (duration <= 0 || e.ctrlKey || e.metaKey || e.altKey) return;
+    let next: number | null = null;
+    switch (e.key) {
+      case "ArrowRight":
+      case "ArrowUp":
+        next = currentTime + STEP_S;
+        break;
+      case "ArrowLeft":
+      case "ArrowDown":
+        next = currentTime - STEP_S;
+        break;
+      case "PageUp":
+        next = currentTime + BIG_STEP_S;
+        break;
+      case "PageDown":
+        next = currentTime - BIG_STEP_S;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = Math.max(0, duration - 0.5);
+        break;
+      default:
+        return;
+    }
+    // Handled here: the global ←/→ shortcut must not seek a second time.
+    e.preventDefault();
+    e.stopPropagation();
+    onseek(Math.min(duration, Math.max(0, next)));
   }
 </script>
 
 <div class="timeline">
   <div
     class="progress2"
+    class:is-dragging={dragTime != null}
     role="slider"
     tabindex="0"
     aria-valuemin={0}
     aria-valuemax={Math.floor(duration)}
-    aria-valuenow={Math.floor(currentTime)}
-    aria-label="Posizione brano"
+    aria-valuenow={Math.floor(shownTime)}
+    aria-valuetext={t("ui.timeline.valueText", {
+      at: formatTime(shownTime),
+      total: formatTime(duration),
+    })}
+    aria-label={t("ui.timeline.label")}
+    aria-disabled={duration <= 0 ? "true" : undefined}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
-    onkeydown={(e) => {
-      if (e.key === "ArrowRight") onseek(Math.min(duration, currentTime + 5));
-      if (e.key === "ArrowLeft") onseek(Math.max(0, currentTime - 5));
-    }}
+    onpointerup={(e) => endDrag(e, true)}
+    onpointercancel={(e) => endDrag(e, false)}
+    onlostpointercapture={(e) => endDrag(e, false)}
+    onkeydown={onKeyDown}
   >
     <div class="slot" bind:this={railEl}>
       <div class="rail">
-        <div class="fill" style="width: {pct}%"></div>
+        <div class="fill" style:transform={`scaleX(${ratio})`}></div>
       </div>
-      <div class="thumb" style="left: {pct}%"></div>
+      <!-- Full-width carrier: translateX(%) of its own width = % of the rail. -->
+      <div class="thumb-track" style:transform={`translateX(${ratio * 100}%)`}>
+        <div class="thumb"></div>
+      </div>
     </div>
   </div>
-  <div class="times">
-    <span>{formatTime(currentTime)}</span>
+  <div class="times rk-num">
+    <span>{formatTime(shownTime)}</span>
     <span>{formatTime(duration)}</span>
   </div>
 </div>
@@ -103,14 +171,22 @@
   }
 
   .fill {
+    width: 100%;
     height: 100%;
-    border-radius: inherit;
     pointer-events: none;
     background: linear-gradient(90deg, var(--rk-accent), var(--rk-accent-2));
+    transform-origin: left center;
+  }
+
+  .thumb-track {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
   }
 
   .thumb {
     position: absolute;
+    left: 0;
     top: 50%;
     width: 12px;
     height: 12px;
@@ -128,17 +204,18 @@
   }
 
   .progress2:hover .thumb,
-  .progress2:focus-visible .thumb {
+  .progress2:focus-visible .thumb,
+  .progress2.is-dragging .thumb {
     transform: translate(-50%, -50%) scale(1.2);
   }
 
   .times {
     display: flex;
     justify-content: space-between;
-    font-size: var(--rk-fs-2xs);
+    font-size: var(--rk-fs-1);
+    font-weight: 550;
     color: var(--rk-muted);
     font-variant-numeric: tabular-nums;
-    font-family: var(--rk-mono);
   }
 
   /* Telefono: barra più sottile e pomello più grande, perché è l'unico modo per

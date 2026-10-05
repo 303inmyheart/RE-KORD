@@ -108,10 +108,8 @@
   --glass-edge: color-mix(in srgb, var(--rk-line) 78%, transparent);
   --glass-blur: 18px;
   --glass-blur-soft: 12px;
-  --glass-blur-faint: 0.5px;
   --glass-filter-main: blur(var(--glass-blur)) saturate(1.45);
   --glass-filter-soft: blur(var(--glass-blur-soft)) saturate(1.3);
-  --glass-filter-faint: blur(var(--glass-blur-faint)) saturate(1.45);
   --glass-fill-main: linear-gradient(
     145deg,
     color-mix(in srgb, var(--glass-shine) 55%, var(--glass-panel)) 0%,
@@ -211,7 +209,8 @@
   --glass-2: rgba(252, 226, 236, 0.92);
 }
 
-:root[data-glass-surfaces="1"][data-glass-backdrop="0"] {
+:root[data-glass-surfaces="1"][data-glass-backdrop="0"],
+:root[data-glass-surfaces="1"][data-rk-lowfx] {
   --glass-panel: color-mix(in srgb, var(--glass-1) 90%, transparent);
   --glass-panel-deep: color-mix(in srgb, var(--glass-2) 86%, transparent);
   --glass-panel-muted: color-mix(in srgb, var(--glass-1) 84%, transparent);
@@ -225,7 +224,6 @@
   --glass-fill-accent-band: var(--glass-panel-deep);
   --glass-filter-main: none;
   --glass-filter-soft: none;
-  --glass-filter-faint: none;
 }
 
 /* Base: schede trasparenti + isolation (layer su ::before). */
@@ -246,7 +244,9 @@
     inset 0 -1px 0 color-mix(in srgb, black 10%, transparent);
 }
 
-/* Corpo pagina: vetro + sfocatura minima (legacy --glass-filter-faint). */
+/* Corpo pagina: solo vetro, nessuna sfocatura. Il vecchio blur da 0.5px non si
+   vedeva ma costava: ogni scheda della lista ri-sfocava lo sfondo a ogni
+   fotogramma di scorrimento (WebKitGTK: 28 → 34 ms per frame). */
 :root[data-glass-surfaces="1"] .rk-surface-card::before,
 :root[data-glass-surfaces="1"] .rk-panel::before,
 :root[data-glass-surfaces="1"] .rk-metric::before {
@@ -257,8 +257,6 @@
   z-index: -1;
   pointer-events: none;
   background: var(--glass-fill-page);
-  -webkit-backdrop-filter: var(--glass-filter-faint);
-  backdrop-filter: var(--glass-filter-faint);
   box-shadow: inset 0 1px 0 var(--glass-shine);
 }
 
@@ -347,11 +345,32 @@
   backdrop-filter: blur(20px) saturate(1.4);
 }
 
+/* Senza backdrop-filter (motore che non lo regge o WebKitGTK/Tauri-Linux, vedi
+   lib/platformCaps.ts): stesso vetro, opaco quanto basta, nessuna sfocatura —
+   nemmeno sul dock, che resta sopra la lista mentre scorre. */
 :root[data-glass-surfaces="1"][data-glass-backdrop="0"] .rekord-context-header::before,
-:root[data-glass-surfaces="1"][data-glass-backdrop="0"] .player-bar::before {
+:root[data-glass-surfaces="1"][data-glass-backdrop="0"] .player-bar::before,
+:root[data-glass-surfaces="1"][data-rk-lowfx] .rekord-context-header::before,
+:root[data-glass-surfaces="1"][data-rk-lowfx] .player-bar::before {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   background: color-mix(in srgb, var(--glass-panel-deep) 92%, transparent);
+}
+
+:root[data-glass-surfaces="1"][data-glass-backdrop="0"] .view-page__toolbar-band > :first-child::before,
+:root[data-glass-surfaces="1"][data-glass-backdrop="0"] .page-toolbar-card::before,
+:root[data-glass-surfaces="1"][data-glass-backdrop="0"] .rk-surface-card.surface-card--toolbar-only:first-child::before,
+:root[data-glass-surfaces="1"][data-glass-backdrop="0"] .rk-hero::before,
+:root[data-glass-surfaces="1"][data-glass-backdrop="0"] .view-page__intro > .achievements-hero::before,
+:root[data-glass-surfaces="1"][data-rk-lowfx] .view-page__toolbar-band > :first-child::before,
+:root[data-glass-surfaces="1"][data-rk-lowfx] .page-toolbar-card::before,
+:root[data-glass-surfaces="1"][data-rk-lowfx] .rk-surface-card.surface-card--toolbar-only:first-child::before,
+:root[data-glass-surfaces="1"][data-rk-lowfx] .rk-hero::before,
+:root[data-glass-surfaces="1"][data-rk-lowfx] .view-page__intro > .achievements-hero::before,
+:root[data-glass-surfaces="1"][data-rk-lowfx] .theme-picker__btn,
+:root[data-glass-surfaces="1"][data-rk-lowfx] .theme-picker__menu {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* Theme picker: leggibile sopra vetro */
@@ -370,6 +389,5 @@
     --glass-panel-muted: color-mix(in srgb, var(--glass-1) 84%, transparent);
     --glass-filter-main: none;
     --glass-filter-soft: none;
-    --glass-filter-faint: none;
-  }
+    }
 }

@@ -113,3 +113,65 @@
 .extlink:hover {
   text-decoration: underline;
 }
+
+/* Album di destinazione: copertina attuale accanto ai selettori. */
+.studio-covers-target__body {
+  display: flex;
+  gap: var(--rk-space-lg);
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.studio-covers-current {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--rk-space-xs);
+  width: 8.5rem;
+}
+
+.tools-art .studio-covers-current .rk-cover {
+  width: 8.5rem;
+  height: 8.5rem;
+}
+
+.studio-covers-current__cap {
+  text-align: center;
+}
+
+.studio-covers-target__fields {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rk-space-sm);
+}
+
+.studio-covers-target__fields .art-target {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 559.98px) {
+  .studio-covers-target__body {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .studio-covers-current {
+    width: 100%;
+    flex-direction: row;
+    justify-content: flex-start;
+  }
+
+  .tools-art .studio-covers-current .rk-cover {
+    width: 5rem;
+    height: 5rem;
+  }
+}
+
+.studio-covers-hint,
+.studio-covers-msg {
+  margin: 0;
+}

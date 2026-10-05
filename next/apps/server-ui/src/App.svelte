@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Banner, BrandMark, NavButton } from "@rekord/ui";
+  import { Banner, BrandMark, NavButton, Select } from "@rekord/ui";
   import { admin, SECTIONS } from "./lib/admin.svelte";
+  import { ADMIN_LOCALES } from "./lib/locale";
+  import { i18n, t } from "./lib/i18n.svelte";
   import AccountsPanel from "./views/AccountsPanel.svelte";
   import ActivityPanel from "./views/ActivityPanel.svelte";
   import BackupPanel from "./views/BackupPanel.svelte";
@@ -12,20 +14,19 @@
   import NetworkPanel from "./views/NetworkPanel.svelte";
   import StatusPanel from "./views/StatusPanel.svelte";
 
-  const SECTION_LEDE: Record<string, string> = {
-    status: "Come sta l'hub in questo momento.",
-    library: "Cartella musica, struttura, aggiornamento automatico e manutenzione.",
-    jobs: "Scansioni, miniature e ripristini in corso.",
-    diagnostics: "Versioni, spazio, programmi esterni e ultimi errori.",
-    activity: "Cosa è successo sull'hub, giorno per giorno.",
-    backup: "Copie di sicurezza e ripristino, anche dai backup della versione precedente.",
-    accounts: "Chi usa questo hub e con quali dati personali.",
-    integrations: "Credenziali per download e metadati.",
-    network: "Indirizzi, tunnel e chi può comandare l'hub.",
-  };
+  // The logo is a few KB now: cheap enough for the rail (served under /admin/).
+  const logoUrl = `${import.meta.env.BASE_URL}REKORDlogo.png`;
 
   const version = $derived(admin.health?.version ?? admin.diagnostics?.version ?? "");
-  const current = $derived(SECTIONS.find((s) => s.id === admin.section));
+  const localeOptions = $derived(
+    ADMIN_LOCALES.map((l) => ({ value: l, label: t(`lang.${l}`) })),
+  );
+
+  function changeLocale(next: string) {
+    i18n.setLocale(next);
+    // Feedback already on screen was written in the old language.
+    admin.message = "";
+  }
 
   onMount(() => {
     void admin.refresh();
@@ -35,25 +36,42 @@
 
 <div class="shell" data-theme="server">
   <aside class="rail">
-    <BrandMark eyebrow={version ? `Hub ${version}` : "Hub"} title="RE-KORD" size="sm" />
-    <nav class="nav">
-      {#each SECTIONS as section (section.id)}
+    <div class="brand">
+      <img class="logo" src={logoUrl} alt="" width="40" height="40" decoding="async" />
+      <BrandMark
+        eyebrow={version ? t("app.eyebrowVersion", { version }) : t("app.eyebrow")}
+        title="RE-KORD"
+        size="sm"
+      />
+    </div>
+    <nav class="nav" aria-label={t("app.navLabel")}>
+      {#each SECTIONS as id (id)}
         <NavButton
-          label={section.label}
-          active={admin.section === section.id}
-          onclick={() => void admin.show(section.id)}
+          label={t(`nav.${id}`)}
+          active={admin.section === id}
+          onclick={() => void admin.show(id)}
         />
       {/each}
     </nav>
     {#if admin.access && !admin.access.canManageMachine}
-      <p class="rail-note">Sola lettura: comandi disponibili dal computer dell'hub.</p>
+      <p class="rail-note">{t("app.readOnlyNote")}</p>
     {/if}
   </aside>
 
   <main class="page">
     <header class="head">
-      <h1>{current?.label ?? "Hub"}</h1>
-      <p>{SECTION_LEDE[admin.section] ?? ""}</p>
+      <div class="head-text">
+        <h1>{t(`nav.${admin.section}`)}</h1>
+        <p>{t(`lede.${admin.section}`)}</p>
+      </div>
+      <label class="lang">
+        <span class="lang-label">{t("lang.label")}</span>
+        <Select
+          options={localeOptions}
+          value={i18n.locale}
+          onchange={(e) => changeLocale((e.currentTarget as HTMLSelectElement).value)}
+        />
+      </label>
     </header>
 
     {#if admin.error}
@@ -119,6 +137,20 @@
     gap: 0.15rem;
   }
 
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 0;
+  }
+
+  .logo {
+    flex: 0 0 auto;
+    width: 2.5rem;
+    height: 2.5rem;
+    object-fit: contain;
+  }
+
   .rail-note {
     margin: 0;
     font-size: var(--rk-fs-xs);
@@ -131,6 +163,31 @@
     flex-direction: column;
     gap: var(--rk-section-gap);
     min-width: 0;
+  }
+
+  .head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .head-text {
+    min-width: 0;
+    flex: 1 1 18rem;
+  }
+
+  .lang {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex: 0 0 auto;
+  }
+
+  .lang-label {
+    font-size: var(--rk-fs-xs);
+    color: var(--rk-muted);
   }
 
   .head h1 {

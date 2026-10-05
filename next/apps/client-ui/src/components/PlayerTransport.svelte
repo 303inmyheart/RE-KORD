@@ -95,12 +95,15 @@
     position: relative;
   }
 
+  /* "Ripeti uno": a small numeral tucked under the icon's right corner. */
   .one {
     position: absolute;
-    font-size: 0.52rem;
+    font-size: var(--rk-fs-1);
     font-weight: 800;
-    margin-left: 0.85rem;
-    margin-top: 0.55rem;
+    line-height: 1;
+    margin-left: 1.05rem;
+    margin-top: 0.85rem;
+    font-variant-numeric: tabular-nums;
     pointer-events: none;
   }
 </style>

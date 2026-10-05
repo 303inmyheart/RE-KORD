@@ -9,7 +9,9 @@
     TextInput,
   } from "@rekord/ui";
   import type { PreferredLayout } from "../api";
-  import { admin, humanTime } from "../lib/admin.svelte";
+  import { admin, humanTime, LAYOUT_IDS, layoutLabel } from "../lib/admin.svelte";
+  import { formatNumber, formatPercent, t } from "../lib/i18n.svelte";
+  import ScanReportCard from "./ScanReportCard.svelte";
 
   let {
     musicRoot = $bindable(""),
@@ -21,12 +23,7 @@
     onsave: () => void;
   } = $props();
 
-  const layoutOptions = [
-    { value: "artist/album/track", label: "Artista / Album / Brano" },
-    { value: "artist/track", label: "Artista / Brano" },
-    { value: "flat", label: "Cartella unica" },
-    { value: "tags", label: "Solo tag dei file" },
-  ];
+  const layoutOptions = $derived(LAYOUT_IDS.map((id) => ({ value: id, label: layoutLabel(id) })));
 
   const layout = $derived(admin.layout);
   const watcher = $derived(admin.watcher);
@@ -34,43 +31,39 @@
   const locked = $derived(busy || !admin.canManage);
 </script>
 
-<Panel title="Cartella musica">
-  <Field label="Percorso sul computer dell'hub">
-    <TextInput bind:value={musicRoot} placeholder="/percorso/della/Musica" />
+<Panel title={t("library.root.title")}>
+  <Field label={t("library.root.field")}>
+    <TextInput bind:value={musicRoot} placeholder={t("library.root.placeholder")} />
   </Field>
   <ActionRow>
-    <Button disabled={locked || !musicRoot.trim()} onclick={onsave}>Salva percorso</Button>
+    <Button disabled={locked || !musicRoot.trim()} onclick={onsave}>
+      {t("library.root.save")}
+    </Button>
     <Button
       variant="secondary"
       disabled={locked}
       onclick={() => void admin.runScan("incremental")}
     >
-      Aggiorna (solo modifiche)
+      {t("library.scan.incremental")}
     </Button>
-    <Button
-      variant="ghost"
-      disabled={locked}
-      onclick={() => void admin.runScan("full")}
-    >
-      Ricostruisci tutto
+    <Button variant="ghost" disabled={locked} onclick={() => void admin.confirmFullScan()}>
+      {t("library.scan.full")}
     </Button>
   </ActionRow>
-  <p class="hint">
-    L'aggiornamento rilegge solo i file nuovi o modificati e rimuove dal catalogo
-    quelli spariti dal disco. La ricostruzione completa rilegge ogni file: serve
-    dopo una modifica massiccia dei tag.
-  </p>
+  <p class="hint">{t("library.scan.hint")}</p>
+
+  <ScanReportCard />
 </Panel>
 
-<Panel title="Struttura della libreria">
+<Panel title={t("library.layout.title")}>
   {#snippet actions()}
     <Button variant="secondary" disabled={busy} onclick={() => void admin.runProbe()}>
-      Analizza cartelle
+      {t("library.layout.probe")}
     </Button>
   {/snippet}
 
   {#if layout}
-    <Field label="Come sono organizzate le cartelle">
+    <Field label={t("library.layout.field")}>
       <Select
         options={layoutOptions}
         value={layout.preferredLayout}
@@ -88,30 +81,32 @@
         disabled={locked}
         onchange={(e) => void admin.toggleDeepScan(e.currentTarget.checked)}
       />
-      <span>
-        Tratta ogni sottocartella come album separato (CD1, CD2, Bonus…)
-      </span>
+      <span>{t("library.layout.deepScan")}</span>
     </label>
     <p class="hint">
-      Con l'opzione disattivata i brani nelle sottocartelle restano nello stesso
-      album della cartella principale. Brani senza artista o album finiscono
-      sotto “{layout.virtualArtist}” e “{layout.virtualAlbum}”.
+      {t("library.layout.hint", {
+        artist: layout.virtualArtist,
+        album: layout.virtualAlbum,
+      })}
     </p>
   {:else}
-    <p class="hint">Imposta prima la cartella musica.</p>
+    <p class="hint">{t("library.layout.needRoot")}</p>
   {/if}
 
   {#if probe}
     <div class="probe">
       <p class="probe-line">
-        {probe.stats.estimatedTracks} brani stimati, {probe.stats.dirsAtRoot} cartelle
-        principali, profondità massima {probe.stats.maxDepth}.
+        {t("library.probe.summary", {
+          tracks: formatNumber(probe.stats.estimatedTracks),
+          dirs: formatNumber(probe.stats.dirsAtRoot),
+          depth: formatNumber(probe.stats.maxDepth),
+        })}
       </p>
       <ul class="cands">
         {#each probe.candidates as c}
           <li>
-            <strong>{c.layout}</strong>
-            <span class="pct">{Math.round(c.confidence * 100)}%</span>
+            <strong>{layoutLabel(c.layout)}</strong>
+            <span class="pct">{formatPercent(c.confidence)}</span>
             <span class="why">{c.reason}</span>
           </li>
         {/each}
@@ -121,11 +116,8 @@
       {/each}
       {#if probe.suggestedLayout.preferredLayout !== layout?.preferredLayout}
         <ActionRow>
-          <Button
-            disabled={locked}
-            onclick={() => void admin.applyProbeSuggestion()}
-          >
-            Usa la struttura suggerita
+          <Button disabled={locked} onclick={() => void admin.applyProbeSuggestion()}>
+            {t("library.probe.apply")}
           </Button>
         </ActionRow>
       {/if}
@@ -133,7 +125,7 @@
   {/if}
 </Panel>
 
-<Panel title="Aggiornamento automatico">
+<Panel title={t("library.watch.title")}>
   {#if watcher}
     <label class="check">
       <input
@@ -142,31 +134,31 @@
         disabled={locked}
         onchange={(e) => void admin.setWatch(e.currentTarget.checked)}
       />
-      <span>Osserva la cartella e aggiorna la libreria da sola</span>
+      <span>{t("library.watch.toggle")}</span>
     </label>
     <div class="grid">
       <div class="cell">
-        <span class="k">Stato</span>
+        <span class="k">{t("library.watch.state")}</span>
         <span class="v">
           {watcher.running
-            ? "in ascolto"
+            ? t("library.watch.listening")
             : !watcher.enabled
-              ? "spento"
+              ? t("library.watch.off")
               : musicRoot.trim()
-                ? "in avvio"
-                : "in attesa della cartella"}
+                ? t("library.watch.starting")
+                : t("library.watch.waitingRoot")}
         </span>
       </div>
       <div class="cell">
-        <span class="k">Modifiche viste</span>
-        <span class="v">{watcher.events}</span>
+        <span class="k">{t("library.watch.events")}</span>
+        <span class="v">{formatNumber(watcher.events)}</span>
       </div>
       <div class="cell">
-        <span class="k">Ultima modifica</span>
+        <span class="k">{t("library.watch.lastEvent")}</span>
         <span class="v">{humanTime(watcher.lastEventAt)}</span>
       </div>
       <div class="cell">
-        <span class="k">Ultimo aggiornamento</span>
+        <span class="k">{t("library.watch.lastScan")}</span>
         <span class="v">{humanTime(watcher.lastScanAt)}</span>
       </div>
     </div>
@@ -176,27 +168,21 @@
   {/if}
 </Panel>
 
-<Panel title="Manutenzione">
+<Panel title={t("library.maint.title")}>
   <ActionRow>
     <Button
       variant="secondary"
       disabled={locked}
       onclick={() => void admin.rebuildThumbnails()}
     >
-      Rigenera miniature copertine
+      {t("library.maint.thumbs")}
     </Button>
-    <Button
-      variant="ghost"
-      disabled={locked}
-      onclick={() => void admin.syncLegacyMeta()}
-    >
-      Importa metadati dalla versione precedente
+    <Button variant="ghost" disabled={locked} onclick={() => void admin.syncLegacyMeta()}>
+      {t("library.maint.legacy")}
     </Button>
   </ActionRow>
-  <p class="hint">
-    Le miniature accelerano le griglie del client. L'importazione legge
-    <code>.kord</code> nella cartella musica e riempie solo i campi vuoti.
-  </p>
+  <p class="hint">{t("library.maint.thumbsHint")}</p>
+  <p class="hint">{t("legacy.hint")}</p>
 </Panel>
 
 <style>

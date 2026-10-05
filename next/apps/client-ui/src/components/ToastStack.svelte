@@ -4,7 +4,8 @@
   import UiIcon from "./icons/UiIcon.svelte";
 </script>
 
-<!-- Top centre: clears the player dock and the mobile nav at the bottom. -->
+<!-- Desktop: top right, under the top bar (clear of the page title and of the
+     dock). Phones: bottom, just above the mobile nav and the dock. -->
 <div class="toasts">
   {#each toasts.items as toast (toast.id)}
     <!-- Hovering any toast freezes every countdown: the stack reads as one block. -->
@@ -55,25 +56,46 @@
   .toasts {
     position: fixed;
     z-index: var(--rk-z-toast);
-    top: calc(env(safe-area-inset-top, 0px) + 0.4rem);
-    left: 50%;
-    transform: translateX(-50%);
+    top: calc(env(safe-area-inset-top, 0px) + var(--rk-header-h, 3.5rem) + 0.5rem);
+    right: calc(env(safe-area-inset-right, 0px) + 1rem);
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: flex-end;
     gap: 0.4rem;
-    /* Larghezza al netto della tacca: in orizzontale il toast non ci finisce sotto. */
-    width: min(
-      30rem,
-      calc(
-        100vw - 1.5rem - env(safe-area-inset-left, 0px) - env(
-            safe-area-inset-right,
-            0px
-          )
-      )
-    );
+    width: min(24rem, calc(100vw - 2rem));
     /* The stack must not steal clicks from the page underneath. */
     pointer-events: none;
+  }
+
+  @media (max-width: 999.98px) {
+    .toasts {
+      top: auto;
+      right: auto;
+      left: 50%;
+      transform: translateX(-50%);
+      align-items: stretch;
+      flex-direction: column-reverse;
+      bottom: calc(
+        env(safe-area-inset-bottom, 0px) + var(--rk-mobile-nav-h, 3.5rem) + 0.5rem
+      );
+      width: min(
+        30rem,
+        calc(
+          100vw - 1.5rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)
+        )
+      );
+    }
+
+    :global(.shell.has-dock) .toasts {
+      bottom: calc(
+        env(safe-area-inset-bottom, 0px) + var(--rk-mobile-nav-h, 3.5rem) +
+          var(--rk-dock-h, 4.5rem) + 0.5rem
+      );
+    }
+
+    .toasts .toast {
+      animation-name: toast-up;
+    }
   }
 
   .toast {
@@ -180,7 +202,14 @@
   @keyframes toast-in {
     from {
       opacity: 0;
-      transform: translateY(-8px);
+      transform: translateX(10px);
+    }
+  }
+
+  @keyframes toast-up {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
     }
   }
 

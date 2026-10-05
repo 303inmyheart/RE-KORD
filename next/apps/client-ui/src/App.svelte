@@ -1,7 +1,14 @@
+<script lang="ts" module>
+  import { applyPlatformCapsToDom } from "./lib/platformCaps";
+
+  // Before the first paint: CSS needs `data-rk-lowfx` on WebKitGTK from frame one.
+  applyPlatformCapsToDom();
+</script>
+
 <script lang="ts">
   import { onMount } from "svelte";
-  import { BrandLogo } from "@rekord/ui";
   import AppShell from "./components/AppShell.svelte";
+  import BootSplash from "./components/BootSplash.svelte";
   import ConnectScreen from "./components/ConnectScreen.svelte";
   import { getSelectedAccountId, setSelectedAccountId } from "./lib/account";
   import { connectGate } from "./lib/connect.svelte";
@@ -57,41 +64,9 @@
     ondismiss={() => connectGate.close()}
   />
 {:else if connectGate.phase === "probing"}
-  <!-- Sonda all'avvio, di solito qualche millisecondo: il marchio, non una scritta
-       «attendere» che si legge appena e resta impressa come un errore. -->
-  <div class="boot" aria-busy="true">
-    <BrandLogo size="lg" />
-  </div>
+  <!-- Sonda all'avvio, di solito qualche millisecondo: prima solo il marchio;
+       barra e suggerimenti compaiono se l'attesa si allunga. -->
+  <BootSplash />
 {:else}
   <AppShell />
 {/if}
-
-<style>
-  .boot {
-    display: grid;
-    place-items: center;
-    min-height: var(--rk-app-vh);
-    background: var(--rk-bg);
-  }
-
-  .boot :global(.rk-logo) {
-    animation: bootPulse 1.6s ease-in-out infinite;
-  }
-
-  @keyframes bootPulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-
-    50% {
-      opacity: 0.55;
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .boot :global(.rk-logo) {
-      animation: none;
-    }
-  }
-</style>

@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
-import { defineConfig, type ProxyOptions } from "vite";
+import { defineConfig, type Plugin, type ProxyOptions } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
 const host = process.env.TAURI_DEV_HOST;
@@ -19,8 +20,61 @@ function hubProxy(target: string): ProxyOptions {
   };
 }
 
+/** Oltre questa dimensione un file non entra nella cache iniziale del service worker. */
+const SW_PRECACHE_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Service worker della PWA (solo il client servito dall'hub, mai nei gusci Tauri:
+ * vedi src/lib/platform/pwa.ts). Si genera a fine build perche' deve conoscere i
+ * nomi con hash dei file prodotti: il template sta in
+ * src/lib/platform/serviceWorker.template.js.
+ */
+function rekordServiceWorker(): Plugin {
+  return {
+    name: "rekord-service-worker",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      const files = Object.values(bundle)
+        .filter((item) => !item.fileName.endsWith(".map"))
+        .filter((item) => {
+          const size =
+            item.type === "chunk"
+              ? item.code.length
+              : typeof item.source === "string"
+                ? item.source.length
+                : item.source.byteLength;
+          return size <= SW_PRECACHE_MAX_BYTES;
+        })
+        .map((item) => `/${item.fileName}`)
+        .filter((path) => path !== "/index.html");
+      // I file di public/ non passano dal bundle: quelli che servono al guscio
+      // (icone, logo) si elencano a mano.
+      const publicFiles = [
+        "/manifest.webmanifest",
+        "/favicon.ico",
+        "/REKORDlogo.png",
+        "/icons/icon-192.png",
+        "/icons/icon-512.png",
+      ];
+      const precache = [...new Set(["/", "/index.html", ...publicFiles, ...files])].sort();
+      const version = `${process.env.npm_package_version ?? "0"}-${Date.now().toString(36)}`;
+      const template = readFileSync(
+        new URL("./src/lib/platform/serviceWorker.template.js", import.meta.url),
+        "utf8",
+      );
+      this.emitFile({
+        type: "asset",
+        fileName: "sw.js",
+        source: template
+          .replace("__REKORD_SW_VERSION__", version)
+          .replace("__REKORD_SW_PRECACHE__", JSON.stringify(precache)),
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [svelte(), rekordServiceWorker()],
   clearScreen: false,
   server: {
     port: 7422,

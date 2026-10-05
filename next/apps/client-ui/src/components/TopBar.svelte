@@ -1,7 +1,9 @@
 <script lang="ts">
   import { BrandLogo, IconButton } from "@rekord/ui";
   import { onMount } from "svelte";
+  import { t } from "../lib/i18n.svelte";
   import { session } from "../lib/session.svelte";
+  import { APP_VERSION } from "../lib/version";
   import UiIcon from "./icons/UiIcon.svelte";
 
   let {
@@ -11,6 +13,26 @@
   } = $props();
 
   let syncSpin = $state(false);
+
+  /** online | indexing | offline | busy (a refresh running). */
+  const tone = $derived(
+    session.hubOffline || status === "offline"
+      ? "offline"
+      : status === "indexing"
+        ? "indexing"
+        : status === "online"
+          ? "online"
+          : "busy",
+  );
+  const statusLabel = $derived(
+    tone === "offline"
+      ? t("core.status.offline")
+      : tone === "indexing"
+        ? t("core.status.indexing")
+        : tone === "online"
+          ? t("core.status.online")
+          : t("core.status.connecting"),
+  );
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -61,16 +83,36 @@
       </div>
     </div>
     <div class="end">
-      {#if status}
-        <span class="status" title="Stato hub">
-          {status === "indexing" ? "indexing…" : status}
-        </span>
+      {#if status || session.hubOffline}
+        {#if tone === "offline"}
+          <!-- Unmissable, and a way out: probe the hub now. -->
+          <button
+            type="button"
+            class="status status--offline"
+            title={t("core.status.offlineRetry")}
+            aria-label={`${t("topbar.hubStatus")}: ${statusLabel}. ${t("core.status.offlineRetry")}`}
+            onclick={() => session.retryHubNow()}
+          >
+            <span class="status__dot" aria-hidden="true"></span>
+            {statusLabel}
+          </button>
+        {:else}
+          <span
+            class="status status--{tone}"
+            title={t("topbar.hubStatus")}
+            role="status"
+            aria-label={`${t("topbar.hubStatus")}: ${statusLabel}`}
+          >
+            <span class="status__dot" aria-hidden="true"></span>
+            <span class="status__text">{statusLabel}</span>
+          </span>
+        {/if}
       {/if}
-      <span class="ver">5.1.0</span>
-      <IconButton surface label="Sincronizza" onclick={() => void sync()}>
+      <span class="ver">{APP_VERSION}</span>
+      <IconButton surface label={t("topbar.sync")} onclick={() => void sync()}>
         <span class:spin={syncSpin}><UiIcon name="sync" /></span>
       </IconButton>
-      <IconButton surface label="Cerca (Ctrl+K)" onclick={openSearch}>
+      <IconButton surface label={t("topbar.search")} onclick={openSearch}>
         <UiIcon name="search" />
       </IconButton>
     </div>
@@ -156,14 +198,72 @@
     gap: 0.4rem;
   }
 
-  .status,
   .ver {
     font-size: var(--rk-fs-3xs);
     letter-spacing: 0.06em;
-    text-transform: uppercase;
     color: var(--rk-muted);
     font-weight: 650;
     white-space: nowrap;
+  }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font: inherit;
+    font-size: var(--rk-fs-xs);
+    font-weight: 650;
+    white-space: nowrap;
+    color: var(--rk-muted);
+    border: 0;
+    background: transparent;
+    padding: 0.2rem 0.1rem;
+  }
+
+  .status__dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--rk-muted);
+    flex: 0 0 auto;
+  }
+
+  .status--online .status__dot {
+    background: var(--rk-ok, #3fb97a);
+  }
+
+  .status--indexing .status__dot {
+    background: var(--rk-warning, #f59e0b);
+  }
+
+  .status--offline {
+    padding: 0.3rem 0.65rem;
+    border-radius: var(--rk-radius-round);
+    background: color-mix(in srgb, var(--rk-danger, #e85d5d) 18%, var(--rk-surface-2) 82%);
+    border: 1px solid color-mix(in srgb, var(--rk-danger, #e85d5d) 55%, var(--rk-line) 45%);
+    color: var(--rk-ink);
+    cursor: pointer;
+  }
+
+  .status--offline .status__dot {
+    background: var(--rk-danger, #e85d5d);
+  }
+
+  .status--offline:hover {
+    background: color-mix(in srgb, var(--rk-danger, #e85d5d) 28%, var(--rk-surface-2) 72%);
+  }
+
+  /* Phones: online is the normal case, the dot alone says it. */
+  @media (max-width: 559.98px) {
+    .status--online .status__text,
+    .status--busy .status__text {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
   }
 
   .ver {

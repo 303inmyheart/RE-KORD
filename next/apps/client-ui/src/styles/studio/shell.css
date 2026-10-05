@@ -165,3 +165,158 @@
   left: calc(100% - 1.05rem - 0.14rem);
   background: color-mix(in srgb, var(--rk-accent-2) 85%, #fff);
 }
+
+/* —— Registro attività (Download, Metadati) —— */
+.studio-log-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--rk-line);
+  border-radius: var(--rk-radius-lg);
+  background: color-mix(in srgb, var(--rk-surface-3) 72%, transparent);
+  overflow: hidden;
+}
+
+.studio-log-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rk-space-md);
+  padding: var(--rk-space-md) var(--rk-space-lg);
+  border-bottom: 1px solid color-mix(in srgb, var(--rk-line) 70%, transparent);
+}
+
+.studio-log-panel__title {
+  margin: 0;
+}
+
+.studio-log-panel__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--rk-space-lg);
+  font-size: var(--rk-fs-sm);
+}
+
+.studio-log-panel__raw {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rk-space-xs);
+  color: var(--rk-muted);
+  cursor: pointer;
+}
+
+.studio-log-panel__body {
+  min-height: 5rem;
+  max-height: 18rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--rk-space-sm) var(--rk-space-lg) var(--rk-space-md);
+  background: color-mix(in srgb, var(--rk-bg) 35%, transparent);
+}
+
+.studio-log-panel__empty {
+  margin: var(--rk-space-sm) 0;
+  color: var(--rk-muted);
+  font-size: var(--rk-fs-sm);
+}
+
+.studio-log-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rk-space-3xs);
+}
+
+.studio-log-line {
+  position: relative;
+  padding-left: var(--rk-space-md);
+  font-size: var(--rk-fs-sm);
+  line-height: var(--rk-lh);
+  color: var(--rk-ink);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.studio-log-line::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--rk-muted) 70%, transparent);
+}
+
+.studio-log-line--ok::before {
+  background: var(--rk-success, #34d399);
+}
+
+.studio-log-line--warn {
+  color: color-mix(in srgb, var(--rk-warning, #f59e0b) 75%, var(--rk-ink));
+}
+
+.studio-log-line--warn::before {
+  background: var(--rk-warning, #f59e0b);
+}
+
+.studio-log-line--error {
+  color: color-mix(in srgb, var(--rk-danger, #f87171) 80%, var(--rk-ink));
+}
+
+.studio-log-line--error::before {
+  background: var(--rk-danger, #f87171);
+}
+
+.studio-log-line--detail {
+  color: var(--rk-muted);
+  font-size: var(--rk-fs-xs);
+}
+
+.studio-log-line--detail::before {
+  display: none;
+}
+
+.studio-log-panel__pre {
+  margin: 0;
+  font-family: var(--rk-mono);
+  font-size: var(--rk-fs-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--rk-muted-strong, var(--rk-muted));
+}
+
+/* —— Sola lettura: perché i comandi di scrittura sono spenti —— */
+.studio-access-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--rk-space-md);
+  padding: var(--rk-space-md) var(--rk-space-lg);
+  border: 1px solid color-mix(in srgb, var(--rk-warning, #f59e0b) 45%, var(--rk-line));
+  border-radius: var(--rk-radius-lg);
+  background: var(--rk-warning-soft, rgba(245, 158, 11, 0.12));
+}
+
+.studio-access-notice__ic {
+  flex-shrink: 0;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: 0.1rem;
+  color: var(--rk-warning, #f59e0b);
+}
+
+.studio-access-notice__text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rk-space-3xs);
+  min-width: 0;
+  font-size: var(--rk-fs-sm);
+  line-height: var(--rk-lh);
+}
+
+.studio-access-notice__text span {
+  color: var(--rk-muted-strong, var(--rk-muted));
+}

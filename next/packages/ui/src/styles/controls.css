@@ -21,11 +21,13 @@
   min-height: var(--rk-control-h);
   padding: var(--rk-control-pad-y) var(--rk-control-pad-x);
   border: 1px solid transparent;
-  border-radius: var(--rk-radius);
+  border-radius: var(--rk-radius-control);
   background: transparent;
   color: var(--rk-ink);
   font: inherit;
   font-weight: 650;
+  line-height: var(--rk-lh-tight);
+  text-transform: none;
   text-align: center;
   cursor: pointer;
   transition:
@@ -84,12 +86,38 @@
   background: var(--rk-surface-3);
 }
 
-/* Destructive intent keeps the shape and only recolours. */
+/* Destructive intent on a secondary/ghost/chip button keeps the shape and only
+   recolours. */
 .rk-btn--danger,
 .ghost-btn.danger,
 .chip-btn.danger {
   color: var(--rk-danger);
   border-color: color-mix(in srgb, var(--rk-danger) 55%, var(--rk-line) 45%);
+}
+
+.rk-btn--danger:hover:not(:disabled),
+.ghost-btn.danger:hover:not(:disabled),
+.chip-btn.danger:hover:not(:disabled) {
+  color: var(--rk-danger);
+  border-color: var(--rk-danger);
+  background: var(--rk-danger-soft);
+}
+
+/* A destructive *primary* (the confirm button of "Delete playlist?") is a solid
+   red fill with white text — never red text on the brand gradient. */
+.rk-btn--primary.rk-btn--danger,
+.primary-btn.danger {
+  border-color: transparent;
+  background: var(--rk-danger-solid);
+  color: var(--rk-on-danger);
+}
+
+.rk-btn--primary.rk-btn--danger:hover:not(:disabled),
+.primary-btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--rk-danger-solid) 88%, black);
+  border-color: transparent;
+  color: var(--rk-on-danger);
+  filter: none;
 }
 
 .rk-btn--sm,
@@ -100,10 +128,32 @@
   font-size: var(--rk-fs-sm);
 }
 
-:where(.rk-btn, .primary-btn, .ghost-btn, .chip-btn):disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+/* One disabled recipe for every button: flat surface, muted text, no gradient
+   at low opacity (which read as dirty). Ghost and link keep their transparent
+   back and only mute the text. */
+.rk-btn:disabled,
+.primary-btn:disabled,
+.ghost-btn:disabled,
+.chip-btn:disabled,
+.rk-btn[aria-disabled="true"],
+.primary-btn[aria-disabled="true"] {
+  border-color: var(--rk-line);
+  background: var(--rk-surface-3);
+  color: color-mix(in srgb, var(--rk-muted) 82%, var(--rk-surface-3));
+  box-shadow: none;
+  opacity: 1;
   filter: none;
+  cursor: not-allowed;
+}
+
+.rk-btn--ghost:disabled,
+.ghost-btn:disabled {
+  background: transparent;
+}
+
+.rk-btn.rk-btn--link:disabled {
+  border-color: transparent;
+  background: transparent;
 }
 
 /* Label-only buttons that read as links (log "Pulisci", inline "Vedi tutto"). */
@@ -127,6 +177,12 @@
 .text-btn:hover:not(:disabled),
 .linkbtn:hover:not(:disabled) {
   text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+:where(.rk-btn--link, .text-btn, .linkbtn):disabled {
+  color: var(--rk-muted);
+  cursor: not-allowed;
 }
 
 /* —— Fields ——————————————————————————————————————————————— */
@@ -137,7 +193,7 @@
   min-height: var(--rk-control-h);
   padding: var(--rk-field-pad-y) var(--rk-field-pad-x);
   border: 1px solid var(--rk-line);
-  border-radius: var(--rk-radius);
+  border-radius: var(--rk-radius-control);
   background: var(--rk-surface-3);
   color: var(--rk-ink);
   font: inherit;
@@ -162,14 +218,19 @@
 
 /* —— Focus ———————————————————————————————————————————————— */
 
-/* One ring for every control. Buttons only show it for keyboard users… */
+/* One ring for every control. Buttons only show it for keyboard users (the
+   global `:focus-visible` rule in base.css)… */
 .rk-btn:focus-visible,
 .primary-btn:focus-visible,
 .ghost-btn:focus-visible,
 .chip-btn:focus-visible,
 .rk-btn--link:focus-visible,
 .text-btn:focus-visible,
-.linkbtn:focus-visible,
+.linkbtn:focus-visible {
+  outline: 2px solid var(--rk-focus);
+  outline-offset: 2px;
+}
+
 .rk-input:focus,
 .ghost-input:focus,
 .rk-select:focus,

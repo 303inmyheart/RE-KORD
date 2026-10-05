@@ -1,6 +1,7 @@
 import type { Track } from "./api";
-import { resolveTrackMoods, trackGenre, type TrackMoodId } from "./trackMoods";
-import { loadUserPrefs } from "./userPrefs";
+import { trackGenreKeys } from "./genres";
+import { resolveTrackMoods, type TrackMoodId } from "./trackMoods";
+import { getTrackMoodsMap } from "./userPrefs";
 
 export const CARD_QUEUE_CAP = 500;
 
@@ -43,13 +44,15 @@ function spreadConsecutiveArtists(tracks: Track[]): void {
   }
 }
 
-function moodsFor(track: Track): TrackMoodId[] {
-  return resolveTrackMoods(track.id, track.rel_path, loadUserPrefs().trackMoods);
+type MoodMap = Readonly<Record<string, readonly string[]>>;
+
+function moodsFor(track: Track, moods: MoodMap = getTrackMoodsMap()): TrackMoodId[] {
+  return resolveTrackMoods(track.id, track.rel_path, moods as Record<string, string[]>);
 }
 
+/** Normalized genre keys: "Hip Hop; Pop Rap" counts as two, "Hip-Hop" = "hip hop". */
 function genresFor(track: Track): string[] {
-  const g = trackGenre(track);
-  return g ? [g.toLowerCase()] : [];
+  return trackGenreKeys(track);
 }
 
 export type SmartShuffleOpts = {
@@ -79,12 +82,16 @@ export function filterPoolForExclusions(
   );
 }
 
-export function seedSimilarityScore(seed: Track, candidate: Track): number {
-  const seedMoods = moodsFor(seed);
+export function seedSimilarityScore(
+  seed: Track,
+  candidate: Track,
+  moods: MoodMap = getTrackMoodsMap(),
+): number {
+  const seedMoods = moodsFor(seed, moods);
   let moodScore = 0;
   if (seedMoods.length > 0) {
     const set = new Set(seedMoods);
-    const overlap = moodsFor(candidate).filter((m) => set.has(m)).length;
+    const overlap = moodsFor(candidate, moods).filter((m) => set.has(m)).length;
     moodScore = overlap / seedMoods.length;
   }
   const seedGenres = genresFor(seed);
@@ -106,9 +113,11 @@ function sortPoolBySeedSimilarity(
   pool: readonly Track[],
   recentRelPaths?: ReadonlySet<string>,
 ): Track[] {
+  // One read of the moods for the whole pool, not one per candidate.
+  const moods = getTrackMoodsMap();
   const scored = pool.map((track) => ({
     track,
-    score: seedSimilarityScore(seed, track),
+    score: seedSimilarityScore(seed, track, moods),
     jitter: Math.random(),
   }));
   scored.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.jitter - b.jitter));

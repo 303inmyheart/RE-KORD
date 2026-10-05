@@ -1,20 +1,54 @@
+import { rememberAvailableAccount, type AccountsResponse } from "./account";
 import {
-  accountHeaders,
-  rememberAvailableAccount,
-  withAccountQuery,
-  type AccountsResponse,
-} from "./account";
+  ApiError,
+  LONG_TIMEOUT_MS,
+  translateHubError,
+  UPLOAD_TIMEOUT_MS,
+  fetchHub,
+  parseJsonBody,
+  request,
+  requestBlob,
+  requestJson,
+  saveBlob,
+  type Envelope,
+  type RequestOptions,
+} from "./api/http";
 import { apiUrl } from "./config";
 import { customThemeBgImageUrl } from "./customThemeBgUrl";
+import { t } from "./i18n.svelte";
 
 export type { Account, AccountsResponse } from "./account";
 export { customThemeBgImageUrl };
+export {
+  ApiError,
+  DEFAULT_TIMEOUT_MS,
+  LONG_TIMEOUT_MS,
+  UPLOAD_TIMEOUT_MS,
+  describeHubError,
+  forbiddenMessage,
+  isAbortError,
+  isOfflineError,
+  onAccountRejected,
+  onHubReachability,
+  translateHubError,
+  type ApiErrorKind,
+  type Envelope,
+  type RequestOptions,
+} from "./api/http";
 
-/** Cached cover variants: pass a CSS size for grids, omit it for hero artwork. */
-export type CoverSize = 128 | 256 | "full";
+/** Per-call knobs every API method accepts as its last argument. */
+export type CallOptions = Pick<RequestOptions, "signal" | "timeoutMs">;
+
+/**
+ * Cached cover variants: pass a CSS size for grids, omit it for hero artwork.
+ * Any pixel size is accepted; the hub snaps it to its nearest cached bucket.
+ */
+export type CoverSize = 128 | 256 | "full" | (number & {});
 
 function coverQuery(size?: CoverSize): string {
-  return size && size !== "full" ? `?size=${size}` : "";
+  if (!size || size === "full") return "";
+  const px = Math.round(Number(size));
+  return px > 0 ? `?size=${px}` : "";
 }
 
 export function albumCoverUrl(albumId: number, size?: CoverSize): string {
@@ -25,37 +59,66 @@ export function artistCoverUrl(artistId: number, size?: CoverSize): string {
   return apiUrl(`/api/v1/covers/artist/${artistId}${coverQuery(size)}`);
 }
 
-export type Envelope<T> = { ok: boolean; data?: T; error?: string };
+function withVersion(url: string, version: unknown): string {
+  if (version == null || version === "" || version === 0) return url;
+  const v = encodeURIComponent(String(version));
+  return `${url}${url.includes("?") ? "&" : "?"}v=${v}`;
+}
 
-/** Parse JSON body; empty/non-JSON (e.g. Vite proxy 500 when hub is down) → clear Error. */
-async function parseJsonBody<T>(res: Response): Promise<T> {
-  const text = await res.text();
-  if (!text.trim()) {
-    const offline =
-      res.status === 0 ||
-      res.status === 502 ||
-      res.status === 503 ||
-      res.status === 504 ||
-      // Vite http-proxy often answers 500 + empty body when the hub is down.
-      res.status === 500;
-    throw new Error(
-      offline
-        ? `Hub non raggiungibile (HTTP ${res.status || "—"})`
-        : `Risposta vuota dal hub (HTTP ${res.status})`,
-    );
-  }
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error(
-      `Risposta non-JSON dal hub (HTTP ${res.status}): ${text.slice(0, 120)}`,
-    );
+/** What the hub says about one album's artwork (from the album list). */
+type AlbumCoverInfo = { has: boolean; version: unknown };
+const albumCoverInfo = new Map<number, AlbumCoverInfo>();
+
+/**
+ * Learn which albums have artwork from an album list, so track covers can be
+ * skipped for albums known to have none (no 404 per row) even when the hub
+ * does not send `has_cover` per track. The session calls it on every album
+ * list it loads.
+ */
+export function noteAlbumCovers(albums: readonly Pick<Album, "id" | "has_cover" | "cover_version">[]) {
+  for (const a of albums) {
+    if (typeof a?.id !== "number") continue;
+    albumCoverInfo.set(a.id, { has: a.has_cover !== false, version: a.cover_version ?? null });
   }
 }
 
-async function parseEnvelope<T>(res: Response): Promise<Envelope<T>> {
-  return parseJsonBody<Envelope<T>>(res);
+/** Anything that may have a cover: a track, an album or an artist. */
+export type CoverEntity =
+  | Pick<Track, "album_id" | "rel_path" | "has_cover" | "cover_version" | "album_has_cover">
+  | Pick<Album, "id" | "folder_key" | "has_cover" | "cover_version">
+  | Pick<Artist, "id" | "has_cover" | "album_count">;
+
+/**
+ * Cover URL for a track (its album's artwork), an album or an artist, or
+ * `null` when the hub says there is none (`has_cover === false`) — callers
+ * then show their placeholder instead of requesting a known 404. Adds
+ * `?v=<cover_version>` when the hub sends one, so a changed cover is
+ * refetched while an unchanged one stays cached.
+ */
+export function coverUrlFor(
+  entity: CoverEntity | null | undefined,
+  size?: CoverSize,
+): string | null {
+  if (!entity) return null;
+  if ("rel_path" in entity) {
+    const albumId = entity.album_id;
+    if (albumId == null) return null;
+    const known = albumCoverInfo.get(albumId);
+    const has = entity.has_cover ?? entity.album_has_cover ?? known?.has;
+    if (has === false) return null;
+    return withVersion(albumCoverUrl(albumId, size), entity.cover_version ?? known?.version);
+  }
+  if ("folder_key" in entity) {
+    if (entity.has_cover === false) return null;
+    return withVersion(
+      albumCoverUrl(entity.id, size),
+      entity.cover_version ?? albumCoverInfo.get(entity.id)?.version,
+    );
+  }
+  if (entity.has_cover === false) return null;
+  return artistCoverUrl(entity.id, size);
 }
+
 
 export type Track = {
   id: number;
@@ -68,10 +131,26 @@ export type Track = {
   album_id: number | null;
   artist_id: number | null;
   genre?: string | null;
+  /** Parsed genres, when the hub sends them (preferred over splitting `genre`). */
+  genres?: string[] | null;
   release_date?: string | null;
   lyrics?: string | null;
   source?: string | null;
   url?: string | null;
+  /** Whether the track's album has artwork (hub ≥ 5.2); see `coverUrlFor`. */
+  has_cover?: boolean;
+  /** Alias some hub builds use for `has_cover` on tracks. */
+  album_has_cover?: boolean;
+  /** Changes when the album artwork changes (cache-busting `?v=`). */
+  cover_version?: string | number | null;
+  /** File name on disk (`title` is the cleaned display title). */
+  file_name?: string | null;
+  disc_number?: number | null;
+  added_at?: string | null;
+  updated_at?: string | null;
+  /** A person edited these values: fetches / imports do not replace them. */
+  user_edited?: boolean;
+  curated_fields?: string[] | null;
 };
 
 /** Extra Discogs da `discogs_extra_json` / sidecar (camelCase, parity legacy). */
@@ -90,6 +169,17 @@ export type Album = {
   artist_id: number | null;
   folder_key: string;
   has_cover: boolean;
+  /** Changes when the artwork changes (cache-busting `?v=`). */
+  cover_version?: string | number | null;
+  /** Folder name on disk (`name` is the display title; write with `folder_key`). */
+  folder_name?: string | null;
+  /** Canonical genre labels. */
+  genres?: string[] | null;
+  added_at?: string | null;
+  /** Title / dates / genre / cover / track list changed: "recently updated" order. */
+  updated_at?: string | null;
+  user_edited?: boolean;
+  curated_fields?: string[] | null;
   loose: boolean;
   /** Sidecar / studio album meta applicata (parity legacy `hasAlbumMeta`). */
   has_album_meta?: boolean;
@@ -131,6 +221,50 @@ export type LibraryStats = {
   disk_total_bytes?: number | null;
   /** Filesystem available bytes for the music_root volume. */
   disk_available_bytes?: number | null;
+  /** Bumped by every scan / folder rescan (hub ≥ 5.2). */
+  index_epoch?: number;
+  albums_without_cover?: number;
+  albums_without_meta?: number;
+  tracks_without_meta?: number;
+  loose_album_count?: number;
+  genre_count?: number;
+  /** Tracks in the whole catalog (the other counts are the account's selection). */
+  catalog_track_count?: number;
+};
+
+/** One canonical genre of the account's library (`GET /library/genres`). */
+export type LibraryGenre = {
+  /** Same as `normalizeGenreKey` (lib/genres). */
+  key: string;
+  label: string;
+  track_count: number;
+  album_count: number;
+  artist_count: number;
+};
+
+/** `GET /library/search?scope=all`. */
+export type LibrarySearchAll = {
+  tracks: Track[];
+  albums: Album[];
+  artists: Artist[];
+};
+
+/** yt-dlp as the hub sees it (`diagnostics.binaries.ytdlp`). */
+export type YtdlpInfo = {
+  version: string | null;
+  releaseDate?: string | null;
+  ageDays?: number | null;
+  stale?: boolean;
+  source?: string | null;
+};
+
+/** `POST /tools/ytdlp/update`. */
+export type YtdlpUpdateResult = {
+  updated: boolean;
+  upToDate: boolean;
+  latestVersion?: string | null;
+  previousVersion?: string | null;
+  version?: string | null;
 };
 
 /** Human-readable byte size (binary GB/MB). */
@@ -303,60 +437,13 @@ export type DownloadNdjsonEvent = {
   [key: string]: unknown;
 };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const url = apiUrl(withAccountQuery(path));
-  const headers = accountHeaders({
-    "Content-Type": "application/json",
-    ...(init?.headers || {}),
-  });
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      ...init,
-      headers,
-    });
-  } catch {
-    throw new Error("Hub non raggiungibile (rete)");
-  }
-  const body = await parseEnvelope<T>(res);
-  if (!res.ok || !body.ok) {
-    throw new Error(body.error || res.statusText || `HTTP ${res.status}`);
-  }
-  return body.data as T;
-}
-
 /** Request with an explicit account id (does not use the session account). */
-async function requestAsAccount<T>(
+function requestAsAccount<T>(
   accountId: string,
   path: string,
-  init?: RequestInit,
+  opts: RequestOptions = {},
 ): Promise<T> {
-  const id = accountId.trim();
-  const sep = path.includes("?") ? "&" : "?";
-  const url = apiUrl(
-    id ? `${path}${sep}accountId=${encodeURIComponent(id)}` : path,
-  );
-  const headers: HeadersInit = {
-    "Content-Type": "application/json",
-    ...(id
-      ? {
-          "X-Rekord-Account-Id": id,
-          "X-KORD-Account-Id": id,
-        }
-      : {}),
-    ...(init?.headers || {}),
-  };
-  let res: Response;
-  try {
-    res = await fetch(url, { ...init, headers });
-  } catch {
-    throw new Error("Hub non raggiungibile (rete)");
-  }
-  const body = await parseEnvelope<T>(res);
-  if (!res.ok || !body.ok) {
-    throw new Error(body.error || res.statusText || `HTTP ${res.status}`);
-  }
-  return body.data as T;
+  return request<T>(path, { ...opts, accountId });
 }
 
 export type ScanReport = {
@@ -412,7 +499,18 @@ export type MachineAccess = {
   isDefaultAccount: boolean;
   local: boolean;
   allowRemoteAdmin: boolean;
+  /**
+   * Library operations (Studio writes, file deletes, account create / rename /
+   * delete): any account on the hub machine; remote clients need remote admin.
+   * Absent on older hubs (then derived from `canManageMachine`).
+   */
+  canManageLibrary?: boolean;
+  /** Machine operations (scans, library path, integrations, backups, tunnel): Default account + local. */
   canManageMachine: boolean;
+  /** Error code saying why library operations are refused (`forbidden_remote`), or null. */
+  libraryDeniedReason?: string | null;
+  /** Error code saying why machine operations are refused, or null. */
+  machineDeniedReason?: string | null;
 };
 
 export type JobEntry = {
@@ -426,6 +524,11 @@ export type JobEntry = {
   finishedAt: string | null;
   error: string | null;
   cancelable: boolean;
+  /** Stable codes for `label` / `message` / `error` (translated with `params`). */
+  titleCode?: string | null;
+  detailCode?: string | null;
+  errorCode?: string | null;
+  params?: Record<string, unknown> | null;
 };
 
 export type TrackPage = {
@@ -461,28 +564,56 @@ export type UserStatePayload = {
   settings: Record<string, unknown>;
 };
 
+/** Body of `PATCH /api/v1/user-state`; omitted fields stay as they are. */
+export type UserStatePatch = Partial<
+  Pick<
+    UserStatePayload,
+    | "playCounts"
+    | "recentRelPaths"
+    | "trackMoods"
+    | "excludedRelPaths"
+    | "excludedAlbumIds"
+    | "settings"
+  >
+> & {
+  /** Optimistic lock: the hub answers 409 when its revision moved on. */
+  expectedRevision?: number;
+};
+
+export type HubHealth = {
+  ok?: boolean;
+  service?: string;
+  version?: string;
+  modules?: string[];
+  scanning?: boolean;
+  /** Wire protocol version (hubs from 5.2 on). */
+  apiVersion?: number;
+  /** Oldest client version this hub still talks to. */
+  minClientVersion?: string;
+  /** Transcoding support advertised by the hub. */
+  transcode?: unknown;
+};
+
 export const api = {
-  health: async () => {
-    let res: Response;
-    try {
-      res = await fetch(apiUrl("/api/v1/health"));
-    } catch {
-      throw new Error("Hub non raggiungibile (rete)");
-    }
-    return parseJsonBody<{
-      ok?: boolean;
-      service?: string;
-      version?: string;
-      modules?: string[];
-      scanning?: boolean;
-    }>(res);
-  },
-  stats: () => request<LibraryStats>("/api/v1/library/stats"),
+  health: (opts?: CallOptions) =>
+    // No account / JSON headers: a "simple" request needs no CORS preflight.
+    fetchHub("/api/v1/health", { timeoutMs: 8000, ...opts, accountId: "", json: false }, (res) =>
+      parseJsonBody<HubHealth>(res),
+    ),
+  stats: (opts?: CallOptions) => request<LibraryStats>("/api/v1/library/stats", opts),
   /** Library rescan. Incremental by default; `full` wipes and rebuilds. */
-  scanLibrary: (mode: "incremental" | "full" = "incremental") =>
-    request<ScanReport>(`/api/v1/library/scan?mode=${mode}`, { method: "POST" }),
+  scanLibrary: (mode: "incremental" | "full" = "incremental", opts?: CallOptions) =>
+    request<ScanReport>(`/api/v1/library/scan?mode=${mode}`, {
+      method: "POST",
+      // The hub answers when the scan is over: as long as the disk needs.
+      timeoutMs: null,
+      ...opts,
+    }),
   probeLibrary: () =>
-    request<LibraryProbeReport>("/api/v1/library/probe", { method: "POST" }),
+    request<LibraryProbeReport>("/api/v1/library/probe", {
+      method: "POST",
+      timeoutMs: LONG_TIMEOUT_MS,
+    }),
   libraryLayout: () => request<LibraryLayoutConfig>("/api/v1/library/layout"),
   setLibraryLayout: (layout: LibraryLayoutConfig) =>
     request<LibraryLayoutConfig>("/api/v1/library/layout", {
@@ -512,28 +643,46 @@ export const api = {
   tracks: (limit = 500, offset = 0) =>
     request<Track[]>(`/api/v1/library?limit=${limit}&offset=${offset}`),
   /** Paginated personal library: `{ items, total }`. */
-  tracksPage: (limit = 500, offset = 0) =>
-    request<TrackPage>(`/api/v1/library/tracks-page?limit=${limit}&offset=${offset}`),
+  tracksPage: (limit = 500, offset = 0, opts?: CallOptions) =>
+    request<TrackPage>(`/api/v1/library/tracks-page?limit=${limit}&offset=${offset}`, {
+      timeoutMs: 30_000,
+      ...opts,
+    }),
   artistsPage: (limit = 200, offset = 0) =>
     request<ArtistPage>(`/api/v1/library/artists-page?limit=${limit}&offset=${offset}`),
   /** Delta since a revision cursor; `full` asks the client to page again. */
-  libraryChanges: (since?: string | null) =>
+  libraryChanges: (since?: string | null, opts?: CallOptions) =>
     request<LibraryChanges>(
       `/api/v1/library/changes${since ? `?since=${encodeURIComponent(since)}` : ""}`,
+      { timeoutMs: 30_000, ...opts },
     ),
   /** Hub caps the limit at 500; the list is windowed, so ask for the full page. */
-  search: (q: string, limit = 500) =>
+  search: (q: string, limit = 500, opts?: CallOptions) =>
     request<Track[]>(
       `/api/v1/library/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+      opts,
     ),
-  artists: () => request<Artist[]>("/api/v1/library/artists"),
+  /**
+   * Hub full-text search over title, artist, album and genre (never paths or
+   * track-number prefixes): tracks plus matching albums and artists.
+   */
+  searchAll: (q: string, limit = 500, opts?: CallOptions) =>
+    request<LibrarySearchAll>(
+      `/api/v1/library/search?q=${encodeURIComponent(q)}&limit=${limit}&scope=all`,
+      opts,
+    ),
+  /** Canonical genres of the account's library, most common first. */
+  genres: (opts?: CallOptions) => request<LibraryGenre[]>("/api/v1/library/genres", opts),
+  artists: (opts?: CallOptions) => request<Artist[]>("/api/v1/library/artists", opts),
   artist: (id: number) => request<Artist>(`/api/v1/library/artists/${id}`),
-  artistAlbums: (id: number) => request<Album[]>(`/api/v1/library/artists/${id}/albums`),
-  albums: () => request<Album[]>("/api/v1/library/albums"),
+  artistAlbums: (id: number, opts?: CallOptions) =>
+    request<Album[]>(`/api/v1/library/artists/${id}/albums`, opts),
+  albums: (opts?: CallOptions) => request<Album[]>("/api/v1/library/albums", opts),
   album: (id: number) => request<Album>(`/api/v1/library/albums/${id}`),
-  albumTracks: (id: number) => request<Track[]>(`/api/v1/library/albums/${id}/tracks`),
+  albumTracks: (id: number, opts?: CallOptions) =>
+    request<Track[]>(`/api/v1/library/albums/${id}/tracks`, opts),
   track: (id: number) => request<Track>(`/api/v1/library/tracks/${id}`),
-  favorites: () => request<Track[]>("/api/v1/favorites"),
+  favorites: (opts?: CallOptions) => request<Track[]>("/api/v1/favorites", opts),
   addFavorite: (track_id: number) =>
     request("/api/v1/favorites", {
       method: "POST",
@@ -541,7 +690,7 @@ export const api = {
     }),
   removeFavorite: (track_id: number) =>
     request(`/api/v1/favorites/${track_id}`, { method: "DELETE" }),
-  playlists: () => request<Playlist[]>("/api/v1/playlists"),
+  playlists: (opts?: CallOptions) => request<Playlist[]>("/api/v1/playlists", opts),
   createPlaylist: (name: string) =>
     request<Playlist>("/api/v1/playlists", {
       method: "POST",
@@ -554,8 +703,8 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ name }),
     }),
-  playlistTracks: (id: string) =>
-    request<{ id: string; tracks: Track[] }>(`/api/v1/playlists/${id}`),
+  playlistTracks: (id: string, opts?: CallOptions) =>
+    request<{ id: string; tracks: Track[] }>(`/api/v1/playlists/${id}`, opts),
   addToPlaylist: (playlistId: string, track_id: number) =>
     request(`/api/v1/playlists/${playlistId}/tracks`, {
       method: "POST",
@@ -619,32 +768,16 @@ export const api = {
 
   /** Export active (or given) account profile ZIP. */
   async exportAccountProfile(accountId: string): Promise<string> {
-    const res = await fetch(
-      apiUrl(`/api/v1/accounts/${encodeURIComponent(accountId)}/export`),
-      { cache: "no-store", headers: accountHeaders() },
+    const { blob, name } = await requestBlob(
+      `/api/v1/accounts/${encodeURIComponent(accountId)}/export`,
+      {
+        timeoutMs: UPLOAD_TIMEOUT_MS,
+        fallbackError: t("core.api.exportFailed"),
+        fallbackName: "rekord-profile.zip",
+      },
     );
-    if (!res.ok) {
-      let msg = "Esportazione profilo fallita";
-      try {
-        const j = (await res.json()) as Envelope<unknown>;
-        if (j.error) msg = j.error;
-      } catch {
-        /* ignore */
-      }
-      throw new Error(msg);
-    }
-    const cd = res.headers.get("Content-Disposition") || "";
-    const m = /filename\*?=(?:UTF-8''|"?)([^";\n]+)/i.exec(cd);
-    const name =
-      (m?.[1] || "").replace(/^["']|["']$/g, "").trim() || "rekord-profile.zip";
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = decodeURIComponent(name);
-    a.click();
-    URL.revokeObjectURL(url);
-    return decodeURIComponent(name);
+    saveBlob(blob, name);
+    return name;
   },
 
   /** Ensure a session account id is set from the server registry. */
@@ -656,63 +789,24 @@ export const api = {
 
   /** Download hub backup ZIP (blob + suggested filename). */
   async downloadBackup(): Promise<string> {
-    const res = await fetch(apiUrl("/api/v1/backup/kord-data"), {
-      cache: "no-store",
-      headers: accountHeaders(),
+    const { blob, name } = await requestBlob("/api/v1/backup/kord-data", {
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+      fallbackError: t("core.api.backupFailed"),
+      fallbackName: "rekord-backup.zip",
     });
-    if (!res.ok) {
-      let msg = "Backup fallito";
-      try {
-        const j = (await res.json()) as Envelope<unknown>;
-        if (j.error) msg = j.error;
-      } catch {
-        /* ignore */
-      }
-      throw new Error(msg);
-    }
-    const cd = res.headers.get("Content-Disposition") || "";
-    const m = /filename\*?=(?:UTF-8''|"?)([^";\n]+)/i.exec(cd);
-    const name =
-      (m?.[1] || "").replace(/^["']|["']$/g, "").trim() || "rekord-backup.zip";
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = decodeURIComponent(name);
-    a.click();
-    URL.revokeObjectURL(url);
-    return decodeURIComponent(name);
+    saveBlob(blob, name);
+    return name;
   },
 
   /** Download shareable theme ZIP for the current account. */
   async downloadThemeExport(): Promise<string> {
-    const res = await fetch(apiUrl("/api/v1/backup/theme-export"), {
-      cache: "no-store",
-      headers: accountHeaders(),
+    const { blob, name } = await requestBlob("/api/v1/backup/theme-export", {
+      timeoutMs: LONG_TIMEOUT_MS,
+      fallbackError: t("core.api.themeExportFailed"),
+      fallbackName: "rekord-theme.zip",
     });
-    if (!res.ok) {
-      let msg = "Theme export failed";
-      try {
-        const j = (await res.json()) as Envelope<unknown>;
-        if (j.error) msg = j.error;
-      } catch {
-        /* ignore */
-      }
-      throw new Error(msg);
-    }
-    const cd = res.headers.get("Content-Disposition") || "";
-    const m = /filename\*?=(?:UTF-8''|"?)([^";\n]+)/i.exec(cd);
-    const name =
-      (m?.[1] || "").replace(/^["']|["']$/g, "").trim() || "rekord-theme.zip";
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = decodeURIComponent(name);
-    a.rel = "noopener";
-    a.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    return decodeURIComponent(name);
+    saveBlob(blob, name);
+    return name;
   },
 
   /**
@@ -724,14 +818,9 @@ export const api = {
     const fd = new FormData();
     fd.append("file", file);
     const path = opts?.themeOnly
-      ? withAccountQuery("/api/v1/backup/kord-restore?themeOnly=true")
-      : withAccountQuery("/api/v1/backup/kord-restore");
-    return fetch(apiUrl(path), {
-      method: "POST",
-      headers: accountHeaders(),
-      body: fd,
-    }).then(async (res) => {
-      const body = await parseEnvelope<{
+      ? "/api/v1/backup/kord-restore?themeOnly=true"
+      : "/api/v1/backup/kord-restore";
+    return request<{
         restored?: boolean;
         version?: number;
         favorites?: number;
@@ -745,12 +834,7 @@ export const api = {
         theme?: string | null;
         glassSurfaces?: boolean;
         glassOpacity?: number;
-      }>(res);
-      if (!res.ok || !body.ok) {
-        throw new Error(body.error || res.statusText);
-      }
-      return body.data!;
-    });
+      }>(path, { method: "POST", body: fd, timeoutMs: UPLOAD_TIMEOUT_MS });
   },
 
   config: () => request<HubConfig>("/api/v1/config"),
@@ -758,13 +842,10 @@ export const api = {
   uploadYoutubeCookies: (file: File) => {
     const fd = new FormData();
     fd.append("file", file);
-    return fetch(apiUrl("/api/v1/config/youtube-cookies"), {
+    return request<HubConfig>("/api/v1/config/youtube-cookies", {
       method: "POST",
       body: fd,
-    }).then(async (res) => {
-      const body = await parseEnvelope<HubConfig>(res);
-      if (!res.ok || !body.ok) throw new Error(body.error || res.statusText);
-      return body.data!;
+      timeoutMs: UPLOAD_TIMEOUT_MS,
     });
   },
 
@@ -796,10 +877,12 @@ export const api = {
       body: JSON.stringify({ parent, name }),
     }),
 
-  youtubeExploreSearch: (query: string) =>
+  youtubeExploreSearch: (query: string, opts?: CallOptions) =>
     request<{ results: ExploreResult[] }>("/api/v1/youtube-explore-search", {
       method: "POST",
       body: JSON.stringify({ query }),
+      timeoutMs: LONG_TIMEOUT_MS,
+      ...opts,
     }),
 
   youtubeReleasesList: (url: string, enrichCounts = false) =>
@@ -811,22 +894,26 @@ export const api = {
     }>("/api/v1/youtube-releases-list", {
       method: "POST",
       body: JSON.stringify({ url, enrichCounts, stream: false }),
+      timeoutMs: LONG_TIMEOUT_MS,
     }),
 
-  catalogWebDiscover: (force = false) =>
+  catalogWebDiscover: (force = false, opts?: CallOptions) =>
     request<CatalogWebDiscover>(
       `/api/v1/catalog-web-discover${force ? "?force=1" : ""}`,
+      { timeoutMs: LONG_TIMEOUT_MS, ...opts },
     ),
 
-  catalogWebTracks: (url: string) =>
+  catalogWebTracks: (url: string, opts?: CallOptions) =>
     request<CatalogWebTracks>(
       `/api/v1/catalog-web-tracks?url=${encodeURIComponent(url.trim())}`,
+      { timeoutMs: LONG_TIMEOUT_MS, ...opts },
     ),
 
   /** Absolute `<audio src>` for a ~30s audition of a web catalog track. */
-  catalogWebPreviewSrc: async (url: string) => {
+  catalogWebPreviewSrc: async (url: string, opts?: CallOptions) => {
     const { playUrl } = await request<{ playUrl: string }>(
       `/api/v1/catalog-web-preview?url=${encodeURIComponent(url.trim())}`,
+      { timeoutMs: LONG_TIMEOUT_MS, ...opts },
     );
     return apiUrl(playUrl);
   },
@@ -835,6 +922,7 @@ export const api = {
     request<{ count: number }>("/api/v1/download-flat-count", {
       method: "POST",
       body: JSON.stringify({ url }),
+      timeoutMs: LONG_TIMEOUT_MS,
     }),
 
   downloadCancel: (downloadId: string) =>
@@ -854,24 +942,34 @@ export const api = {
     onEvent: (ev: DownloadNdjsonEvent) => void,
     signal?: AbortSignal,
   ): Promise<void> {
-    const res = await fetch(apiUrl("/api/v1/download"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal,
-    });
-    if (!res.ok) {
-      let msg = res.statusText;
-      try {
-        const j = (await res.json()) as Envelope<unknown>;
-        if (j.error) msg = j.error;
-      } catch {
-        /* ignore */
-      }
-      throw new Error(msg);
-    }
+    // A stream: no timer (a playlist download runs for many minutes), only
+    // the caller's signal ends it. The response is handed out unread.
+    const res = await fetchHub(
+      "/api/v1/download",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        signal,
+        timeoutMs: null,
+      },
+      async (r) => {
+        if (r.ok) return r;
+        let env: Envelope<unknown> | null = null;
+        try {
+          env = (await r.json()) as Envelope<unknown>;
+        } catch {
+          /* ignore */
+        }
+        const detail = (env as { message?: string } | null)?.message ?? null;
+        throw new ApiError(
+          "http",
+          env?.error || detail ? translateHubError(env?.error, detail) : r.statusText || `HTTP ${r.status}`,
+          { status: r.status, code: env?.error ?? null, body: env },
+        );
+      },
+    );
     const reader = res.body?.getReader();
-    if (!reader) throw new Error("stream non disponibile");
+    if (!reader) throw new Error(t("core.api.noStream"));
     const dec = new TextDecoder();
     let buf = "";
     while (true) {
@@ -892,36 +990,43 @@ export const api = {
     }
   },
 
-  artworkSearch: (opts: { q?: string; artist?: string; album?: string }) => {
+  artworkSearch: (
+    opts: { q?: string; artist?: string; album?: string },
+    call?: CallOptions,
+  ) => {
     const p = new URLSearchParams();
     if (opts.q) p.set("q", opts.q);
     if (opts.artist) p.set("artist", opts.artist);
     if (opts.album) p.set("album", opts.album);
-    return request<{ results: ArtworkHit[] }>(`/api/v1/artwork/search?${p}`);
+    return request<{ results: ArtworkHit[] }>(`/api/v1/artwork/search?${p}`, {
+      timeoutMs: LONG_TIMEOUT_MS,
+      ...call,
+    });
   },
 
   artworkApply: (albumPath: string, imageUrl: string) =>
     request<{ saved: boolean; coverRelPath?: string }>("/api/v1/artwork/apply", {
       method: "POST",
       body: JSON.stringify({ albumPath, imageUrl }),
+      timeoutMs: LONG_TIMEOUT_MS,
     }),
 
-  albumInfoFetch: (albumPath: string, artist?: string, album?: string) =>
-    fetch(apiUrl("/api/v1/album-info/fetch"), {
+  albumInfoFetch: (
+    albumPath: string,
+    artist?: string,
+    album?: string,
+    opts?: CallOptions,
+  ) =>
+    requestJson<{
+      ok?: boolean;
+      error?: string;
+      albumPath: string;
+      meta: Record<string, unknown>;
+    }>("/api/v1/album-info/fetch", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ albumPath, artist, album }),
-    }).then(async (res) => {
-      const body = await parseJsonBody<{
-        ok?: boolean;
-        error?: string;
-        albumPath: string;
-        meta: Record<string, unknown>;
-      }>(res);
-      if (!res.ok || body.ok === false) {
-        throw new Error(body.error || res.statusText);
-      }
-      return body;
+      timeoutMs: LONG_TIMEOUT_MS,
+      ...opts,
     }),
 
   trackInfoFetchAlbum: (albumPath: string) =>
@@ -933,9 +1038,10 @@ export const api = {
     }>("/api/v1/track-info/fetch-album", {
       method: "POST",
       body: JSON.stringify({ albumPath }),
+      timeoutMs: UPLOAD_TIMEOUT_MS,
     }),
 
-  pruneAlbumMetadata: (albumPath: string) =>
+  pruneAlbumMetadata: (albumPath: string, opts?: CallOptions) =>
     request<{
       albumPath: string;
       removed: string[];
@@ -949,6 +1055,8 @@ export const api = {
     }>("/api/v1/track-info/prune-orphans", {
       method: "POST",
       body: JSON.stringify({ albumPath }),
+      timeoutMs: LONG_TIMEOUT_MS,
+      ...opts,
     }),
 
   sanitizeTrackTitles: (body: {
@@ -971,6 +1079,7 @@ export const api = {
     }>("/api/v1/studio/sanitize-track-titles", {
       method: "POST",
       body: JSON.stringify(body),
+      timeoutMs: LONG_TIMEOUT_MS,
     }),
 
   /**
@@ -983,6 +1092,7 @@ export const api = {
       {
         method: "POST",
         body: JSON.stringify({ relPaths }),
+        timeoutMs: LONG_TIMEOUT_MS,
       },
     ),
 
@@ -993,6 +1103,7 @@ export const api = {
       {
         method: "POST",
         body: JSON.stringify({ albumPath }),
+        timeoutMs: LONG_TIMEOUT_MS,
       },
     ),
 
@@ -1011,23 +1122,19 @@ export const api = {
       {
         method: "POST",
         body: JSON.stringify({ artist, album }),
+        timeoutMs: LONG_TIMEOUT_MS,
       },
     ),
 
   discogsApplyRelease: (albumPath: string, releaseId: number, artist?: string, album?: string) =>
-    fetch(apiUrl("/api/v1/discogs/apply-release"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ albumPath, releaseId, artist, album }),
-    }).then(async (res) => {
-      const body = await parseJsonBody<{ ok?: boolean; error?: string } & Record<string, unknown>>(
-        res,
-      );
-      if (!res.ok || body.ok === false) {
-        throw new Error(body.error || res.statusText);
-      }
-      return body;
-    }),
+    requestJson<{ ok?: boolean; error?: string } & Record<string, unknown>>(
+      "/api/v1/discogs/apply-release",
+      {
+        method: "POST",
+        body: JSON.stringify({ albumPath, releaseId, artist, album }),
+        timeoutMs: LONG_TIMEOUT_MS,
+      },
+    ),
 
   entityInfoSearch: (artist: string, album?: string | null, lang = "it") =>
     request<{ candidates: Array<{ kind?: string; lang: string; title?: string; text: string }> }>(
@@ -1035,6 +1142,7 @@ export const api = {
       {
         method: "POST",
         body: JSON.stringify({ artist, album: album || undefined, lang }),
+        timeoutMs: LONG_TIMEOUT_MS,
       },
     ),
 
@@ -1064,20 +1172,17 @@ export const api = {
       body: JSON.stringify({ relPath, patch }),
     }),
 
-  trackInfoFetch: (relPath: string) =>
-    fetch(apiUrl("/api/v1/track-info/fetch"), {
+  trackInfoFetch: (relPath: string, opts?: CallOptions) =>
+    requestJson<{
+      ok?: boolean;
+      error?: string;
+      meta?: Record<string, unknown>;
+      lyrics?: string;
+    }>("/api/v1/track-info/fetch", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ relPath }),
-    }).then(async (res) => {
-      const body = await parseJsonBody<{
-        ok?: boolean;
-        error?: string;
-        meta?: Record<string, unknown>;
-        lyrics?: string;
-      }>(res);
-      if (!res.ok || body.ok === false) throw new Error(body.error || res.statusText);
-      return body;
+      timeoutMs: LONG_TIMEOUT_MS,
+      ...opts,
     }),
 
   /** LRCLIB — synced/plain lyrics (parity legacy `/api/track-lyrics/fetch`). */
@@ -1089,6 +1194,7 @@ export const api = {
     }>("/api/v1/track-lyrics/fetch", {
       method: "POST",
       body: JSON.stringify({ relPath }),
+      timeoutMs: LONG_TIMEOUT_MS,
     }),
 
   albumInfoSave: (
@@ -1110,17 +1216,15 @@ export const api = {
     const fd = new FormData();
     fd.append("albumPath", albumPath);
     fd.append("file", file);
-    return fetch(apiUrl("/api/v1/artwork/upload"), {
+    return request<{ saved?: boolean; coverRelPath?: string }>("/api/v1/artwork/upload", {
       method: "POST",
       body: fd,
-    }).then(async (res) => {
-      const body = await parseEnvelope<{ saved?: boolean; coverRelPath?: string }>(res);
-      if (!res.ok || !body.ok) throw new Error(body.error || res.statusText);
-      return body.data!;
+      timeoutMs: UPLOAD_TIMEOUT_MS,
     });
   },
 
-  getUserState: () => request<UserStatePayload>("/api/v1/user-state"),
+  getUserState: (opts?: CallOptions) =>
+    request<UserStatePayload>("/api/v1/user-state", opts),
 
   getUserStateForAccount: (accountId: string) =>
     requestAsAccount<UserStatePayload>(accountId, "/api/v1/user-state"),
@@ -1131,42 +1235,49 @@ export const api = {
   playlistsForAccount: (accountId: string) =>
     requestAsAccount<Playlist[]>(accountId, "/api/v1/playlists"),
 
-  patchUserState: (body: Record<string, unknown>) =>
-    request<{ revision: number }>("/api/v1/user-state", {
+  /**
+   * Resolves with the hub's new state (hubs before 5.2 may only return
+   * `{ revision }`). With `expectedRevision` a stale write fails with an
+   * `ApiError` of status 409; see `userStateConflict`.
+   */
+  patchUserState: (
+    body: UserStatePatch | Record<string, unknown>,
+    opts?: CallOptions & { keepalive?: boolean },
+  ) =>
+    request<Partial<UserStatePayload> & { revision: number }>("/api/v1/user-state", {
       method: "PATCH",
       body: JSON.stringify(body),
+      ...opts,
     }),
 
   uploadCustomThemeBg: (file: File) => {
     const fd = new FormData();
     fd.append("file", file);
-    const url = apiUrl(withAccountQuery("/api/v1/user-state/custom-theme-bg"));
-    return fetch(url, {
+    return request<{
+      bgImage: string;
+      bgImageRev: number;
+    }>("/api/v1/user-state/custom-theme-bg", {
       method: "POST",
-      headers: accountHeaders(),
       body: fd,
-    }).then(async (res) => {
-      const body = await parseEnvelope<{
-        bgImage: string;
-        bgImageRev: number;
-      }>(res);
-      if (!res.ok || !body.ok) throw new Error(body.error || res.statusText);
-      return body.data!;
+      timeoutMs: UPLOAD_TIMEOUT_MS,
     });
   },
 
   clearCustomThemeBg: async () => {
-    const url = apiUrl(withAccountQuery("/api/v1/user-state/custom-theme-bg"));
-    const res = await fetch(url, {
-      method: "DELETE",
-      headers: accountHeaders(),
-    });
-    const body = await parseEnvelope<null>(res);
-    if (!res.ok || !body.ok) throw new Error(body.error || res.statusText);
+    await request<null>("/api/v1/user-state/custom-theme-bg", { method: "DELETE" });
   },
+
+  /** Download and install the latest yt-dlp on the hub (machine operation). */
+  updateYtdlp: (force = false) =>
+    request<YtdlpUpdateResult>("/api/v1/tools/ytdlp/update", {
+      method: "POST",
+      body: JSON.stringify({ force }),
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+    }),
 
   diagnostics: () =>
     request<{
+      binaries?: { ytdlp?: YtdlpInfo | null } & Record<string, unknown>;
       version: string;
       uptimeSecs: number;
       musicRoot: string | null;
@@ -1204,6 +1315,10 @@ export const api = {
         ts: string;
         kind: string;
         message: string;
+        /** `"{kind}.{action}"` plus placeholders, when the hub wrote a coded line. */
+        action?: string | null;
+        code?: string | null;
+        params?: Record<string, unknown> | null;
         accountId?: string | null;
         accountName?: string | null;
       }>;
@@ -1224,18 +1339,20 @@ export const api = {
     request<RemoteAccessState>("/api/v1/remote-access/start", {
       method: "POST",
       body: "{}",
+      timeoutMs: LONG_TIMEOUT_MS,
     }),
 
   remoteStop: () =>
     request<RemoteAccessState>("/api/v1/remote-access/stop", {
       method: "POST",
       body: "{}",
+      timeoutMs: LONG_TIMEOUT_MS,
     }),
 
   remoteLogin: () =>
     request<{ loginUrl: string; note: string; cloudflareLoggedIn: boolean }>(
       "/api/v1/remote-access/login",
-      { method: "POST", body: "{}" },
+      { method: "POST", body: "{}", timeoutMs: LONG_TIMEOUT_MS },
     ),
 
   remoteLogout: () =>

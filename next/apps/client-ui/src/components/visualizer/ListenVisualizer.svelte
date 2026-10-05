@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from "svelte";
   import { t } from "../../lib/i18n.svelte";
   import { player } from "../../lib/player";
+  import { session } from "../../lib/session.svelte";
   import {
     loadUserPrefs,
     subscribeUserPrefs,
@@ -10,6 +11,7 @@
   import { currentLrcLineIndex, parseLrcLyrics } from "../../lib/visualizer/lrc";
   import {
     canvasDprCap,
+    discowallLoopCadence,
     vizLoopCadence,
   } from "../../lib/visualizer/renderQuality";
   import {
@@ -36,19 +38,36 @@
   let prefsMode = $state<VisualizerMode>(loadUserPrefs().visualizerMode);
 
   const engine = new VizCanvasEngine();
+  /**
+   * The player routes audio through Web Audio only while someone holds its
+   * analyser (costly on some engines): held while a spectrum is drawn on
+   * screen for a playing song. Until the graph is up `getAnalyser()` is null
+   * and the engine draws its idle state.
+   */
+  const analyserLease = player.analyserLease();
 
   let raf = 0;
   let timerId = 0;
   let lastDraw = 0;
+  /** Size + mode + expansion + theme of the last painted frame (a static frame stays valid while equal). */
+  let lastDrawKey = "";
+  function drawKey(): string {
+    const c = canvas;
+    return `${c?.width ?? 0}x${c?.height ?? 0}|${modeRef}|${expandedRef ? 1 : 0}|${document.documentElement.dataset.theme ?? ""}`;
+  }
   let backingScale = 1;
   let visible = typeof document !== "undefined" ? !document.hidden : true;
   let inView = true;
   let unsubPrefs: (() => void) | null = null;
   // Copie non reattive lette dal ciclo di disegno, che gira fuori da Svelte: le
   // riallinea l'effetto piu' sotto a ogni cambio di stato.
-  let playingRef = playing;
+  let playingRef = false;
   let modeRef: VizMode = "bars";
   let expandedRef = false;
+  /** Last known playback position + when it arrived: DiscoWall extrapolates between updates. */
+  let timeRef = 0;
+  let timeStamp = typeof performance !== "undefined" ? performance.now() : 0;
+  let resize: (() => void) | null = null;
 
   const activeMode = $derived((mode ?? prefsMode) as VizMode);
 
@@ -94,7 +113,13 @@
     }, delayMs);
   }
 
+  function syncAnalyserLease() {
+    // Karaoke draws no spectrum; hidden / off-screen panels draw nothing.
+    analyserLease.set(visible && inView && playingRef && activeMode !== "karaoke");
+  }
+
   function syncLoop() {
+    syncAnalyserLease();
     if (!visible || !inView) {
       clearLoop();
       return;
@@ -102,20 +127,40 @@
     if (raf === 0 && timerId === 0) scheduleNext(0);
   }
 
+  /**
+   * Playing: throttled loop (≤30 fps, 24 on WebKitGTK). Paused / idle: one
+   * calm frame, then the loop stops until something changes (DiscoWall may
+   * keep going briefly while its pulse decays).
+   */
   function step(t: number) {
     raf = 0;
     const c = canvas;
     if (!c || !visible || !inView) return;
     const ctx = c.getContext("2d");
     if (!ctx) return;
-    const cadence = vizLoopCadence({
-      expanded: expandedRef,
-      isPlaying: playingRef,
-    });
-    if (t - lastDraw >= cadence.minFrameIntervalMs) {
-      lastDraw = t;
+    const cadence =
+      modeRef === "discowall"
+        ? discowallLoopCadence({ expanded: expandedRef, active: engine.discoActive })
+        : vizLoopCadence({
+            expanded: expandedRef,
+            isPlaying: playingRef,
+          });
+    const settling = !playingRef && modeRef === "discowall" && engine.discoActive;
+    // Timer wakes a little early, rAF aligns to the frame (see NebulaCanvas).
+    const interval = cadence.minFrameIntervalMs;
+    const early = Math.min(10, interval * 0.15);
+    const now = performance.now();
+    // Playing but no analyser yet (graph not up / no audio): the idle frame is
+    // static, so only poll for the analyser instead of repainting it.
+    const waitingForData =
+      playingRef && engine.lastFrameStatic && lastDrawKey === drawKey() && !player.getAnalyser();
+    const due = !waitingForData && (!playingRef || now - lastDraw >= interval - early - 2);
+    if (due) {
+      lastDraw = now;
+      lastDrawKey = drawKey();
       const w = c.width / backingScale;
       const h = c.height / backingScale;
+      const liveTime = playingRef ? timeRef + Math.max(0, (t - timeStamp) / 1000) : timeRef;
       engine.drawFrame(ctx, {
         width: w,
         height: h,
@@ -123,13 +168,16 @@
         analyser: playingRef ? player.getAnalyser() : null,
         isPlaying: playingRef,
         expanded: expandedRef,
+        currentTime: liveTime,
+        trackKey: player.current?.rel_path ?? null,
       });
     }
-    const wait = Math.max(
-      1,
-      cadence.minFrameIntervalMs - (performance.now() - lastDraw),
-    );
-    scheduleNext(wait);
+    if (!playingRef && !settling) return;
+    if (playingRef && engine.lastFrameStatic && !player.getAnalyser()) {
+      scheduleNext(250);
+      return;
+    }
+    scheduleNext(Math.max(1, interval - (performance.now() - lastDraw) - early));
   }
 
   function collapse() {
@@ -178,8 +226,14 @@
   });
 
   $effect(() => {
+    timeRef = currentTime;
+    timeStamp = performance.now();
+  });
+
+  $effect(() => {
     modeRef = activeMode;
     engine.resetForMode(activeMode);
+    resize?.();
     syncLoop();
   });
 
@@ -215,7 +269,10 @@
       const lw = p ? p.clientWidth : 400;
       const lh = p ? Math.max(100, p.clientHeight || 200) : 200;
       let s = dpr();
-      if (expandedRef) {
+      if (modeRef === "discowall") {
+        // Per-pixel wall: legacy draws the panel at 1x, expanded at the lite cap.
+        s = expandedRef ? canvasDprCap({ lite: true }) : 1;
+      } else if (expandedRef) {
         s = Math.min(s, modeRef === "signals" ? 1.38 : 1.52);
       } else {
         s = canvasDprCap({ lite: true });
@@ -226,8 +283,11 @@
       c.style.width = `${lw}px`;
       c.style.height = `${lh}px`;
       ctx.setTransform(s, 0, 0, s, 0, 0);
+      // Resizing clears the bitmap: paint again (paused loops are stopped).
+      syncLoop();
     };
     size();
+    resize = size;
     const ro = new ResizeObserver(size);
     if (c.parentElement) ro.observe(c.parentElement);
 
@@ -249,12 +309,24 @@
     };
     document.addEventListener("visibilitychange", onVis);
 
+    // Theme switch while paused: the stopped loop must repaint with the new palette.
+    const themeMo =
+      typeof MutationObserver !== "undefined"
+        ? new MutationObserver(() => syncLoop())
+        : null;
+    themeMo?.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+
     visible = !document.hidden;
     syncLoop();
 
     return () => {
       clearLoop();
+      resize = null;
       document.removeEventListener("visibilitychange", onVis);
+      themeMo?.disconnect();
       io?.disconnect();
       ro.disconnect();
     };
@@ -262,6 +334,7 @@
 
   onDestroy(() => {
     clearLoop();
+    analyserLease.dispose();
     unsubPrefs?.();
   });
 </script>
@@ -312,6 +385,10 @@
             {t("listen.karaokeEmpty")}
           </p>
         {/if}
+      </div>
+    {:else if activeMode === "discowall" && !session.current}
+      <div class="viz-discowall-status" role="status">
+        <p>{t("viz.discowallIdle")}</p>
       </div>
     {:else if expanded && currentLrcText}
       <div class="viz-lyrics-overlay" aria-live="polite">
@@ -406,6 +483,25 @@
 
   .viz-wrap.is-expanded .viz-canvas {
     border-radius: 0;
+  }
+
+  .viz-discowall-status {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 1rem;
+    pointer-events: none;
+    text-align: center;
+    z-index: 2;
+  }
+
+  .viz-discowall-status p {
+    margin: 0;
+    color: color-mix(in srgb, var(--rk-ink, #fff) 72%, transparent);
+    font-size: var(--rk-fs-sm);
+    font-weight: 600;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
   }
 
   .viz-karaoke-overlay,

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { CoverArt } from "@rekord/ui";
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import ListenSleepTimer from "../components/ListenSleepTimer.svelte";
   import MetaBadgeCluster from "../components/MetaBadgeCluster.svelte";
   import PageToolbar from "../components/PageToolbar.svelte";
@@ -17,7 +17,7 @@
   import StudioMetaPane from "../components/studio/StudioMetaPane.svelte";
   import ListenVisualizer from "../components/visualizer/ListenVisualizer.svelte";
   import {
-    albumCoverUrl,
+    coverUrlFor,
     type CatalogWebItem,
     type Track,
   } from "../lib/api";
@@ -34,6 +34,8 @@
     trackYear,
   } from "../lib/trackMoods";
   import { loadUserPrefs } from "../lib/userPrefs";
+  import { studioAccess } from "../lib/studio/access.svelte";
+  import { studioDownloads } from "../lib/studio/downloadStore.svelte";
 
   const tabs = $derived([
     { id: "listen", label: t("page.studio.tab.listen") },
@@ -43,14 +45,15 @@
     { id: "covers", label: t("page.studio.tab.covers") },
   ]);
 
+  /** Per-pane heading: the toolbar says what this tab is for. */
+  const paneTitle = $derived(t(`studio.header.${session.studioPane}`));
+
   let recent = $state<Track[]>([]);
   let listenRecentPanel = $state<"recent" | "lyrics">("recent");
   /** Temporary visualizer override from the KARAOKE toggle; prefs stay untouched. */
   let karaokeMode = $state(false);
   let autoPanelTrack: number | null = null;
   let panelPickedByUser = false;
-  let downloadSeedUrl = $state("");
-  let downloadSeedMode = $state<"single" | "playlist" | "releases">("single");
 
   const favCurrent = $derived(
     session.current ? session.favoriteIds.has(session.current.id) : false,
@@ -86,18 +89,18 @@
     session.current ? trackYear(session.current, currentAlbum) : null,
   );
   const listenTrackYearTitle = $derived.by(() => {
-    const t = session.current;
-    if (!listenTrackYear || !t?.release_date) return undefined;
-    return `Track ${fmtDate(t.release_date)}`;
+    const cur = session.current;
+    if (!listenTrackYear || !cur?.release_date) return undefined;
+    return t("studio.listen.trackDate", { date: fmtDate(cur.release_date) });
   });
   const listenInfoLine = $derived.by(() => {
-    const t = session.current;
-    if (!t) return "";
+    const cur = session.current;
+    if (!cur) return "";
     const parts: string[] = [];
     if (currentAlbum?.release_date) {
-      parts.push(`Album ${fmtDate(currentAlbum.release_date)}`);
+      parts.push(t("studio.listen.albumDate", { date: fmtDate(currentAlbum.release_date) }));
     }
-    const g = formatTrackGenresForDisplay(trackGenre(t));
+    const g = formatTrackGenresForDisplay(trackGenre(cur));
     if (g) parts.push(g);
     if (currentAlbum?.label?.trim()) parts.push(currentAlbum.label.trim());
     return parts.join(" · ");
@@ -120,44 +123,67 @@
     session.queue.slice(listenQueueStart, listenQueueStart + 6),
   );
 
-  async function loadRecent() {
-    if (!session.catalogTracks.length) {
-      try {
-        await session.loadCatalogTracks();
-      } catch {
-        /* offline */
-      }
-    }
-    const curRel = session.current?.rel_path;
-    const paths = player
-      .recentRelPaths()
-      .filter((p) => !curRel || p !== curRel)
-      .slice(0, 6);
+  /**
+   * path → track over the catalog (tens of thousands of rows): rebuilt only
+   * when one of the lists changes, not on every player event.
+   */
+  const trackByPath = $derived.by(() => {
     const byPath = new Map<string, Track>();
-    for (const t of session.catalogTracks) byPath.set(t.rel_path, t);
-    for (const t of session.favorites) byPath.set(t.rel_path, t);
-    for (const t of session.queue) byPath.set(t.rel_path, t);
-    const out: Track[] = [];
-    for (const path of paths) {
-      const t = byPath.get(path);
-      if (t) out.push(t);
+    for (const tr of session.catalogTracks) byPath.set(tr.rel_path, tr);
+    for (const tr of session.favorites) byPath.set(tr.rel_path, tr);
+    for (const tr of session.queue) byPath.set(tr.rel_path, tr);
+    return byPath;
+  });
+
+  let catalogRequested = false;
+
+  async function ensureCatalog() {
+    if (session.catalogTracks.length || catalogRequested) return;
+    catalogRequested = true;
+    try {
+      await session.loadCatalogTracks();
+    } catch {
+      /* offline */
     }
-    recent = out;
   }
+
+  function loadRecent() {
+    const curRel = session.current?.rel_path;
+    const index = trackByPath;
+    const out: Track[] = [];
+    for (const path of player.recentRelPaths()) {
+      if (curRel && path === curRel) continue;
+      const tr = index.get(path);
+      if (tr) out.push(tr);
+      if (out.length >= 6) break;
+    }
+    const same =
+      out.length === recent.length && out.every((tr, i) => tr === recent[i]);
+    if (!same) recent = out;
+  }
+
+  // Recompute when the index changes (catalog loaded, favorites, queue).
+  $effect(() => {
+    trackByPath;
+    untrack(loadRecent);
+  });
 
 
   function sendWebItemToDownload(item: CatalogWebItem, mode: "single" | "playlist") {
-    downloadSeedUrl = item.url;
-    downloadSeedMode = mode;
+    studioDownloads.url = item.url;
+    studioDownloads.urlMode = mode;
+    studioDownloads.studioMode = "classic";
     session.studioPane = "download";
   }
 
   onMount(() => {
     if (!session.artists.length) void session.loadArtists();
     if (!session.allAlbums.length) void session.loadAllAlbums();
-    void loadRecent();
+    studioAccess.ensure();
+    void ensureCatalog();
+    loadRecent();
     return player.subscribe(() => {
-      void loadRecent();
+      loadRecent();
     });
   });
 
@@ -171,7 +197,7 @@
 <div class="view-page studio-page">
 <PageToolbar
   eyebrow={t("page.studio.eyebrow")}
-  title={t("page.studio.title")}
+  title={paneTitle}
   {tabs}
   activeTab={session.studioPane}
   tabsAriaLabel={t("page.studio.tabsAria")}
@@ -197,7 +223,7 @@
 >
   <div class="tools tool-studio-layout">
     {#if session.studioPane === "listen"}
-      <div class="studio-pane studio-pane--listen" role="region" aria-label="Ascolta">
+      <div class="studio-pane studio-pane--listen" role="region" aria-label={t("studio.listen.regionAria")}>
         <div class="view-page view-page--listen">
           <div class="listen-page">
             <section class="listen-page__stage listen-stage">
@@ -208,20 +234,18 @@
                       <button
                         type="button"
                         class="listen-stage__art-btn"
-                        title="Cambia cover album"
-                        aria-label="Cambia cover album"
+                        title={t("studio.listen.changeCover")}
+                        aria-label={t("studio.listen.changeCover")}
                         onclick={() => {
-                          const t = session.current;
-                          if (t) void session.openLibraryForTrack(t);
+                          const cur = session.current;
+                          if (cur) void session.openLibraryForTrack(cur);
                         }}
                       >
                         <div class="listen-stage__art">
                           <CoverArt
                             title={session.current.title}
                             seed={`${session.current.artist_name}/${session.current.album_name}`}
-                            src={session.current.album_id != null
-                              ? albumCoverUrl(session.current.album_id)
-                              : ""}
+                            src={coverUrlFor(session.current)}
                             size="lg"
                           />
                         </div>
@@ -238,16 +262,16 @@
                     <div class="listen-stage__text">
                       <div class="listen-stage__text-lead">
                         <div class="listen-stage__eyebrow-row">
-                          <p class="rk-eyebrow">Ascolto corrente</p>
+                          <p class="rk-eyebrow">{t("studio.listen.currentEyebrow")}</p>
                           {#if session.current}
                             <div class="listen-stage__eyebrow-actions">
                               <button
                                 type="button"
                                 class="listen-stage__fav"
                                 class:is-on={favCurrent}
-                                title="Preferito"
+                                title={t("player.favorite")}
                                 aria-pressed={favCurrent}
-                                aria-label="Preferito"
+                                aria-label={t("player.favorite")}
                                 onclick={() =>
                                   session.current &&
                                   void session.toggleFavorite(session.current)}
@@ -259,8 +283,8 @@
                               <button
                                 type="button"
                                 class="track-row__ic track-row__ic--meta"
-                                title="Modifica metadati"
-                                aria-label="Modifica metadati"
+                                title={t("studio.listen.editMeta")}
+                                aria-label={t("studio.listen.editMeta")}
                                 onclick={() =>
                                   session.current && session.openTrackEdit(session.current)}
                               >
@@ -273,12 +297,12 @@
                                 class="track-row__ic track-row__ic--exclude"
                                 class:is-on={excludedCurrent}
                                 title={excludedCurrent
-                                  ? "Includi nello shuffle"
-                                  : "Escludi dallo shuffle"}
+                                  ? t("studio.listen.includeShuffle")
+                                  : t("studio.listen.excludeShuffle")}
                                 aria-pressed={excludedCurrent}
                                 aria-label={excludedCurrent
-                                  ? "Includi nello shuffle"
-                                  : "Escludi dallo shuffle"}
+                                  ? t("studio.listen.includeShuffle")
+                                  : t("studio.listen.excludeShuffle")}
                                 onclick={() =>
                                   session.current &&
                                   player.toggleExcludeTrack(session.current)}
@@ -301,12 +325,15 @@
                             {/if}
                           {/if}
                         </div>
-                        <h1 class="listen-stage__title">
-                          {session.current?.title || "Nessun brano in riproduzione"}
+                        <h1
+                          class="listen-stage__title"
+                          class:listen-stage__title--idle={!session.current}
+                        >
+                          {session.current?.title || t("studio.listen.noTrack")}
                         </h1>
                         {#if !session.current}
                           <p class="listen-stage__sub">
-                            Apri la libreria o una playlist per iniziare.
+                            {t("studio.listen.noTrackHint")}
                           </p>
                         {/if}
                       </div>
@@ -327,7 +354,7 @@
                             <span class="listen-stage__sub-sep" aria-hidden="true"> · </span>
                             <span
                               class="track-row__plays listen-stage__sub-plays"
-                              aria-label={`Ascolti: ${playCount}`}
+                              aria-label={t("studio.listen.playsAria", { n: playCount })}
                             >
                               ({playCount})
                             </span>
@@ -366,7 +393,7 @@
             <div class="listen-page__panels listen-dashboard-row">
               <section class="rk-surface-card listen-queue-panel">
                 <div class="section-head section-head--page-toolbar library-genre-tracklist-headrow">
-                  <SectionHeadLead eyebrow="Coda" title="Prossimi brani">
+                  <SectionHeadLead eyebrow={t("studio.listen.queueEyebrow")} title={t("studio.listen.queueHeading")}>
                     <UiIcon name="list" />
                   </SectionHeadLead>
                   <button
@@ -374,15 +401,15 @@
                     class="text-btn"
                     onclick={() => session.navigate("queue")}
                   >
-                    Gestisci
+                    {t("studio.listen.manageQueue")}
                   </button>
                 </div>
                 <div class="listen-queue-panel__body">
                   {#if session.queue.length === 0}
                     <div class="panel-empty panel-empty--actions">
-                      <p>La coda è vuota.</p>
+                      <p>{t("studio.listen.queueEmpty")}</p>
                       <PlayCollectionButton
-                        label="Riproduci tutto"
+                        label={t("studio.listen.playAll")}
                         onclick={() => void session.shuffleLibrary()}
                       />
                     </div>
@@ -419,16 +446,16 @@
                     <div class="section-head__text">
                       <p class="rk-eyebrow">
                         {listenRecentPanel === "recent"
-                          ? "Recenti"
-                          : "Brano in riproduzione"}
+                          ? t("studio.listen.recentEyebrow")
+                          : t("studio.listen.lyricsEyebrow")}
                       </p>
                       <SectionNavTabs
                         tabs={[
-                          { id: "recent", label: "Ultimi ascolti" },
-                          { id: "lyrics", label: "Testo" },
+                          { id: "recent", label: t("studio.listen.tabRecent") },
+                          { id: "lyrics", label: t("studio.listen.tabLyrics") },
                         ]}
                         active={listenRecentPanel}
-                        ariaLabel="Pannello recenti e testo"
+                        ariaLabel={t("studio.listen.panelTabsAria")}
                         onselect={(id) => {
                           if (id === "lyrics" && !session.current) return;
                           panelPickedByUser = true;
@@ -443,7 +470,7 @@
                       class="text-btn"
                       onclick={() => session.navigate("recent")}
                     >
-                      Vedi tutto
+                      {t("studio.listen.seeAll")}
                     </button>
                   {:else}
                     <div class="listen-recent-panel__lyrics-tools">
@@ -453,19 +480,19 @@
                         class:is-active={karaokeMode}
                         disabled={lyricsKind(session.current?.lyrics) !== "lrc"}
                         title={karaokeMode
-                          ? "Torna al visualizzatore"
-                          : "Karaoke nel visualizzatore"}
+                          ? t("studio.listen.karaokeBack")
+                          : t("studio.listen.karaokeOn")}
                         aria-pressed={karaokeMode}
                         onclick={() => (karaokeMode = !karaokeMode)}
                       >
                         <UiIcon name="music" />
-                        <span>KARAOKE</span>
+                        <span>{t("studio.listen.karaoke")}</span>
                       </button>
                       <span
                         class="listen-recent-panel__lrc-state"
                         title={lyricsKind(session.current?.lyrics) === "lrc"
-                          ? "LRC disponibile"
-                          : "Testo LRC non disponibile"}
+                          ? t("studio.listen.lrcAvailable")
+                          : t("studio.listen.lrcMissing")}
                       >
                         <span
                           class="listen-recent-panel__lrc-dot"
@@ -494,7 +521,7 @@
                       </div>
                     {:else}
                       <p class="panel-empty">
-                        La cronologia si popolerà dopo i primi ascolti.
+                        {t("studio.listen.recentEmpty")}
                       </p>
                     {/if}
                   {:else if session.current?.lyrics?.trim()}
@@ -504,14 +531,14 @@
                     />
                   {:else}
                     <div class="panel-empty panel-empty--actions listen-recent-lyrics__empty">
-                      <p>Nessun testo per questo brano.</p>
+                      <p>{t("studio.listen.noLyrics")}</p>
                       <button
                         type="button"
                         class="ghost-btn ghost-btn--sm"
                         onclick={() => session.openTrackEdit(session.current!)}
                         disabled={!session.current}
                       >
-                        Modifica / Auto LRC
+                        {t("studio.listen.editLyrics")}
                       </button>
                     </div>
                   {/if}
@@ -524,7 +551,7 @@
     {:else if session.studioPane === "catalog"}
       <StudioCatalogPane onSendToDownload={sendWebItemToDownload} />
     {:else if session.studioPane === "download"}
-      <StudioDownloadPane seedUrl={downloadSeedUrl} seedMode={downloadSeedMode} />
+      <StudioDownloadPane />
     {:else if session.studioPane === "meta"}
       <StudioMetaPane />
     {:else}

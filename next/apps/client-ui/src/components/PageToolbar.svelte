@@ -7,6 +7,7 @@
   let {
     eyebrow = "",
     title = "",
+    subtitle = "",
     tabs,
     activeTab = "",
     tabsAriaLabel = "",
@@ -21,6 +22,8 @@
     eyebrow?: string;
     /** What this page currently holds — a name, a count, a selection. */
     title?: string;
+    /** One quiet line under the title (counts, totals). */
+    subtitle?: string;
     /** Section nav, rendered on its own row under the title. */
     tabs?: Tab[];
     activeTab?: string;
@@ -68,6 +71,9 @@
           {#if title}
             <h2>{title}</h2>
           {/if}
+          {#if subtitle}
+            <p class="page-toolbar__subtitle">{subtitle}</p>
+          {/if}
         </div>
       </div>
       {#if tools}
@@ -92,3 +98,13 @@
     {@render children?.()}
   </section>
 </header>
+
+<style>
+  .page-toolbar__subtitle {
+    margin: 0.15rem 0 0;
+    color: var(--rk-muted);
+    font-size: var(--rk-fs-sm);
+    font-variant-numeric: tabular-nums;
+    line-height: var(--rk-lh-snug);
+  }
+</style>

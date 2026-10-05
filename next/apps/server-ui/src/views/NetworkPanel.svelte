@@ -1,151 +1,163 @@
 <script lang="ts">
-  import { ActionRow, Banner, Button, Panel, QrCodeImg } from "@rekord/ui";
+  import { ActionRow, Banner, Button, Panel } from "@rekord/ui";
   import { admin, humanTime } from "../lib/admin.svelte";
+  import { t } from "../lib/i18n.svelte";
+  import UrlEntry from "./UrlEntry.svelte";
 
   const remote = $derived(admin.remote);
   const access = $derived(admin.access);
   const locked = $derived(admin.busy || !admin.canManage);
-  const lanUrl = $derived(remote?.lanUrl?.trim() || "");
+  /** Every LAN address, best first; older hubs only send `lanUrl`. */
+  const lanUrls = $derived.by(() => {
+    const list = (remote?.lanUrls ?? []).map((u) => u.trim()).filter(Boolean);
+    const single = remote?.lanUrl?.trim();
+    if (single && !list.includes(single)) list.unshift(single);
+    return list;
+  });
+  const bestLan = $derived(lanUrls[0] ?? "");
   const publicUrl = $derived(
     remote?.status === "running" ? remote?.publicUrl?.trim() || "" : "",
   );
 
-  const statusLabel: Record<string, string> = {
-    stopped: "spento",
-    starting: "in avvio",
-    running: "attivo",
-    error: "errore",
-  };
+  const yesNo = (v: boolean) => (v ? t("common.yes") : t("common.no"));
 </script>
 
-<Panel title="Accesso in rete locale">
+<Panel title={t("network.lan.title")}>
   {#snippet actions()}
     <Button
       variant="secondary"
       disabled={admin.busy}
       onclick={() => void admin.loadSection("network")}
     >
-      Aggiorna
+      {t("common.refresh")}
     </Button>
   {/snippet}
 
   {#if remote}
     <div class="grid">
       <div class="cell">
-        <span class="k">Indirizzo in rete locale</span>
-        <span class="v">{remote.lanUrl ?? "—"}</span>
+        <span class="k">{t("network.lan.bind")}</span><span class="v">{remote.bind}</span>
       </div>
       <div class="cell">
-        <span class="k">Ascolto su</span><span class="v">{remote.bind}</span>
-      </div>
-      <div class="cell">
-        <span class="k">Pannello hub</span><span class="v">{remote.lanUrl ?? ""}/admin</span>
+        <span class="k">{t("network.lan.panel")}</span>
+        <span class="v">{bestLan ? `${bestLan}/admin` : "—"}</span>
       </div>
     </div>
-    <p class="hint">
-      Da telefono o da un altro computer apri l'indirizzo in rete locale: il
-      client web e le API rispondono sulla stessa porta.
+
+    <p class="sub">
+      {lanUrls.length > 1
+        ? t("network.lan.addressesMany", { count: lanUrls.length })
+        : t("network.lan.addresses")}
     </p>
-    {#if lanUrl}
-      <!-- Il QR è per l'app Android: al primo avvio chiede l'indirizzo dell'hub,
-           e leggerlo da qui evita di copiare un IP a mano sul telefono. -->
-      <figure class="qr">
-        <QrCodeImg value={lanUrl} size={220} alt={`QR code per aprire ${lanUrl}`} />
-        <figcaption>Inquadra dall'app RE-KORD per collegare il telefono</figcaption>
-      </figure>
+    {#if lanUrls.length === 0}
+      <p class="hint">{t("network.lan.none")}</p>
+    {:else}
+      <!-- QR codes are for the Android app: on first launch it asks for the
+           hub address, and scanning it here saves typing an IP on the phone. -->
+      <div class="urls">
+        {#each lanUrls as url, i (url)}
+          <UrlEntry
+            {url}
+            badge={i === 0 && lanUrls.length > 1 ? t("network.lan.best") : ""}
+            qrCaption={t("network.lan.qrCaption")}
+            qrOpen={i === 0}
+          />
+        {/each}
+      </div>
     {/if}
+    <p class="hint">
+      {lanUrls.length > 1 ? t("network.lan.hintMany") : t("network.lan.hint")}
+    </p>
   {/if}
 </Panel>
 
-<Panel title="Accesso da fuori casa">
+<Panel title={t("network.remote.title")}>
   {#if remote}
     <div class="grid">
       <div class="cell">
-        <span class="k">Tunnel</span>
-        <span class="v">{statusLabel[remote.status] ?? remote.status}</span>
+        <span class="k">{t("network.remote.tunnel")}</span>
+        <span class="v">{t(`network.remote.status.${remote.status}`)}</span>
       </div>
       <div class="cell">
-        <span class="k">Indirizzo pubblico</span>
+        <span class="k">{t("network.remote.publicUrl")}</span>
         <span class="v">{remote.publicUrl ?? "—"}</span>
       </div>
       <div class="cell">
-        <span class="k">Avviato</span><span class="v">{humanTime(remote.startedAt)}</span>
+        <span class="k">{t("network.remote.startedAt")}</span>
+        <span class="v">{humanTime(remote.startedAt)}</span>
       </div>
       <div class="cell">
         <span class="k">cloudflared</span>
-        <span class="v">{remote.cloudflaredAvailable ? "disponibile" : "non trovato"}</span>
+        <span class="v">
+          {remote.cloudflaredAvailable ? t("common.available") : t("common.notFound")}
+        </span>
       </div>
       <div class="cell">
-        <span class="k">Login Cloudflare</span>
-        <span class="v">{remote.cloudflareLoggedIn ? "eseguito" : "non eseguito"}</span>
+        <span class="k">{t("network.remote.cfLogin")}</span>
+        <span class="v">
+          {remote.cloudflareLoggedIn ? t("network.remote.loggedIn") : t("network.remote.loggedOut")}
+        </span>
       </div>
       <div class="cell">
-        <span class="k">IP pubblico</span><span class="v">{admin.publicIp ?? "—"}</span>
+        <span class="k">{t("network.remote.publicIp")}</span>
+        <span class="v">{admin.publicIp ?? "—"}</span>
       </div>
     </div>
 
     {#if publicUrl}
-      <figure class="qr">
-        <QrCodeImg value={publicUrl} size={220} alt={`QR code per aprire ${publicUrl}`} />
-        <figcaption>Inquadra da fuori casa per collegare il telefono</figcaption>
-      </figure>
+      <div class="urls">
+        <UrlEntry url={publicUrl} qrCaption={t("network.remote.qrCaption")} qrOpen />
+      </div>
     {/if}
 
     {#if remote.error}
       <Banner tone="error">{remote.error}</Banner>
     {/if}
     {#if !remote.cloudflaredAvailable}
-      <Banner tone="info">
-        Installa <code>cloudflared</code> per aprire un tunnel temporaneo, oppure
-        imposta <code>REKORD_PUBLIC_URL</code> se usi già un tuo indirizzo.
-      </Banner>
+      <Banner tone="info">{t("network.remote.noCloudflared")}</Banner>
     {/if}
 
     <ActionRow>
       {#if remote.status === "running" || remote.status === "starting"}
         <Button variant="secondary" disabled={locked} onclick={() => void admin.remoteStop()}>
-          Ferma tunnel
+          {t("network.remote.stop")}
         </Button>
       {:else}
         <Button disabled={locked} onclick={() => void admin.remoteStart()}>
-          Avvia tunnel
+          {t("network.remote.start")}
         </Button>
       {/if}
       {#if remote.cloudflareLoggedIn}
         <Button variant="ghost" disabled={locked} onclick={() => void admin.remoteLogout()}>
-          Esci da Cloudflare
+          {t("network.remote.logout")}
         </Button>
       {:else}
         <Button variant="ghost" disabled={locked} onclick={() => void admin.remoteLogin()}>
-          Accedi a Cloudflare
+          {t("network.remote.login")}
         </Button>
       {/if}
       <Button variant="ghost" disabled={admin.busy} onclick={() => void admin.loadPublicIp()}>
-        Leggi IP pubblico
+        {t("network.remote.readIp")}
       </Button>
     </ActionRow>
   {/if}
 </Panel>
 
-<Panel title="Operazioni di macchina">
-  <p class="hint">
-    Cartella musica, scansioni, credenziali, ripristini e tunnel si comandano da
-    qui. Di norma servono l'account Default e questo computer; il tunnel non
-    conta come locale.
-  </p>
+<Panel title={t("network.machine.title")}>
+  <p class="hint">{t("network.machine.hint")}</p>
   {#if access}
     <div class="grid">
       <div class="cell">
-        <span class="k">Account Default</span>
-        <span class="v">{access.isDefaultAccount ? "sì" : "no"}</span>
+        <span class="k">{t("network.machine.defaultAccount")}</span>
+        <span class="v">{yesNo(access.isDefaultAccount)}</span>
       </div>
       <div class="cell">
-        <span class="k">Richiesta locale</span>
-        <span class="v">{access.local ? "sì" : "no"}</span>
+        <span class="k">{t("network.machine.local")}</span>
+        <span class="v">{yesNo(access.local)}</span>
       </div>
       <div class="cell">
-        <span class="k">Puoi comandare l'hub</span>
-        <span class="v">{access.canManageMachine ? "sì" : "no"}</span>
+        <span class="k">{t("network.machine.canManage")}</span>
+        <span class="v">{yesNo(access.canManageMachine)}</span>
       </div>
     </div>
     <label class="check">
@@ -155,15 +167,10 @@
         disabled={admin.busy || !access.local || !access.isDefaultAccount}
         onchange={(e) => void admin.setRemoteAdmin(e.currentTarget.checked)}
       />
-      <span>
-        Consenti queste operazioni anche da remoto (rete locale e tunnel)
-      </span>
+      <span>{t("network.machine.allowRemote")}</span>
     </label>
     {#if !access.local}
-      <Banner tone="info">
-        Stai usando il pannello da remoto: l'interruttore si cambia solo dal
-        computer dell'hub.
-      </Banner>
+      <Banner tone="info">{t("network.machine.remoteNote")}</Banner>
     {/if}
   {/if}
 </Panel>
@@ -193,7 +200,7 @@
   }
 
   .hint {
-    margin: 0 0 0.8rem;
+    margin: 0.4rem 0 0.8rem;
     color: var(--rk-muted);
     font-size: var(--rk-fs-sm);
     line-height: var(--rk-lh);
@@ -211,29 +218,15 @@
     margin-top: 0.2rem;
   }
 
-  .qr {
+  .sub {
+    margin: 0.9rem 0 0.2rem;
+    font-size: var(--rk-fs-xs);
+    color: var(--rk-muted);
+  }
+
+  .urls {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
-    gap: 0.4rem;
-    margin: 0.8rem 0 0;
-  }
-
-  .qr :global(img) {
-    display: block;
-    width: min(180px, 46vw);
-    height: auto;
-    aspect-ratio: 1 / 1;
-    padding: 0.5rem;
-    border: 1px solid var(--rk-line);
-    border-radius: var(--rk-radius-lg);
-    background: #fff;
-  }
-
-  .qr figcaption {
-    color: var(--rk-muted);
-    font-size: var(--rk-fs-xs);
-    max-width: min(220px, 60vw);
-    line-height: var(--rk-lh);
+    margin: 0 0 0.6rem;
   }
 </style>

@@ -564,3 +564,12 @@
   --rk-cta: linear-gradient(135deg, var(--rk-accent), color-mix(in srgb, var(--rk-accent-2) 80%, white 4%));
 }
 
+
+/* Status colours on light themes: the dark-theme values are tuned as text on a
+   dark surface and drop under 3:1 on a pale one. */
+:root[data-theme$="-light"],
+[data-theme$="-light"] {
+  --rk-success: #15803d;
+  --rk-warning: #b45309;
+  --rk-danger-solid: #b91c1c;
+}

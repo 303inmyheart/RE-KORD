@@ -12,15 +12,26 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=overlays-content"
     />
     <meta name="theme-color" content="#0a0e14" />
-    <title>RE-KORD 5.1.0</title>
+    <title>RE-KORD</title>
+    <meta name="description" content="RE-KORD — la tua musica, dal tuo hub." />
     <link rel="icon" href="/favicon.ico" sizes="any" />
-    <link rel="icon" type="image/png" href="/REKORDlogo.png" />
-    <link rel="apple-touch-icon" href="/REKORDlogo.png" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <!-- PWA: solo il client servito dall'hub la usa (vedi src/lib/platform/pwa.ts). -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- Nessun font da Google Fonts: l'hub e i gusci nativi devono funzionare
+         senza Internet (e la CSP di Tauri non lo permetterebbe). Inter e
+         JetBrains Mono arrivano col pacchetto (packages/ui/src/styles/fonts.css);
+         qui si anticipa solo Inter latino, l'unico file che serve al primo paint. -->
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400..800;1,14..32,400..800&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;700;800&display=swap"
-      rel="stylesheet"
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      crossorigin
+      href="../../packages/ui/node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2"
     />
   </head>
   <body>

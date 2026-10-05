@@ -1,16 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Panel } from "@rekord/ui";
+  import { Button, Panel } from "@rekord/ui";
   import UiIcon from "../components/icons/UiIcon.svelte";
-  import {
-    buildAchievementsSnapshot,
-    type AchievementIconKind,
-  } from "../lib/achievements";
-  import { player } from "../lib/player";
+  import { type AchievementIconKind } from "../lib/achievements";
+  import { t } from "../lib/i18n.svelte";
+  import { accountAchievements } from "../lib/accountLevel.svelte";
+  import { plectrRecords } from "../lib/plectr/persist.svelte";
   import { session } from "../lib/session.svelte";
-  import { trackGenre } from "../lib/trackMoods";
 
   let bootstrapped = $state(false);
+  let loadError = $state(false);
 
   function iconName(
     kind: AchievementIconKind,
@@ -47,72 +46,52 @@
     }
   }
 
-  const snapshot = $derived.by(() => {
-    session.tick;
-    session.favorites;
-    session.playlists;
-    session.catalogTracks;
-    session.stats;
-    if (!bootstrapped) return null;
-    const playlists = session.playlists;
-    const playlistTrackCount = playlists.reduce(
-      (s, p) => s + (p.track_count ?? 0),
-      0,
-    );
-    return buildAchievementsSnapshot({
-      playCounts: player.allPlayCounts(),
-      tracks: session.catalogTracks,
-      favoritesCount: session.favorites.length,
-      playlistsCount: playlists.length,
-      playlistTrackCount,
-      libraryTrackCount:
-        session.stats?.track_count ?? session.catalogTracks.length,
-      shuffleBlocks:
-        player.getExcludedRelPaths().size + player.getExcludedAlbumIds().size,
-      genreForTrack: (t) => trackGenre(t),
-      plectrTracksPlayed: 0,
-    });
-  });
+  /** Same snapshot as the rail ring and Settings › Account (one level everywhere). */
+  const snapshot = $derived(bootstrapped ? accountAchievements.snapshot : null);
 
   const loading = $derived(!bootstrapped || snapshot == null);
   const unlocked = $derived(
     snapshot?.achievements.filter((a) => a.unlocked).length ?? 0,
   );
 
+  async function load() {
+    loadError = false;
+    try {
+      await Promise.all([
+        session.ensureCatalogTracks(),
+        session.favorites.length ? Promise.resolve() : session.loadFavorites(),
+        session.playlists.length ? Promise.resolve() : session.loadPlaylists(),
+        session.stats ? Promise.resolve() : session.loadStats(),
+      ]);
+    } catch {
+      // Badges still render from what is known; the banner says it may be partial.
+      loadError = true;
+    } finally {
+      bootstrapped = true;
+    }
+  }
+
   onMount(() => {
-    void (async () => {
-      try {
-        await Promise.all([
-          session.ensureCatalogTracks(),
-          session.favorites.length ? Promise.resolve() : session.loadFavorites(),
-          session.playlists.length ? Promise.resolve() : session.loadPlaylists(),
-          session.stats ? Promise.resolve() : session.loadStats(),
-        ]);
-      } finally {
-        bootstrapped = true;
-      }
-    })();
-    return player.subscribe(() => {
-      session.tick += 1;
-    });
+    void load();
+    void plectrRecords.ensureReady();
   });
 </script>
 
 <div class="view-page achievements-page">
   <header class="achievements-page__hero view-page__intro">
     <section class="achievements-hero rk-surface-card">
+      <div class="achievements-hero__pills">
+        <span class="achievements-hero__level-pill" aria-busy={loading || undefined}>
+          {loading || !snapshot ? "·" : t("achievements.levelBadge", { n: snapshot.level.level })}
+        </span>
+      </div>
       <h1 class="achievements-hero__rank">
-        {#if loading || !snapshot}
-          …
-        {:else}
-          <span class="achievements-hero__level">Livello {snapshot.level.level} -</span
-          >{' '}{snapshot.level.title}
-        {/if}
+        {loading || !snapshot ? "…" : snapshot.level.title}
       </h1>
 
       <div
         class="achievements-hero__xp"
-        aria-label="Avanzamento esperienza"
+        aria-label={t("achievements.xpAria")}
         aria-busy={loading}
       >
         <div
@@ -122,8 +101,8 @@
           aria-valuemin={0}
           aria-valuemax={100}
           aria-label={loading || !snapshot
-            ? "Caricamento progresso achievement"
-            : `Progresso livello ${snapshot.progress.pct}%`}
+            ? t("achievements.xpLoadingAria")
+            : t("achievements.xpProgressAria", { pct: snapshot.progress.pct })}
         >
           {#if loading || !snapshot}
             <div class="achievements-xp__fill achievements-xp__fill--shimmer"></div>
@@ -136,32 +115,33 @@
         </div>
         <p class="achievements-hero__xp-caption">
           {#if loading || !snapshot}
-            Caricamento statistiche e achievement…
+            {t("achievements.xpLoadingHint")}
           {:else}
             <strong>{snapshot.totalXp}</strong>
-            {" XP · "}
-            {Math.max(0, snapshot.level.xpMax + 1 - snapshot.totalXp)} al grado
-            successivo
+            {` ${t("achievements.xpLabel")} · `}
+            {t("achievements.xpToNext", {
+              n: Math.max(0, snapshot.level.xpMax + 1 - snapshot.totalXp),
+            })}
           {/if}
         </p>
       </div>
 
-      <ul class="achievements-hero__stats" aria-label="Traguardi di ascolto">
+      <ul class="achievements-hero__stats" aria-label={t("achievements.metricsAria")}>
         <li>
           <strong>{loading || !snapshot ? "—" : snapshot.signals.totalPlays}</strong>
-          <span>Riproduzioni totali</span>
+          <span>{t("achievements.metricPlays")}</span>
         </li>
         <li>
           <strong>
             {loading || !snapshot ? "—" : snapshot.signals.artistsWithPlays}
           </strong>
-          <span>Artisti esplorati</span>
+          <span>{t("achievements.metricArtists")}</span>
         </li>
         <li>
           <strong>
             {loading || !snapshot ? "—" : snapshot.signals.favoritesCount}
           </strong>
-          <span>Preferiti</span>
+          <span>{t("achievements.metricFavorites")}</span>
         </li>
         <li>
           <strong>
@@ -169,59 +149,66 @@
               ? "—"
               : `${unlocked}/${snapshot.achievements.length}`}
           </strong>
-          <span>Badge</span>
+          <span>{t("achievements.metricBadges")}</span>
         </li>
         <li
           class="achievements-hero__stat-streak"
-          title="Serie giornaliera di ascolto"
+          title={t("achievements.streakTitle")}
         >
           <strong>{loading || !snapshot ? "—" : snapshot.streak}</strong>
-          <span>giorni di fila</span>
+          <span>{t("achievements.streakDays")}</span>
         </li>
       </ul>
 
       <div class="achievements-hero__actions">
-        <button
-          type="button"
-          class="primary-btn"
+        <Button
           onclick={() => {
             session.studioPane = "listen";
             session.navigate("studio");
           }}
         >
-          Continua ad ascoltare
-        </button>
-        <button
-          type="button"
-          class="ghost-btn"
-          onclick={() => session.navigate("statistics")}
-        >
-          Vedi statistiche
-        </button>
+          <UiIcon name="headphones" />
+          {t("achievements.ctaListen")}
+        </Button>
+        <Button variant="ghost" onclick={() => session.navigate("statistics")}>
+          <UiIcon name="chart" />
+          {t("achievements.ctaStats")}
+        </Button>
       </div>
     </section>
   </header>
 
+  {#if loadError}
+    <div class="achievements-page__error rk-surface-card" role="alert">
+      <p>{t("achievements.loadError")}</p>
+      <button type="button" class="rk-btn rk-btn--secondary rk-btn--sm" onclick={() => void load()}>
+        <UiIcon name="sync" />
+        {t("achievements.retry")}
+      </button>
+    </div>
+  {/if}
+
   <div class="achievements-page__main view-page__main" aria-busy={loading}>
-    <Panel title="Tutti i badge" class="achievements-board">
+    <Panel title={t("achievements.boardTitle")} class="achievements-board">
       {#snippet actions()}
         <p class="achievements-board__lead">
           {#if loading || !snapshot}
             …
           {:else}
-            {unlocked}/{snapshot.achievements.length}
+            {t("achievements.boardLead", { n: unlocked, total: snapshot.achievements.length })}
           {/if}
         </p>
       {/snippet}
       <ul class="achievements-badge-grid">
         {#each snapshot?.achievements ?? [] as ach (ach.id)}
+          {@const title = t(ach.titleKey)}
           <li
             class="achievements-badge"
             class:achievements-badge--unlocked={ach.unlocked}
             class:achievements-badge--locked={!ach.unlocked}
             aria-label={ach.unlocked
-              ? `Sbloccato: ${ach.title}`
-              : `Da sbloccare: ${ach.title}`}
+              ? t("achievements.achUnlockedAria", { title })
+              : t("achievements.achLockedAria", { title })}
           >
             <span class="achievements-badge__icon" aria-hidden="true">
               <UiIcon
@@ -230,8 +217,8 @@
               />
             </span>
             <div class="achievements-badge__body">
-              <h3>{ach.title}</h3>
-              <p>{ach.desc}</p>
+              <h3>{title}</h3>
+              <p>{t(ach.descKey)}</p>
               <span class="achievements-badge__xp">+{ach.xpBonus} XP</span>
             </div>
             <span
@@ -248,3 +235,22 @@
     </Panel>
   </div>
 </div>
+
+<style>
+  .achievements-page__error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--rk-space-lg);
+    flex-wrap: wrap;
+    padding: var(--rk-space-lg) var(--rk-space-xl);
+    border-color: color-mix(in srgb, var(--rk-danger) 40%, var(--rk-line));
+    background: color-mix(in srgb, var(--rk-danger-soft) 60%, var(--rk-surface));
+  }
+
+  .achievements-page__error p {
+    margin: 0;
+    font-size: var(--rk-fs-sm);
+    color: var(--rk-ink);
+  }
+</style>

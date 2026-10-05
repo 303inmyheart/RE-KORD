@@ -508,11 +508,67 @@
   margin: 0;
   padding: var(--rk-space-md) var(--rk-space-lg);
   line-height: var(--rk-lh);
-  opacity: 0.92;
   border: 1px solid var(--rk-line);
   border-radius: var(--rk-radius-sm);
   background: color-mix(in srgb, var(--rk-surface-2) 50%, transparent);
   font-size: var(--rk-fs-sm);
+  color: var(--rk-muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--rk-space-xs);
+}
+
+.tools-dl-disclaimer__text {
+  margin: 0;
+}
+
+/* yt-dlp version, stale warning and update action. */
+.studio-ytdlp {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rk-space-xs) var(--rk-space-md);
+  font-size: var(--rk-fs-sm);
+}
+
+.studio-ytdlp__state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rk-space-xs);
+  color: var(--rk-muted-strong, var(--rk-muted));
+  font-variant-numeric: tabular-nums;
+}
+
+.studio-ytdlp__state::before {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--rk-success, #34d399);
+  flex-shrink: 0;
+}
+
+.studio-ytdlp.is-stale .studio-ytdlp__state::before {
+  background: var(--rk-warning, #f59e0b);
+}
+
+.studio-ytdlp.is-missing .studio-ytdlp__state::before {
+  background: var(--rk-danger, #f87171);
+}
+
+.studio-ytdlp__chip {
+  padding: 0 var(--rk-space-xs);
+  border-radius: var(--rk-radius-round);
+  border: 1px solid var(--rk-line);
+  font-size: var(--rk-fs-xs);
+}
+
+.studio-ytdlp__warn {
+  color: var(--rk-warning, #f59e0b);
+}
+
+.studio-ytdlp__note {
+  flex-basis: 100%;
   color: var(--rk-muted);
 }
 
@@ -534,20 +590,6 @@
   gap: var(--rk-space-lg) var(--rk-space-xl);
 }
 
-.studio-log {
-  margin-top: var(--rk-space-3xs);
-  padding-top: var(--rk-space-lg);
-  border-top: 1px solid var(--rk-line);
-}
-
-.studio-log > label {
-  display: block;
-  margin-bottom: var(--rk-space-xs);
-}
-
-.studio-log .linkbtn {
-  margin-top: var(--rk-space-sm);
-}
 
 /* Download dest search + progress (legacy parity, --rk-* tokens) */
 .tools-dl-dest__pathrow {
@@ -735,4 +777,90 @@
   flex-wrap: wrap;
   gap: var(--rk-space-sm);
   margin: var(--rk-space-sm) 0;
+}
+
+/* Running download: always on top of the pane, with its Stop button. */
+.dl-status-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rk-space-sm);
+  padding: var(--rk-space-md) var(--rk-space-lg);
+  border: 1px solid color-mix(in srgb, var(--rk-accent) 38%, var(--rk-line));
+  border-radius: var(--rk-radius-lg);
+  background: color-mix(in srgb, var(--rk-accent) 7%, var(--rk-surface-2));
+}
+
+.dl-status-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--rk-space-md);
+  min-width: 0;
+}
+
+.dl-status-card__title {
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.dl-status-card__stop {
+  flex-shrink: 0;
+}
+
+.dl-status-card .dl-progress-block + .dl-progress-block {
+  padding-top: var(--rk-space-sm);
+}
+
+.dl-progress-rail--indeterminate .dl-progress-fill {
+  width: 35%;
+  animation: rk-dl-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes rk-dl-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+.tools-dl-releases__trackcount.is-pending {
+  opacity: 0.6;
+}
+
+.tools-dl-releases__counting {
+  color: var(--rk-muted);
+}
+
+.tools-dl-releases__existing {
+  margin: var(--rk-space-sm) 0 0;
+}
+
+/* Explore results: one row per hit, actions on the right. */
+.studio-explore-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: var(--rk-space-sm);
+  margin-top: var(--rk-space-md);
+}
+
+.studio-catalog-list-tile--row {
+  flex-direction: row;
+  align-items: center;
+}
+
+.studio-catalog-list-tile--row .studio-catalog-list-tile__main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.studio-catalog-list-tile__text {
+  min-width: 0;
+}
+
+.studio-catalog-list-tile--row .studio-catalog-list-tile__actions {
+  flex: 0 0 auto;
+  width: auto;
 }

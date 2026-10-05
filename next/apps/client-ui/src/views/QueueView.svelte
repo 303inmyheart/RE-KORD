@@ -1,10 +1,13 @@
 <script lang="ts">
+  import { Button, EmptyState } from "@rekord/ui";
   import PageToolbar from "../components/PageToolbar.svelte";
   import TrackRow from "../components/TrackRow.svelte";
   import UiIcon from "../components/icons/UiIcon.svelte";
+  import { collectionSubtitle } from "../lib/collectionInfo";
   import { dragReorder } from "../lib/dragReorder";
   import { t } from "../lib/i18n.svelte";
   import { player } from "../lib/player";
+  import { prefsRevision } from "../lib/prefsRevision.svelte";
   import { session } from "../lib/session.svelte";
   import {
     virtualList,
@@ -25,63 +28,75 @@
   let dragging = $state(false);
   let rowsApi: VirtualListApi | null = null;
 
-  const virtualized = $derived(session.queue.length >= VIRTUAL_FROM);
-  const windowQueue = $derived(
-    virtualized ? session.queue.slice(win.start, win.end) : session.queue,
-  );
+  const queue = $derived(session.queue);
+  const empty = $derived(queue.length === 0);
+  const virtualized = $derived(queue.length >= VIRTUAL_FROM);
+  const windowQueue = $derived(virtualized ? queue.slice(win.start, win.end) : queue);
   const currentOffscreen = $derived(
     virtualized &&
       session.currentIndex >= 0 &&
       (session.currentIndex < win.start || session.currentIndex >= win.end),
   );
+  const subtitle = $derived(
+    empty
+      ? ""
+      : collectionSubtitle(queue, {
+          position: session.currentIndex >= 0 ? session.currentIndex + 1 : null,
+        }),
+  );
+  /**
+   * Rows re-derive play counts / moods / exclusions only when those change,
+   * not on every player tick (every row is "in queue" here anyway).
+   */
+  const rowRevision = $derived(prefsRevision.any);
 </script>
 
 <div class="view-page view-page--split queue-page">
-  <PageToolbar
-    eyebrow={t("page.queue.eyebrow")}
-    title={t("page.queue.title", { count: session.queue.length })}
-  >
+  <PageToolbar eyebrow={t("page.queue.eyebrow")} title={t("nav.queue")} {subtitle}>
     {#snippet icon()}
       <UiIcon name="list" class="section-head__ic" />
     {/snippet}
     {#snippet tools()}
-      {#if currentOffscreen}
-        <button
-          type="button"
-          class="ghost-btn ghost-btn--sm"
-          onclick={() => rowsApi?.scrollToIndex(session.currentIndex)}
-        >
-          {t("page.queue.goToCurrent")}
-        </button>
+      {#if !empty}
+        {#if currentOffscreen}
+          <Button variant="ghost" size="sm" onclick={() => rowsApi?.scrollToIndex(session.currentIndex)}>
+            {t("page.queue.goToCurrent")}
+          </Button>
+        {/if}
+        <input
+          class="ghost-input queue-name-input"
+          bind:value={session.queuePlaylistName}
+          placeholder={t("page.queue.namePlaceholder")}
+          aria-label={t("page.queue.namePlaceholder")}
+        />
+        <Button onclick={() => void session.saveQueueAsPlaylist()}>
+          <UiIcon name="queueMusic" />
+          {t("page.queue.save")}
+        </Button>
+        <Button variant="ghost" tone="danger" onclick={() => player.clearQueue()}>
+          {t("page.queue.clear")}
+        </Button>
       {/if}
-      <input
-        class="ghost-input queue-name-input"
-        bind:value={session.queuePlaylistName}
-        placeholder={t("page.queue.namePlaceholder")}
-        aria-label={t("page.queue.namePlaceholder")}
-      />
-      <button
-        type="button"
-        class="primary-btn"
-        disabled={!session.queue.length}
-        onclick={() => void session.saveQueueAsPlaylist()}
-      >
-        {t("page.queue.save")}
-      </button>
-      <button
-        type="button"
-        class="ghost-btn danger"
-        disabled={!session.queue.length}
-        onclick={() => player.clearQueue()}
-      >
-        {t("page.queue.clear")}
-      </button>
     {/snippet}
   </PageToolbar>
 
   <section class="rk-surface-card queue-page__list view-page__body">
-    {#if session.queue.length === 0}
-      <p class="panel-empty">{t("page.queue.empty")}</p>
+    {#if empty}
+      <EmptyState title={t("core.queue.emptyTitle")} body={t("core.queue.emptyBody")}>
+        {#snippet icon()}<UiIcon name="list" />{/snippet}
+        {#snippet action()}
+          <div class="empty-actions">
+            <Button onclick={() => session.navigate("library")}>
+              <UiIcon name="disc" />
+              {t("core.queue.emptyCta")}
+            </Button>
+            <Button variant="ghost" onclick={() => void session.shuffleLibrary()}>
+              <UiIcon name="shuffle" />
+              {t("core.queue.emptyShuffle")}
+            </Button>
+          </div>
+        {/snippet}
+      </EmptyState>
     {:else}
       <ul
         class="list"
@@ -89,11 +104,11 @@
         style:padding-bottom={virtualized ? `${win.padBottom}px` : null}
         use:dragReorder={{
           onmove: (from, to) => player.moveQueueItem(from, to),
-          enabled: session.queue.length > 1,
+          enabled: queue.length > 1,
           ondragstate: (active) => (dragging = active),
         }}
         use:virtualList={{
-          count: session.queue.length,
+          count: queue.length,
           threshold: VIRTUAL_FROM,
           frozen: dragging,
           onwindow: (next) => (win = next),
@@ -110,9 +125,9 @@
             onreorderStep={(delta) =>
               player.moveQueueItem(
                 index,
-                Math.max(0, Math.min(session.queue.length - 1, index + delta)),
+                Math.max(0, Math.min(queue.length - 1, index + delta)),
               )}
-            revision={session.tick}
+            revision={rowRevision}
             favorited={session.favoriteIds.has(track.id)}
             active={index === session.currentIndex}
             playlistOptions={session.playlistOptions}
@@ -137,5 +152,12 @@
     display: flex;
     flex-direction: column;
     gap: var(--rk-space-lg);
+  }
+
+  .empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: center;
   }
 </style>

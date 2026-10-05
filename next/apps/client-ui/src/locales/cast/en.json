@@ -1,0 +1,14 @@
+{
+  "cast.device": "device",
+  "cast.start": "Cast to a device (Chromecast / Google Home)",
+  "cast.stopOn": "Stop casting to {{name}}",
+  "cast.connecting": "Connecting to the device…",
+  "cast.connected": "Casting started",
+  "cast.connectedTo": "Casting to {{name}}",
+  "cast.castingTo": "Casting to {{name}}",
+  "cast.connectFailed": "Cast connection failed: {{error}}",
+  "cast.noLanUrl": "The Cast device cannot reach the hub: open the client from its local network address (not localhost) or enable remote access.",
+  "cast.loadFailed": "Could not cast “{{title}}”: {{error}}",
+  "cast.sessionFailed": "the device did not accept the connection (code {{code}})",
+  "cast.timeout": "the Cast device did not answer"
+}

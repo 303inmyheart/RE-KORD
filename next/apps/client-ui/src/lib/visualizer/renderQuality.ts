@@ -1,6 +1,7 @@
 /** Compact render target + viz loop cadence (ported from legacy renderQuality). */
 
 import { BREAKPOINTS, mediaDown } from "../breakpoints";
+import { platformCaps } from "../platformCaps";
 
 export type LoopCadence = { minFrameIntervalMs: number };
 
@@ -47,7 +48,23 @@ export function isCompactRenderTarget(): boolean {
   );
 }
 
-/** Visualizer Ascolta: cap FPS condiviso desktop + mobile. */
+/**
+ * Software-composited WebKitGTK (Tauri on Linux, Epiphany): every canvas frame
+ * is presented through the CPU, so loops run at a lower cap there.
+ */
+export function isSlowCanvasEngine(): boolean {
+  return platformCaps.webkitGtk;
+}
+
+/** 30 fps cap everywhere, 24 fps on WebKitGTK. */
+export function vizFrameCapMs(): number {
+  return isSlowCanvasEngine() ? 42 : 33;
+}
+
+/**
+ * Visualizer Ascolta while playing (paused: the caller draws one frame and
+ * stops). Capped at 30 fps, 24 fps on WebKitGTK, lower on compact targets.
+ */
 export function vizLoopCadence(opts: {
   expanded: boolean;
   isPlaying: boolean;
@@ -55,16 +72,11 @@ export function vizLoopCadence(opts: {
   if (prefersReducedMotion()) {
     return { minFrameIntervalMs: opts.isPlaying ? 100 : 250 };
   }
+  const cap = vizFrameCapMs();
   if (opts.expanded) {
-    if (opts.isPlaying) {
-      return { minFrameIntervalMs: isCompactRenderTarget() ? 28 : 0 };
-    }
-    return { minFrameIntervalMs: 33 };
+    return { minFrameIntervalMs: isCompactRenderTarget() ? Math.max(cap, 42) : cap };
   }
-  if (opts.isPlaying) {
-    return { minFrameIntervalMs: isCompactRenderTarget() ? 48 : 33 };
-  }
-  return { minFrameIntervalMs: isCompactRenderTarget() ? 80 : 66 };
+  return { minFrameIntervalMs: isCompactRenderTarget() ? Math.max(cap, 48) : cap };
 }
 
 /** Cap DPR canvas (viz panel / expanded). */
@@ -74,4 +86,41 @@ export function canvasDprCap(opts?: { lite?: boolean }): number {
   if (opts?.lite && isCompactRenderTarget()) return Math.min(base, 1.35);
   if (isCompactRenderTarget()) return Math.min(base, 1.5);
   return Math.min(base, opts?.lite ? 1.75 : 2);
+}
+
+export function isDocumentHidden(): boolean {
+  return typeof document !== "undefined" && document.hidden;
+}
+
+/** Nebula full view: ≤30 fps while the user interacts, 15 fps when idle. */
+export const NEBULA_ACTIVE_FRAME_MS = 33;
+export const NEBULA_IDLE_FRAME_MS = 66;
+/** Dashboard preview: animates only on hover / focus, ≤10 fps. */
+export const NEBULA_PREVIEW_FRAME_MS = 100;
+
+/**
+ * Sonic Nebula loop cadence. `active` = recent pointer / camera interaction
+ * (playback alone never forces full speed: the beat pulse reads fine at 15 fps).
+ */
+export function nebulaLoopCadence(opts: { active: boolean; preview?: boolean }): LoopCadence {
+  if (prefersReducedMotion()) return { minFrameIntervalMs: 250 };
+  if (isDocumentHidden()) return { minFrameIntervalMs: 250 };
+  if (opts.preview) return { minFrameIntervalMs: NEBULA_PREVIEW_FRAME_MS };
+  if (opts.active) {
+    return {
+      minFrameIntervalMs: isSlowCanvasEngine() || isCompactRenderTarget()
+        ? Math.max(NEBULA_ACTIVE_FRAME_MS, vizFrameCapMs())
+        : NEBULA_ACTIVE_FRAME_MS,
+    };
+  }
+  return { minFrameIntervalMs: NEBULA_IDLE_FRAME_MS };
+}
+
+/** DiscoWall Listen: FPS cap panel vs expanded, active vs calm (legacy discowallLoopCadence). */
+export function discowallLoopCadence(opts: { expanded: boolean; active: boolean }): LoopCadence {
+  if (prefersReducedMotion()) return { minFrameIntervalMs: 120 };
+  if (isDocumentHidden()) return { minFrameIntervalMs: 250 };
+  const cap = vizFrameCapMs();
+  if (opts.expanded && opts.active) return { minFrameIntervalMs: cap };
+  return { minFrameIntervalMs: isCompactRenderTarget() ? Math.max(cap, 48) : Math.max(cap, 40) };
 }

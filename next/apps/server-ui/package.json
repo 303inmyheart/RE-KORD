@@ -1,12 +1,14 @@
 {
   "name": "@rekord/server-ui",
-  "version": "5.1.0",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json --threshold error",
+    "test": "node --experimental-strip-types --no-warnings=ExperimentalWarning --test \"src/**/*.test.mjs\""
   },
   "dependencies": {
     "@rekord/ui": "workspace:*"
@@ -14,6 +16,7 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "svelte": "^5.19.0",
+    "svelte-check": "^4",
     "typescript": "^5.7.3",
     "vite": "^6.0.7"
   }

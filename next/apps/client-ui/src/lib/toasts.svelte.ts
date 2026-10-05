@@ -7,6 +7,8 @@
  * hub cannot leave the user thinking the work finished.
  */
 
+import { t } from "./i18n.svelte";
+
 export type ToastTone = "ok" | "error" | "info";
 
 export type Toast = {
@@ -41,9 +43,9 @@ const DEFAULT_MS = 3800;
 const ERROR_MS = 6500;
 
 export function describeError(e: unknown): string {
-  if (e instanceof Error) return e.message;
+  if (e instanceof Error) return e.message || t("core.error.unexpected");
   const s = String(e);
-  return s === "[object Object]" ? "Errore inatteso" : s;
+  return s === "[object Object]" ? t("core.error.unexpected") : s;
 }
 
 type Countdown = {
@@ -121,6 +123,15 @@ class ToastStore {
     return this.show(message, { ...options, tone: "error" });
   }
 
+  /**
+   * Short confirmation of something the user just toggled without looking
+   * at it (keyboard shortcuts: shuffle on/off, repeat...). Replaces the
+   * previous one with the same key instead of stacking.
+   */
+  flash(message: string, key = "flash") {
+    return this.show(message, { tone: "info", duration: 1600, key });
+  }
+
   /** Error toast from a caught value, without repeating the formatting. */
   fail(e: unknown, options?: Omit<ToastOptions, "tone">) {
     return this.error(describeError(e), options);
@@ -164,6 +175,12 @@ class ToastStore {
       this.keyOf.delete(id);
     }
     this.items = this.items.filter((t) => t.id !== id);
+  }
+
+  /** Dismiss the toast shown with `key`, if it is still on screen. */
+  dismissKey(key: string) {
+    const id = this.byKey.get(key);
+    if (id != null) this.dismiss(id);
   }
 
   clear() {

@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import { sheetDrag, SHEET_MEDIA_QUERY } from "../lib/sheetDrag";
+  import { modalSurface } from "../lib/modalStack";
+  import { uiLabels } from "../lib/uiLabels.svelte";
 
   let {
     open = false,
@@ -8,6 +10,8 @@
     eyebrow = "",
     lede = "",
     panelClass = "",
+    closeLabel,
+    history = true,
     onclose,
     lead,
     children,
@@ -20,6 +24,10 @@
     lede?: string;
     /** Extra class on the dialog panel (e.g. wider reading layouts). */
     panelClass?: string;
+    /** Accessible name of the × button; defaults to `setUiLabels({ close })`. */
+    closeLabel?: string;
+    /** Push a history entry so Android Back closes the dialog first. */
+    history?: boolean;
     onclose: () => void;
     /** Optional media / avatar left of the title block (entity-info parity). */
     lead?: Snippet;
@@ -27,9 +35,15 @@
     footer?: Snippet;
   } = $props();
 
+  const uid = $props.id();
+  const titleId = `${uid}-title`;
+  const ledeId = `${uid}-lede`;
+
   /* Su telefono il dialogo è un foglio dal basso e si può spingere giù per
      chiuderlo; su schermo grande resta un pannello centrato. */
-  let isSheet = $state(false);
+  let isSheet = $state(
+    typeof window !== "undefined" && window.matchMedia(SHEET_MEDIA_QUERY).matches,
+  );
 
   $effect(() => {
     const mq = window.matchMedia(SHEET_MEDIA_QUERY);
@@ -40,10 +54,6 @@
     mq.addEventListener("change", sync);
     return () => mq.removeEventListener("change", sync);
   });
-
-  function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape") onclose();
-  }
 
   /** Escape stacking contexts (glass panels / isolation) — same as CustomThemeDialog. */
   function portal(node: HTMLElement) {
@@ -57,7 +67,6 @@
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="rk-modal-back rk-sheet-back"
     role="presentation"
@@ -65,16 +74,18 @@
     onclick={(e) => {
       if (e.target === e.currentTarget) onclose();
     }}
-    onkeydown={onKey}
   >
+    <!-- Escape, focus trap / restore, scroll lock and Back: modalSurface. -->
     <div
       class={["rk-modal", "rk-sheet", "rk-scroll", panelClass]
         .filter(Boolean)
         .join(" ")}
       role="dialog"
       aria-modal="true"
-      aria-labelledby="rk-modal-title"
+      aria-labelledby={titleId}
+      aria-describedby={lede ? ledeId : undefined}
       tabindex="-1"
+      use:modalSurface={{ onclose, focusPanelOnly: isSheet, history }}
       use:sheetDrag={{
         enabled: isSheet,
         gripSelector: "[data-sheet-grip]",
@@ -91,18 +102,19 @@
             {#if eyebrow}
               <p class="eyebrow">{eyebrow}</p>
             {/if}
-            <h2 id="rk-modal-title">{title}</h2>
+            <h2 id={titleId}>{title}</h2>
             {#if lede}
-              <p class="lede">{lede}</p>
+              <p class="lede" id={ledeId}>{lede}</p>
             {/if}
           </div>
         </div>
         <button
           type="button"
           class="close"
+          data-modal-close
           onclick={onclose}
-          aria-label="Chiudi"
-          title="Chiudi"
+          aria-label={closeLabel ?? uiLabels.close}
+          title={closeLabel ?? uiLabels.close}
         >
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
             <path
@@ -146,7 +158,7 @@
     overscroll-behavior: contain;
     background: var(--rk-surface);
     border: 1px solid var(--rk-line);
-    border-radius: var(--rk-radius-lg);
+    border-radius: var(--rk-radius-sheet);
     box-shadow: var(--rk-shadow);
     outline: none;
   }
@@ -193,12 +205,15 @@
     line-height: var(--rk-lh-snug);
   }
 
+  /* Often a file path: UI font, wrapped at spaces and dashes first and only
+     split inside a long token when it really does not fit. */
   .lede {
-    margin: 0.35rem 0 0;
-    font-size: var(--rk-fs-xs);
+    margin: 0.3rem 0 0;
+    font-size: var(--rk-fs-2);
+    line-height: var(--rk-lh-snug);
     color: var(--rk-muted);
-    word-break: break-all;
-    font-family: var(--rk-mono);
+    overflow-wrap: anywhere;
+    word-break: normal;
   }
 
   .close {

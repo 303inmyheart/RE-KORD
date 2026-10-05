@@ -1,32 +1,181 @@
+import { isGatewayStatus, hubErrorKey } from "./lib/hubErrors";
+import { t } from "./lib/i18n.svelte";
+
+/** Default ceiling for a JSON call. */
+export const DEFAULT_TIMEOUT_MS = 15_000;
+/** Probes, legacy sync, tunnel start: they shell out or walk the disk. */
+export const LONG_TIMEOUT_MS = 120_000;
+/** Uploads and downloads of backups. */
+export const UPLOAD_TIMEOUT_MS = 10 * 60_000;
+/** A scan answers only when it is done; a big library on a slow disk takes a while. */
+export const SCAN_TIMEOUT_MS = 30 * 60_000;
+
 export type Envelope<T> = { ok: boolean; data?: T; error?: string };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(path, {
-      headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
-      ...init,
-    });
-  } catch {
-    throw new Error("Hub non raggiungibile");
+export type ApiErrorKind =
+  /** fetch() rejected: hub stopped, network down, connection dropped. */
+  | "network"
+  /** Our own timer gave up. */
+  | "timeout"
+  /** The hub answered with a non-2xx status or `ok: false`. */
+  | "http"
+  /** 2xx with a body we could not read. */
+  | "parse";
+
+export class ApiError extends Error {
+  readonly kind: ApiErrorKind;
+  /** HTTP status; 0 when no response arrived. */
+  readonly status: number;
+  /** `error` field of the hub envelope, when there was one. */
+  readonly code: string | null;
+
+  constructor(
+    kind: ApiErrorKind,
+    message: string,
+    opts: { status?: number; code?: string | null } = {},
+  ) {
+    super(message);
+    this.name = "ApiError";
+    this.kind = kind;
+    this.status = opts.status ?? 0;
+    this.code = opts.code ?? null;
   }
-  const body = (await res.json().catch(() => ({}))) as Envelope<T> &
-    Record<string, unknown>;
-  if (!res.ok || body.ok === false) {
-    throw new Error(body.error || res.statusText || `HTTP ${res.status}`);
+}
+
+export function isApiError(e: unknown, kind?: ApiErrorKind): e is ApiError {
+  return e instanceof ApiError && (kind == null || e.kind === kind);
+}
+
+/** Text for any thrown value, already localised for ApiError. */
+export function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+type RequestOptions = RequestInit & {
+  /** Milliseconds before giving up. */
+  timeoutMs?: number;
+};
+
+function httpError(res: Response, body: unknown, fallback?: string): ApiError {
+  const env = (body && typeof body === "object" ? body : null) as { error?: unknown } | null;
+  const code = env && typeof env.error === "string" && env.error ? env.error : null;
+  const mapped = hubErrorKey(res.status, code, env != null);
+  const message = mapped
+    ? t(mapped.key, mapped.vars)
+    : code || fallback || t("errors.http", { status: res.status });
+  return new ApiError("http", message, { status: res.status, code });
+}
+
+/**
+ * `fetch` with a timer. Body reading happens inside `read`, so the timer also
+ * covers a hub that sends headers and then stalls.
+ */
+async function fetchHub<R>(
+  path: string,
+  opts: RequestOptions,
+  read: (res: Response) => Promise<R>,
+): Promise<R> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...init } = opts;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const fail = (e: unknown): never => {
+    if (e instanceof ApiError) throw e;
+    if (timedOut) {
+      throw new ApiError("timeout", t("errors.timeout", { seconds: Math.round(timeoutMs / 1000) }));
+    }
+    throw new ApiError("network", t("errors.network"));
+  };
+  try {
+    let res: Response;
+    try {
+      res = await fetch(path, { ...init, signal: controller.signal });
+    } catch (e) {
+      return fail(e);
+    }
+    try {
+      return await read(res);
+    } catch (e) {
+      return fail(e);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Parse a JSON body; empty or HTML bodies (proxy pages) become an ApiError. */
+async function readJson(res: Response): Promise<Record<string, unknown> | null> {
+  const text = await res.text();
+  if (!text.trim()) return null;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function unwrap<T>(res: Response, body: Record<string, unknown> | null): T {
+  if (!res.ok || body?.ok === false) throw httpError(res, body);
+  if (body == null) {
+    if (isGatewayStatus(res.status)) throw httpError(res, null);
+    throw new ApiError("parse", t("errors.badResponse", { status: res.status }), {
+      status: res.status,
+    });
   }
   if ("data" in body && body.data !== undefined) return body.data as T;
   return body as unknown as T;
 }
 
+async function request<T>(path: string, init: RequestOptions = {}): Promise<T> {
+  const headers: Record<string, string> = {
+    ...(typeof init.body === "string" ? { "Content-Type": "application/json" } : {}),
+    ...((init.headers as Record<string, string> | undefined) ?? {}),
+  };
+  return fetchHub(path, { ...init, headers }, async (res) => unwrap<T>(res, await readJson(res)));
+}
+
 /** Multipart upload (no JSON content type). */
 async function upload<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(path, { method: "POST", body: form });
-  const body = (await res.json().catch(() => ({}))) as Envelope<T>;
-  if (!res.ok || body.ok === false) {
-    throw new Error(body.error || res.statusText || `HTTP ${res.status}`);
-  }
-  return body.data as T;
+  return fetchHub(
+    path,
+    { method: "POST", body: form, timeoutMs: UPLOAD_TIMEOUT_MS },
+    async (res) => unwrap<T>(res, await readJson(res)),
+  );
+}
+
+/**
+ * Binary download (backups, exports). HTTP errors still read the JSON
+ * envelope, so a 403 says why instead of opening a tab full of JSON.
+ */
+async function download(path: string, fallbackName: string): Promise<void> {
+  const { blob, name } = await fetchHub(
+    path,
+    { cache: "no-store", timeoutMs: UPLOAD_TIMEOUT_MS },
+    async (res) => {
+      if (!res.ok) throw httpError(res, await readJson(res));
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = /filename\*?=(?:UTF-8''|"?)([^";\n]+)/i.exec(cd);
+      const raw = (m?.[1] || "").replace(/^["']|["']$/g, "").trim() || fallbackName;
+      let decoded = raw;
+      try {
+        decoded = decodeURIComponent(raw);
+      } catch {
+        /* already plain */
+      }
+      return { blob: await res.blob(), name: decoded };
+    },
+  );
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.rel = "noopener";
+  a.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 export type Health = {
@@ -59,6 +208,25 @@ export type ScanReport = {
   removedArtists: number;
   mode: string;
   music_root: string;
+  /** Indexed tracks whose file was not found this time. */
+  missingTracks?: number;
+  /** Why the removal of missing tracks was skipped (absent when nothing was skipped). */
+  pruneSkipped?: string | null;
+  /** Folders (relative to the music root) that could not be listed; their tracks were kept. */
+  unreadableDirs?: string[];
+};
+
+/** `POST /library/sync-legacy-meta` (hub `LegacySyncReport`, camelCase). */
+export type LegacySyncReport = {
+  albumMetaMerged?: number;
+  trackMetaMerged?: number;
+  accountsMoodsSynced?: number;
+  moodsImported?: number;
+  favoritesLinked?: number;
+  playlistsImported?: number;
+  playlistTracksLinked?: number;
+  selectionsImported?: number;
+  accountsRegistry?: number;
 };
 
 export type PreferredLayout = "artist/album/track" | "artist/track" | "flat" | "tags";
@@ -109,6 +277,11 @@ export type JobEntry = {
   finishedAt: string | null;
   error: string | null;
   cancelable: boolean;
+  /** Stable codes for `label` / `message` / `error` (translated with `params`). */
+  titleCode?: string | null;
+  detailCode?: string | null;
+  errorCode?: string | null;
+  params?: Record<string, unknown> | null;
 };
 
 export type BinaryStatus = {
@@ -150,12 +323,25 @@ export type Diagnostics = {
   disk: { totalBytes: number; availableBytes: number } | null;
   errors: { count: number; recent: ErrorEntry[] };
   allowRemoteAdmin: boolean;
+  /**
+   * Last scan guard outcome and the favorites / playlist entries parked until
+   * their file comes back.
+   */
+  library?: {
+    lastPruneSkipped?: string | null;
+    parkedFavorites?: number;
+    parkedPlaylistTracks?: number;
+  };
 };
 
 export type ActivityEntry = {
   ts: string;
   kind: string;
   message: string;
+  /** `"{kind}.{action}"` plus placeholders, when the hub wrote a coded line. */
+  action?: string | null;
+  code?: string | null;
+  params?: Record<string, unknown> | null;
   accountId?: string | null;
   accountName?: string | null;
 };
@@ -207,6 +393,8 @@ export type RemoteAccessState = {
   cloudflaredPath: string | null;
   cloudflareLoggedIn: boolean;
   lanUrl: string | null;
+  /** Every LAN address of the hub, best first (`lanUrl` is the first one). */
+  lanUrls?: string[];
   bind: string;
   cloudflaredAvailable: boolean;
   machineAccess?: MachineAccess;
@@ -236,10 +424,16 @@ export const api = {
     }),
 
   scan: (mode: ScanMode = "incremental") =>
-    request<ScanReport>(`/api/v1/library/scan?mode=${mode}`, { method: "POST" }),
+    request<ScanReport>(`/api/v1/library/scan?mode=${mode}`, {
+      method: "POST",
+      timeoutMs: SCAN_TIMEOUT_MS,
+    }),
 
   probe: () =>
-    request<LibraryProbeReport>("/api/v1/library/probe", { method: "POST" }),
+    request<LibraryProbeReport>("/api/v1/library/probe", {
+      method: "POST",
+      timeoutMs: LONG_TIMEOUT_MS,
+    }),
   getLayout: () => request<LibraryLayoutConfig>("/api/v1/library/layout"),
   setLayout: (layout: Partial<LibraryLayoutConfig>) =>
     request<LibraryLayoutConfig>("/api/v1/library/layout", {
@@ -258,8 +452,9 @@ export const api = {
     request<{ started: boolean }>("/api/v1/library/thumbnails", { method: "POST" }),
 
   syncLegacyMeta: () =>
-    request<Record<string, number>>("/api/v1/library/sync-legacy-meta", {
+    request<LegacySyncReport>("/api/v1/library/sync-legacy-meta", {
       method: "POST",
+      timeoutMs: UPLOAD_TIMEOUT_MS,
     }),
 
   jobs: () => request<JobEntry[]>("/api/v1/jobs"),
@@ -297,10 +492,10 @@ export const api = {
     request<AccountsResponse>(`/api/v1/accounts/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
-  accountExportUrl: (id: string) =>
-    `/api/v1/accounts/${encodeURIComponent(id)}/export`,
+  exportAccount: (id: string) =>
+    download(`/api/v1/accounts/${encodeURIComponent(id)}/export`, `rekord-account-${id}.zip`),
 
-  backupUrl: () => "/api/v1/backup/kord-data",
+  downloadBackup: () => download("/api/v1/backup/kord-data", "rekord-backup.zip"),
   restore: (file: File) => {
     const form = new FormData();
     form.append("file", file);
@@ -328,6 +523,7 @@ export const api = {
     request<RemoteAccessState>("/api/v1/remote-access/start", {
       method: "POST",
       body: "{}",
+      timeoutMs: LONG_TIMEOUT_MS,
     }),
   remoteStop: () =>
     request<RemoteAccessState>("/api/v1/remote-access/stop", {
@@ -337,7 +533,7 @@ export const api = {
   remoteLogin: () =>
     request<{ loginUrl: string; note: string; cloudflareLoggedIn: boolean }>(
       "/api/v1/remote-access/login",
-      { method: "POST", body: "{}" },
+      { method: "POST", body: "{}", timeoutMs: LONG_TIMEOUT_MS },
     ),
   remoteLogout: () =>
     request<RemoteAccessState>("/api/v1/remote-access/logout", {

@@ -2,11 +2,12 @@
   import Button from "./Button.svelte";
   import TextInput from "./TextInput.svelte";
   import ActionRow from "./ActionRow.svelte";
+  import { uiLabels } from "../lib/uiLabels.svelte";
 
   let {
     value = $bindable(""),
-    placeholder = "Cerca…",
-    buttonLabel = "Cerca",
+    placeholder,
+    buttonLabel,
     onsearch,
     oninput,
   }: {
@@ -22,9 +23,9 @@
   <TextInput
     type="search"
     bind:value
-    {placeholder}
+    placeholder={placeholder ?? uiLabels.searchPlaceholder}
     oninput={() => oninput?.()}
     onkeydown={(e) => e.key === "Enter" && onsearch?.()}
   />
-  <Button variant="ghost" onclick={() => onsearch?.()}>{buttonLabel}</Button>
+  <Button variant="ghost" onclick={() => onsearch?.()}>{buttonLabel ?? uiLabels.search}</Button>
 </ActionRow>

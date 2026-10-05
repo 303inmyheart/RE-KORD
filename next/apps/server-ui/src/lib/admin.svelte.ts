@@ -14,8 +14,20 @@ import {
   type RemoteAccessState,
   type ScanMode,
   type WatcherStatus,
+  errorText,
+  isApiError,
+  type LegacySyncReport,
+  type ScanReport,
 } from "../api";
 import type { StatItem } from "@rekord/ui";
+import {
+  formatBytes,
+  formatDateTime,
+  formatDuration,
+  formatNumber,
+  formatPercent,
+  t,
+} from "./i18n.svelte";
 
 export type SectionId =
   | "status"
@@ -28,48 +40,43 @@ export type SectionId =
   | "integrations"
   | "network";
 
-export const SECTIONS: { id: SectionId; label: string }[] = [
-  { id: "status", label: "Stato" },
-  { id: "library", label: "Libreria" },
-  { id: "jobs", label: "Job" },
-  { id: "diagnostics", label: "Diagnostica" },
-  { id: "activity", label: "Attività" },
-  { id: "backup", label: "Backup" },
-  { id: "accounts", label: "Account" },
-  { id: "integrations", label: "Integrazioni" },
-  { id: "network", label: "Rete" },
+/** Section ids in rail order; labels are `nav.<id>`, ledes `lede.<id>`. */
+export const SECTIONS: SectionId[] = [
+  "status",
+  "library",
+  "jobs",
+  "diagnostics",
+  "activity",
+  "backup",
+  "accounts",
+  "integrations",
+  "network",
 ];
 
-/** Bytes → human size, used for disk and DB figures. */
-export function humanBytes(bytes?: number | null): string {
-  if (bytes == null || !Number.isFinite(bytes)) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+export const humanBytes = formatBytes;
+export const humanTime = formatDateTime;
+export const humanDuration = formatDuration;
+
+export const LAYOUT_IDS: PreferredLayout[] = ["artist/album/track", "artist/track", "flat", "tags"];
+
+/** Localised name of a library layout id; unknown ids are shown as they are. */
+export function layoutLabel(id?: string | null): string {
+  if (!id) return "—";
+  return (LAYOUT_IDS as string[]).includes(id) ? t(`layout.${id}`) : id;
 }
 
-export function humanTime(iso?: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
-}
+/** What the panel knows about the last scan's removal guard. */
+export type PruneNotice = {
+  /** Hub reason (English, technical). */
+  reason: string;
+  missing: number | null;
+  /** Where it came from: this session's scan, diagnostics, or the activity log. */
+  source: "scan" | "hub" | "activity";
+  at: string | null;
+};
 
-export function humanDuration(secs?: number | null): string {
-  if (secs == null || !Number.isFinite(secs)) return "—";
-  const s = Math.max(0, Math.trunc(secs));
-  const days = Math.floor(s / 86400);
-  const hours = Math.floor((s % 86400) / 3600);
-  const mins = Math.floor((s % 3600) / 60);
-  if (days > 0) return `${days}g ${hours}h`;
-  if (hours > 0) return `${hours}h ${mins}m`;
-  if (mins > 0) return `${mins}m ${s % 60}s`;
-  return `${s}s`;
-}
+/** Activity line the hub writes when the guard kept vanished tracks. */
+const PRUNE_ACTIVITY_RE = /^(\d+) tracce non trovate ma mantenute: (.+)$/;
 
 function today(): string {
   const d = new Date();
@@ -100,6 +107,12 @@ class AdminSession {
   publicIp = $state<string | null>(null);
   access = $state<MachineAccess | null>(null);
 
+  /** Report of the last scan started from this panel (the hub keeps no copy). */
+  lastScan = $state<ScanReport | null>(null);
+  lastScanFinishedAt = $state<string | null>(null);
+  /** Latest scan outcome read from today's activity log (scans started elsewhere). */
+  activityScan = $state<{ ts: string; notice: PruneNotice | null } | null>(null);
+
   busy = $state(false);
   message = $state("");
   error = $state("");
@@ -112,47 +125,82 @@ class AdminSession {
 
   readonly canManage = $derived(this.access?.canManageMachine !== false);
 
+  /**
+   * Removal skipped by the mass-deletion guard on the most recent scan:
+   * hub meta when served, else the newest of this session's scan and the
+   * activity log.
+   */
+  readonly pruneNotice = $derived.by((): PruneNotice | null => {
+    const hub = this.diagnostics?.library;
+    if (hub && "lastPruneSkipped" in hub) {
+      const reason = hub.lastPruneSkipped?.trim();
+      return reason ? { reason, missing: null, source: "hub", at: null } : null;
+    }
+    const fromScan: PruneNotice | null = this.lastScan?.pruneSkipped
+      ? {
+          reason: this.lastScan.pruneSkipped,
+          missing: this.lastScan.missingTracks ?? null,
+          source: "scan",
+          at: this.lastScanFinishedAt,
+        }
+      : null;
+    const act = this.activityScan;
+    if (!act) return fromScan;
+    if (!this.lastScanFinishedAt) return act.notice;
+    return Date.parse(act.ts) > Date.parse(this.lastScanFinishedAt) ? act.notice : fromScan;
+  });
+
+  /** Favorites / playlist entries waiting for their file (null when the hub does not say). */
+  readonly parked = $derived.by(() => {
+    const lib = this.diagnostics?.library;
+    if (!lib || (lib.parkedFavorites == null && lib.parkedPlaylistTracks == null)) return null;
+    return {
+      favorites: lib.parkedFavorites ?? 0,
+      playlistTracks: lib.parkedPlaylistTracks ?? 0,
+    };
+  });
+
   readonly statItems = $derived.by((): StatItem[] => {
     const h = this.health;
     const s = this.stats;
     const version = h?.version ? `v${h.version}` : "";
+    const count = (n: number | null | undefined) => (n == null ? "—" : formatNumber(n));
     return [
-      { label: "Servizio", value: `${h?.service ?? "—"} ${version}`.trim() },
-      { label: "Brani", value: s?.track_count ?? "—" },
-      { label: "Album", value: s?.album_count ?? "—" },
-      { label: "Artisti", value: s?.artist_count ?? "—" },
+      { label: t("stats.service"), value: `${h?.service ?? "—"} ${version}`.trim() },
+      { label: t("stats.tracks"), value: count(s?.track_count) },
+      { label: t("stats.albums"), value: count(s?.album_count) },
+      { label: t("stats.artists"), value: count(s?.artist_count) },
       {
-        label: "Ultimo scan",
-        value: this.scanning ? "in corso…" : humanTime(s?.last_scan_at),
+        label: t("stats.lastScan"),
+        value: this.scanning ? t("stats.scanning") : formatDateTime(s?.last_scan_at),
       },
-      { label: "Job attivi", value: this.diagnostics?.jobs.active ?? 0 },
+      { label: t("stats.activeJobs"), value: count(this.diagnostics?.jobs.active ?? 0) },
       {
-        label: "Spazio libero",
-        value: humanBytes(
+        label: t("stats.freeSpace"),
+        value: formatBytes(
           this.diagnostics?.disk?.availableBytes ?? this.stats?.disk_available_bytes,
         ),
       },
-      { label: "Attivo da", value: humanDuration(this.diagnostics?.uptimeSecs) },
+      { label: t("stats.uptime"), value: formatDuration(this.diagnostics?.uptimeSecs) },
     ];
   });
 
   /** Wrap an action: single busy flag, message on success, error on failure. */
-  private async run(label: string, fn: () => Promise<string | void>) {
+  private async run(fn: () => Promise<string>) {
     this.busy = true;
     this.error = "";
     this.message = "";
     try {
-      const msg = await fn();
-      this.message = msg || label;
+      this.message = await fn();
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.error = errorText(e);
     } finally {
       this.busy = false;
     }
   }
 
   private fail(e: unknown) {
-    this.error = e instanceof Error ? e.message : String(e);
+    this.error = errorText(e);
   }
 
   async refresh() {
@@ -186,12 +234,15 @@ class AdminSession {
         case "status":
         case "diagnostics":
           this.diagnostics = await api.diagnostics();
+          if (section === "status") await this.loadScanActivity();
           break;
         case "library":
-          [this.layout, this.watcher] = await Promise.all([
+          [this.layout, this.watcher, this.diagnostics] = await Promise.all([
             api.getLayout(),
             api.watch(),
+            api.diagnostics(),
           ]);
+          await this.loadScanActivity();
           break;
         case "jobs":
           this.jobs = await api.jobs();
@@ -216,6 +267,42 @@ class AdminSession {
       }
     } catch (e) {
       this.fail(e);
+    }
+  }
+
+  /**
+   * The hub logs "N tracce non trovate ma mantenute: <reason>" when the guard
+   * keeps vanished tracks (watcher and startup scans included). The newest
+   * `scan` line of today tells whether the last scan skipped the removal.
+   * Best effort: a failure here never hides the section.
+   */
+  private async loadScanActivity() {
+    try {
+      const log = await api.activityLog({ scope: "system", limit: 200 });
+      const last = log.entries.find((e) => e.kind === "scan");
+      if (!last) {
+        this.activityScan = null;
+        return;
+      }
+      const coded =
+        last.code === "scan.pruneSkipped" && typeof last.params?.reason === "string"
+          ? { reason: last.params.reason, missing: Number(last.params.missing ?? NaN) }
+          : null;
+      const m = coded ? null : PRUNE_ACTIVITY_RE.exec(last.message.trim());
+      const found = coded ?? (m ? { reason: m[2], missing: Number(m[1]) } : null);
+      this.activityScan = {
+        ts: last.ts,
+        notice: found
+          ? {
+              reason: found.reason,
+              missing: Number.isFinite(found.missing) ? found.missing : null,
+              source: "activity",
+              at: last.ts,
+            }
+          : null,
+      };
+    } catch {
+      /* activity is optional context */
     }
   }
 
@@ -249,7 +336,12 @@ class AdminSession {
       const active = (this.diagnostics?.jobs.active ?? 0) > 0;
       if (!this.scanning && !active) {
         this.stopPolling();
-        this.message = `Libreria pronta: ${this.stats?.track_count ?? 0} brani.`;
+        if (this.section === "library" || this.section === "status") {
+          await this.loadScanActivity();
+        }
+        this.message = t("msg.libraryReady", {
+          count: formatNumber(this.stats?.track_count ?? 0),
+        });
       }
     } catch (e) {
       this.fail(e);
@@ -258,46 +350,71 @@ class AdminSession {
   }
 
   savePath() {
-    return this.run("Percorso salvato.", async () => {
+    return this.run(async () => {
       await api.setPath(this.musicRoot.trim());
       await this.refresh();
       if (this.scanning) {
         this.startPolling();
-        return "Percorso salvato — indicizzazione avviata…";
+        return t("msg.pathSavedIndexing");
       }
-      return "Percorso salvato.";
+      return t("msg.pathSaved");
     });
   }
 
   runScan(mode: ScanMode) {
-    return this.run("Scan avviato.", async () => {
+    return this.run(async () => {
       try {
         const r = await api.scan(mode);
+        this.lastScan = r;
+        this.lastScanFinishedAt = new Date().toISOString();
         await this.refresh();
-        const pruned = r.removedTracks + r.removedAlbums + r.removedArtists;
-        return `Scan ${r.mode}: ${r.indexedTracks} indicizzati, ${r.unchanged} invariati${
-          pruned > 0 ? `, ${r.removedTracks} rimossi` : ""
-        }.`;
+        const parts = [
+          t("msg.scanIndexed", { count: formatNumber(r.indexedTracks) }),
+          t("msg.scanUnchanged", { count: formatNumber(r.unchanged) }),
+        ];
+        if (r.removedTracks > 0) {
+          parts.push(t("msg.scanRemoved", { count: formatNumber(r.removedTracks) }));
+        }
+        if (r.pruneSkipped && (r.missingTracks ?? 0) > 0) {
+          parts.push(t("msg.scanKept", { count: formatNumber(r.missingTracks ?? 0) }));
+        }
+        return t("msg.scanDone", {
+          mode: t(`scan.mode.${r.mode === "full" ? "full" : "incremental"}`),
+          details: parts.join(", "),
+        });
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        // A startup autoscan may already hold the lock: follow it instead of failing.
-        if (/already in progress|in corso|Conflict/i.test(msg)) {
+        // A startup autoscan may already hold the lock, or the request outlived
+        // our timer while the hub keeps going: follow it instead of failing.
+        const busy = isApiError(e, "http") && e.status === 409;
+        if (busy || isApiError(e, "timeout")) {
           this.startPolling();
           await this.refresh();
-          return "Scan già in corso — attendo…";
+          return t(busy ? "msg.scanAlreadyRunning" : "msg.scanStillRunning");
         }
         throw e;
       }
     });
   }
 
+  /**
+   * A full scan bypasses the mass-deletion guard: every track whose file is
+   * not found leaves the catalog. Ask first.
+   */
+  confirmFullScan() {
+    if (!window.confirm(t("scan.confirmFull"))) return Promise.resolve();
+    return this.runScan("full");
+  }
+
   runProbe() {
-    return this.run("Struttura analizzata.", async () => {
+    return this.run(async () => {
       this.probe = await api.probe();
       const best = this.probe.candidates[0];
       return best
-        ? `Struttura rilevata: ${best.layout} (${Math.round(best.confidence * 100)}%).`
-        : "Nessuna struttura riconosciuta.";
+        ? t("msg.probeDetected", {
+            layout: layoutLabel(best.layout),
+            confidence: formatPercent(best.confidence),
+          })
+        : t("msg.probeNone");
     });
   }
 
@@ -308,9 +425,9 @@ class AdminSession {
   }
 
   saveLayout(next: Partial<LibraryLayoutConfig>) {
-    return this.run("Layout salvato.", async () => {
+    return this.run(async () => {
       this.layout = await api.setLayout(next);
-      return "Layout salvato.";
+      return t("msg.layoutSaved");
     });
   }
 
@@ -325,53 +442,54 @@ class AdminSession {
   }
 
   setWatch(enabled: boolean) {
-    return this.run("Watcher aggiornato.", async () => {
+    return this.run(async () => {
       this.watcher = await api.setWatch(enabled);
-      return enabled
-        ? "Watcher attivo: la libreria si aggiorna da sola."
-        : "Watcher disattivato.";
+      return enabled ? t("msg.watchOn") : t("msg.watchOff");
     });
   }
 
   rebuildThumbnails() {
-    return this.run("Miniature in rigenerazione.", async () => {
+    return this.run(async () => {
       await api.rebuildThumbnails();
       this.startPolling();
-      return "Rigenerazione miniature avviata.";
+      return t("msg.thumbsStarted");
     });
   }
 
   syncLegacyMeta() {
-    return this.run("Sincronizzazione legacy avviata.", async () => {
-      const r = await api.syncLegacyMeta();
+    return this.run(async () => {
+      const r: LegacySyncReport = await api.syncLegacyMeta();
       await this.refresh();
-      return `Metadati legacy importati: ${r.album_meta_merged ?? 0} album, ${
-        r.track_meta_merged ?? 0
-      } brani.`;
+      return t("msg.legacySynced", {
+        albums: formatNumber(r.albumMetaMerged ?? 0),
+        tracks: formatNumber(r.trackMetaMerged ?? 0),
+        favorites: formatNumber(r.favoritesLinked ?? 0),
+        playlists: formatNumber(r.playlistsImported ?? 0),
+      });
     });
   }
 
   cancelJob(id: string) {
-    return this.run("Job annullato.", async () => {
+    return this.run(async () => {
       await api.cancelJob(id);
       this.jobs = await api.jobs();
-      return "Job annullato.";
+      return t("msg.jobCanceled");
     });
   }
 
   clearJobs() {
-    return this.run("Storico job pulito.", async () => {
+    return this.run(async () => {
       const r = await api.clearJobs();
       this.jobs = await api.jobs();
-      return `Rimossi ${r.removed} job conclusi.`;
+      return t("msg.jobsCleared", { count: formatNumber(r.removed) });
     });
   }
 
   clearErrors() {
-    return this.run("Errori azzerati.", async () => {
+    return this.run(async () => {
       await api.clearErrors();
       this.diagnostics = await api.diagnostics();
-      return "Buffer errori azzerato.";
+      return t("msg.errorsCleared");
     });
   }
 
@@ -391,119 +509,140 @@ class AdminSession {
   createAccount() {
     const name = this.newAccountName.trim();
     if (!name) return Promise.resolve();
-    return this.run("Account creato.", async () => {
+    return this.run(async () => {
       const res = await api.createAccount(name);
       this.accounts = res.accounts;
       this.newAccountName = "";
-      return `Account “${name}” creato.`;
+      return t("msg.accountCreated", { name });
     });
   }
 
   renameAccount(id: string, name: string) {
-    return this.run("Account rinominato.", async () => {
+    return this.run(async () => {
       const res = await api.renameAccount(id, name.trim());
       this.accounts = res.accounts;
-      return "Account rinominato.";
+      return t("msg.accountRenamed");
     });
   }
 
   deleteAccount(id: string) {
-    return this.run("Account eliminato.", async () => {
+    return this.run(async () => {
       const res = await api.deleteAccount(id);
       this.accounts = res.accounts;
-      return "Account eliminato.";
+      return t("msg.accountDeleted");
+    });
+  }
+
+  exportAccount(id: string) {
+    return this.run(async () => {
+      await api.exportAccount(id);
+      return t("msg.accountExported");
+    });
+  }
+
+  downloadBackup() {
+    return this.run(async () => {
+      await api.downloadBackup();
+      return t("msg.backupDownloaded");
     });
   }
 
   restoreBackup(file: File) {
-    return this.run("Backup ripristinato.", async () => {
+    return this.run(async () => {
       const r = await api.restore(file);
       await this.refresh();
-      if (r.themeOnly) return "Tema importato.";
-      return `Backup v${r.version ?? "?"} ripristinato: ${r.scanned_tracks ?? 0} brani, ${
-        r.favorites ?? 0
-      } preferiti, ${r.playlists ?? 0} playlist.`;
+      if (r.themeOnly) return t("msg.themeImported");
+      return t("msg.backupRestored", {
+        version: r.version ?? "?",
+        tracks: formatNumber(r.scanned_tracks ?? 0),
+        favorites: formatNumber(r.favorites ?? 0),
+        playlists: formatNumber(r.playlists ?? 0),
+      });
     });
   }
 
   uploadCookies(file: File) {
-    return this.run("Cookie caricati.", async () => {
+    return this.run(async () => {
       this.config = await api.uploadCookies(file);
-      return "Cookie YouTube caricati.";
+      return t("msg.cookiesUploaded");
     });
   }
 
   clearCookies() {
-    return this.run("Cookie rimossi.", async () => {
+    return this.run(async () => {
       this.config = await api.clearCookies();
-      return "Cookie YouTube rimossi.";
+      return t("msg.cookiesRemoved");
     });
   }
 
   saveDiscogsToken() {
     const token = this.discogsToken.trim();
     if (!token) return Promise.resolve();
-    return this.run("Token salvato.", async () => {
+    return this.run(async () => {
       this.config = await api.setDiscogsToken(token);
       this.discogsToken = "";
-      return "Token Discogs salvato.";
+      return t("msg.discogsSaved");
     });
   }
 
   clearDiscogsToken() {
-    return this.run("Token rimosso.", async () => {
+    return this.run(async () => {
       this.config = await api.clearDiscogsToken();
-      return "Token Discogs rimosso.";
+      return t("msg.discogsRemoved");
     });
   }
 
   remoteStart() {
-    return this.run("Tunnel avviato.", async () => {
+    return this.run(async () => {
       this.remote = await api.remoteStart();
       return this.remote.publicUrl
-        ? `Tunnel attivo: ${this.remote.publicUrl}`
-        : "Tunnel in avvio…";
+        ? t("msg.tunnelRunning", { url: this.remote.publicUrl })
+        : t("msg.tunnelStarting");
     });
   }
 
   remoteStop() {
-    return this.run("Tunnel fermato.", async () => {
+    return this.run(async () => {
       this.remote = await api.remoteStop();
-      return "Tunnel fermato.";
+      return t("msg.tunnelStopped");
     });
   }
 
   remoteLogin() {
-    return this.run("Login Cloudflare registrato.", async () => {
+    return this.run(async () => {
       const r = await api.remoteLogin();
       window.open(r.loginUrl, "_blank", "noopener");
       this.remote = await api.remoteAccess();
-      return r.note;
+      return r.note || t("msg.cloudflareLogin");
     });
   }
 
   remoteLogout() {
-    return this.run("Logout Cloudflare eseguito.", async () => {
+    return this.run(async () => {
       this.remote = await api.remoteLogout();
-      return "Logout Cloudflare eseguito.";
+      return t("msg.cloudflareLogout");
     });
   }
 
   loadPublicIp() {
-    return this.run("IP pubblico letto.", async () => {
+    return this.run(async () => {
       const r = await api.publicIp();
       this.publicIp = r.ip;
-      return r.ip ? `IP pubblico: ${r.ip}` : "IP pubblico non disponibile.";
+      return r.ip ? t("msg.publicIp", { ip: r.ip }) : t("msg.publicIpNone");
     });
   }
 
   setRemoteAdmin(enabled: boolean) {
-    return this.run("Accesso remoto aggiornato.", async () => {
+    return this.run(async () => {
       this.access = await api.setRemoteAdmin(enabled);
-      return enabled
-        ? "Le operazioni di macchina sono ora consentite anche da remoto."
-        : "Le operazioni di macchina sono limitate a questo computer.";
+      return enabled ? t("msg.remoteAdminOn") : t("msg.remoteAdminOff");
     });
+  }
+
+  /** Feedback for actions that do not hit the hub (copy to clipboard…). */
+  notify(message: string, isError = false) {
+    this.message = isError ? "" : message;
+    this.error = isError ? message : "";
   }
 }
 

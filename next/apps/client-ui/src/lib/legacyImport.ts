@@ -5,6 +5,7 @@
 
 import { api, type Album, type Track } from "./api";
 import { writeStreakState } from "./achievements";
+import { i18n, t } from "./i18n.svelte";
 import { player } from "./player";
 import {
   normalizeCustomTheme,
@@ -34,6 +35,8 @@ export type LegacyImportReport = {
   excludedAlbums: number;
   theme: UiTheme;
   streak: boolean;
+  /** Tracks whose Plectr records were added or improved by the import. */
+  plectrBests: number;
   warnings: string[];
 };
 
@@ -59,6 +62,7 @@ type LegacyPlaylist = {
 
 type LegacySettings = {
   theme?: string;
+  locale?: string;
   restoreSession?: boolean;
   audioCrossfadeSec?: number;
   vizMode?: string;
@@ -66,6 +70,7 @@ type LegacySettings = {
   customTheme?: Partial<CustomThemeSettings>;
   glassSurfaces?: boolean;
   glassOpacity?: number;
+  plectrBests?: Record<string, unknown>;
 };
 
 /** Subset of old UserStateV1 we understand. */
@@ -79,6 +84,8 @@ export type LegacyUserState = {
   shuffleExcludedAlbumIds?: string[];
   shuffleExcludedTrackRelPaths?: string[];
   trackMoods?: Record<string, string[]>;
+  /** Legacy Plectr best scores, keyed by rel_path. */
+  plectrBests?: Record<string, unknown>;
 };
 
 type LegacyImportEnvelope = {
@@ -197,67 +204,124 @@ function isUserStateFileName(name: string): boolean {
   );
 }
 
+/** One legacy account found in a `.kord` folder. */
+export type KordAccountCandidate = {
+  /** Legacy account id (`default`, uuid…). */
+  id: string;
+  /** Name from `global_info/accounts.json`, or the id. */
+  name: string;
+  /** Path of its `user-state.json` inside the picked folder. */
+  path: string;
+  /** Size in bytes (a hint of how much there is to import). */
+  size: number;
+  /** The legacy default account. */
+  isDefault: boolean;
+  file: File;
+};
+
 /**
- * From a directory picker selection (`.kord` or music root containing it),
- * pick the best `user-state.json` (default account if accounts.json present).
+ * Accounts of a picked `.kord` folder (or of the music folder holding it):
+ * the ones `global_info/accounts.json` lists, each with its
+ * `<id>_info/user-state.json`. Folders of deleted accounts (not listed) are
+ * left out. Without `accounts.json`, every user-state file found is offered.
+ *
+ * Take a copy of `input.files` before clearing the input: the FileList is
+ * live and empties with it.
  */
-export async function pickUserStateFromKordFolder(
+export async function listKordFolderAccounts(
   files: FileList | File[],
-): Promise<{ state: LegacyUserState; sourcePath: string }> {
+): Promise<KordAccountCandidate[]> {
   const list = [...files];
   if (!list.length) {
-    throw new Error("Cartella vuota — seleziona la cartella .kord della libreria legacy.");
+    throw new Error(t("core.import.errEmptyFolder"));
   }
-
   const stateFiles = list.filter((f) => isUserStateFileName(fileRelPath(f)));
   if (!stateFiles.length) {
-    throw new Error(
-      "Nessun user-state.json trovato. Seleziona la cartella .kord (o la Music che la contiene).",
-    );
+    throw new Error(t("core.import.errNoUserState"));
   }
 
-  // Prefer account dirs: `<id>_info/user-state.json`
-  const accountStates = stateFiles.filter((f) =>
-    /(?:^|\/)[^/]+_info\/user-state\.json$/i.test(fileRelPath(f)),
-  );
-  const candidates = accountStates.length ? accountStates : stateFiles;
-
-  let preferredId: string | null = null;
-  const accountsFile = list.find((f) => {
-    const p = fileRelPath(f);
-    return (
-      p.endsWith("/global_info/accounts.json") ||
-      p === "global_info/accounts.json" ||
-      p.endsWith("/.kord/global_info/accounts.json")
-    );
-  });
+  let registry: { id: string; name: string }[] | null = null;
+  let defaultId = "default";
+  const accountsFile = list.find((f) => /(?:^|\/)global_info\/accounts\.json$/i.test(fileRelPath(f)));
   if (accountsFile) {
     try {
       const acc = JSON.parse(await accountsFile.text()) as {
         defaultAccountId?: string;
+        accounts?: { id?: unknown; name?: unknown }[];
       };
       if (typeof acc.defaultAccountId === "string" && acc.defaultAccountId) {
-        preferredId = acc.defaultAccountId;
+        defaultId = acc.defaultAccountId;
+      }
+      if (Array.isArray(acc.accounts)) {
+        registry = acc.accounts
+          .filter((a) => typeof a?.id === "string" && a.id)
+          .map((a) => ({
+            id: String(a.id),
+            name: typeof a.name === "string" && a.name.trim() ? a.name.trim() : String(a.id),
+          }));
       }
     } catch {
-      /* ignore */
+      /* unreadable registry: offer what is on disk */
     }
   }
 
-  let chosen = candidates[0]!;
-  if (preferredId) {
-    const hit = candidates.find((f) =>
-      fileRelPath(f).includes(`/${preferredId}_info/`),
-    );
-    if (hit) chosen = hit;
-  } else {
-    // Largest file ≈ richest state
-    chosen = candidates.reduce((a, b) => (b.size > a.size ? b : a), candidates[0]!);
+  const idOf = (f: File): string | null => {
+    const m = /(?:^|\/)([^/]+)_info\/user-state\.json$/i.exec(fileRelPath(f));
+    return m ? m[1]! : null;
+  };
+  const out: KordAccountCandidate[] = [];
+  if (registry?.length) {
+    for (const acc of registry) {
+      const file = stateFiles.find((f) => idOf(f) === acc.id);
+      if (!file) continue;
+      out.push({
+        id: acc.id,
+        name: acc.name,
+        path: fileRelPath(file),
+        size: file.size,
+        isDefault: acc.id === defaultId,
+        file,
+      });
+    }
   }
+  if (!out.length) {
+    for (const file of stateFiles) {
+      const id = idOf(file) ?? fileRelPath(file);
+      out.push({
+        id,
+        name: id,
+        path: fileRelPath(file),
+        size: file.size,
+        isDefault: id === defaultId,
+        file,
+      });
+    }
+  }
+  // Default first, then by name.
+  out.sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name));
+  return out;
+}
 
-  const raw = await chosen.text();
+/** Read and parse the chosen legacy account's state. */
+export async function readKordAccountState(
+  candidate: KordAccountCandidate,
+): Promise<{ state: LegacyUserState; sourcePath: string }> {
+  const raw = await candidate.file.text();
   const { state } = parseLegacyImportJson(raw);
-  return { state, sourcePath: fileRelPath(chosen) };
+  return { state, sourcePath: candidate.path };
+}
+
+/**
+ * @deprecated Picks one account without asking; use `listKordFolderAccounts`
+ * + `readKordAccountState` and let the user choose. Kept for old callers:
+ * prefers the legacy default account.
+ */
+export async function pickUserStateFromKordFolder(
+  files: FileList | File[],
+): Promise<{ state: LegacyUserState; sourcePath: string }> {
+  const candidates = await listKordFolderAccounts(files);
+  const chosen = candidates.find((c) => c.isDefault) ?? candidates[0]!;
+  return readKordAccountState(chosen);
 }
 
 /** Parse uploaded JSON (raw UserStateV1 or thin envelope). */
@@ -273,7 +337,7 @@ export function parseLegacyImportJson(raw: string): {
   const state = env.userState ?? env.state;
   if (!state || !isLegacyUserState(state)) {
     throw new Error(
-      "JSON non riconosciuto: seleziona un user-state.json della RE-KORD legacy (campo favorites/playlists/settings).",
+      t("core.import.errBadJson"),
     );
   }
   let streak: { count: number; lastDate: string } | undefined;
@@ -293,6 +357,14 @@ export async function applyLegacyUserState(
     albums: Album[];
     existingFavoriteIds: Set<number>;
     existingPlaylists: { id: string; name: string }[];
+    /**
+     * Legacy playlist id → hub playlist id from earlier imports (per account).
+     * Playlists are matched by their legacy id, never by name: legacy allowed
+     * several playlists with the same name ("Queue 21-06-2026" ×5).
+     */
+    legacyPlaylistIds?: Record<string, string>;
+    /** Called with every new legacy id → hub id pair, to be remembered. */
+    onPlaylistMapped?: (legacyId: string, hubId: string) => void;
     streak?: { count: number; lastDate: string };
     onProgress?: (p: LegacyImportProgress) => void;
   },
@@ -312,6 +384,7 @@ export async function applyLegacyUserState(
     excludedAlbums: 0,
     theme: "midnight",
     streak: false,
+    plectrBests: 0,
     warnings,
   };
 
@@ -358,7 +431,7 @@ export async function applyLegacyUserState(
       excludedAlbumIds.add(id);
       report.excludedAlbums += 1;
     } else {
-      warnings.push(`Album escluso non trovato: ${legacyId}`);
+      warnings.push(t("core.import.warnExcludedAlbumMissing", { id: legacyId }));
     }
   }
 
@@ -385,6 +458,10 @@ export async function applyLegacyUserState(
   const vizMode = normalizeVisualizerMode(
     settings.vizMode ?? settings.visualizerMode,
   );
+  const locale =
+    settings.locale === "en" || settings.locale === "it" || settings.locale === "de"
+      ? settings.locale
+      : null;
 
   const nextPrefs: Partial<UserPrefs> = {
     theme: report.theme,
@@ -401,8 +478,10 @@ export async function applyLegacyUserState(
     excludedAlbumIds: [...excludedAlbumIds],
     trackMoods,
     visualizerMode: vizMode,
+    ...(locale ? { locale } : {}),
   };
   patchUserPrefs(nextPrefs);
+  if (locale) i18n.setLocale(locale);
   applyTheme(report.theme, customTheme, { glassSurfaces, glassOpacity });
   player.setCrossfadeSec(crossfade);
   player.reloadExclusionsFromPrefs();
@@ -412,14 +491,28 @@ export async function applyLegacyUserState(
     report.streak = true;
   }
 
+  // —— Plectr records (synced setting, merged best-of) ——
+  const legacyBests = state.plectrBests ?? settings.plectrBests;
+  if (legacyBests && typeof legacyBests === "object") {
+    try {
+      // Lazy: the Plectr modules stay in their own chunk.
+      const { plectrRecords } = await import("./plectr/persist.svelte");
+      report.plectrBests = plectrRecords.importLegacyBests(legacyBests);
+    } catch (e) {
+      warnings.push(
+        t("core.import.plectrFailed", { error: e instanceof Error ? e.message : String(e) }),
+      );
+    }
+  }
+
   // —— Favorites (API) ——
   const favPaths = state.favorites ?? [];
-  opts.onProgress?.({ phase: "Preferiti", done: 0, total: favPaths.length });
+  opts.onProgress?.({ phase: t("core.import.phaseFavorites"), done: 0, total: favPaths.length });
   for (let i = 0; i < favPaths.length; i++) {
     const track = resolveTrack(index, favPaths[i]);
     if (!track) {
       report.favoritesSkip += 1;
-      warnings.push(`Preferito assente in libreria: ${favPaths[i]}`);
+      warnings.push(t("core.import.warnFavoriteMissing", { path: favPaths[i] }));
     } else if (opts.existingFavoriteIds.has(track.id)) {
       report.favoritesSkip += 1;
     } else {
@@ -430,40 +523,58 @@ export async function applyLegacyUserState(
       } catch (e) {
         report.favoritesSkip += 1;
         warnings.push(
-          `Preferito fallito (${favPaths[i]}): ${e instanceof Error ? e.message : String(e)}`,
+          t("core.import.warnFavoriteFailed", {
+            path: favPaths[i],
+            error: e instanceof Error ? e.message : String(e),
+          }),
         );
       }
     }
-    opts.onProgress?.({ phase: "Preferiti", done: i + 1, total: favPaths.length });
+    opts.onProgress?.({ phase: t("core.import.phaseFavorites"), done: i + 1, total: favPaths.length });
   }
 
   // —— Playlists (API) ——
   const playlists = state.playlists ?? [];
-  opts.onProgress?.({ phase: "Playlist", done: 0, total: playlists.length });
+  opts.onProgress?.({ phase: t("core.import.phasePlaylists"), done: 0, total: playlists.length });
   for (let pi = 0; pi < playlists.length; pi++) {
     const pl = playlists[pi]!;
-    const name = (pl.name || "Playlist importata").trim() || "Playlist importata";
-    let playlistId =
-      opts.existingPlaylists.find((p) => p.name === name)?.id ?? null;
-    if (!playlistId) {
+    const fallbackName = t("core.import.playlistDefaultName");
+    const name = (pl.name || fallbackName).trim() || fallbackName;
+    const legacyId = typeof pl.id === "string" && pl.id.trim() ? pl.id.trim() : null;
+    const mapped = legacyId ? opts.legacyPlaylistIds?.[legacyId] : undefined;
+    if (mapped && opts.existingPlaylists.some((p) => p.id === mapped)) {
+      // Imported before: its tracks are there already (adding them again
+      // would duplicate them — a playlist may hold a track twice).
+      report.playlistOk += 1;
+      opts.onProgress?.({
+        phase: t("core.import.phasePlaylists"),
+        done: pi + 1,
+        total: playlists.length,
+      });
+      continue;
+    }
+    let playlistId: string | null = null;
+    {
       try {
         const created = await api.createPlaylist(name);
         playlistId = created.id;
         opts.existingPlaylists.push({ id: created.id, name: created.name });
+        if (legacyId) opts.onPlaylistMapped?.(legacyId, created.id);
         report.playlistOk += 1;
       } catch (e) {
         warnings.push(
-          `Playlist «${name}» non creata: ${e instanceof Error ? e.message : String(e)}`,
+          t("core.import.warnPlaylistFailed", {
+            name,
+            error: e instanceof Error ? e.message : String(e),
+          }),
         );
         opts.onProgress?.({
-          phase: "Playlist",
+          phase: t("core.import.phasePlaylists"),
           done: pi + 1,
           total: playlists.length,
         });
         continue;
       }
-    } else {
-      report.playlistOk += 1;
     }
 
     for (const row of pl.tracks ?? []) {
@@ -481,7 +592,7 @@ export async function applyLegacyUserState(
       }
     }
     opts.onProgress?.({
-      phase: "Playlist",
+      phase: t("core.import.phasePlaylists"),
       done: pi + 1,
       total: playlists.length,
     });
@@ -489,7 +600,7 @@ export async function applyLegacyUserState(
 
   if (!opts.catalog.length) {
     warnings.push(
-      "Catalogo libreria vuoto: favoriti/playlist non risolti. Esegui uno scan e ripeti l’import.",
+      t("core.import.warnEmptyCatalog"),
     );
   }
 

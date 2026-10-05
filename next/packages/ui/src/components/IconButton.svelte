@@ -94,7 +94,16 @@
     background: transparent;
     border: 0;
     box-shadow: none;
-    outline: none;
+  }
+
+  .rk-icon:focus-visible {
+    outline: 2px solid var(--rk-focus);
+    outline-offset: 2px;
+  }
+
+  .rk-icon:disabled {
+    opacity: 1;
+    color: color-mix(in srgb, var(--rk-muted) 55%, transparent);
   }
 
   .rk-icon.bare:hover:not(:disabled) {

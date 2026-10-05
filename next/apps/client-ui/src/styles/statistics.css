@@ -44,10 +44,9 @@
 }
 
 .statistics-section__mode {
-  font-size: var(--rk-fs-2xs);
+  font-size: var(--rk-fs-1);
   font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: color-mix(in srgb, var(--rk-accent-2) 65%, var(--rk-muted) 35%);
   background: color-mix(in srgb, var(--rk-accent-2) 12%, var(--rk-surface-3) 88%);
   border: 1px solid color-mix(in srgb, var(--rk-accent-2) 28%, var(--rk-line) 72%);
@@ -270,10 +269,9 @@
 }
 
 .metric-card span {
-  font-size: var(--rk-fs-2xs);
+  font-size: var(--rk-fs-1);
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
+  letter-spacing: 0;
   color: var(--rk-muted);
 }
 

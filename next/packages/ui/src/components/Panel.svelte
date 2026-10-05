@@ -31,7 +31,7 @@
   .rk-panel {
     background: var(--rk-surface-2);
     border: 1px solid var(--rk-line);
-    border-radius: var(--rk-radius);
+    border-radius: var(--rk-radius-card);
     padding: 0.85rem 1rem 0.95rem;
     margin-bottom: 0;
     box-shadow: var(--rk-shadow);

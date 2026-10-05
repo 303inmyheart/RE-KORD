@@ -1,7 +1,8 @@
+import { DiscoWallRenderer } from "./discowall";
 import { binAmplitude, logBinT, sampleSpectrumLinear } from "./freqMap";
 import { isCompactRenderTarget } from "./renderQuality";
 
-/** Classic Listen visualizers (no DiscoWall / Plectr / Nebula). */
+/** Listen visualizers: the classic ones + DiscoWall (Plectr / Nebula are separate surfaces). */
 export type VizMode =
   | "bars"
   | "mirror"
@@ -9,7 +10,8 @@ export type VizMode =
   | "oscSoft"
   | "hmb"
   | "signals"
-  | "karaoke";
+  | "karaoke"
+  | "discowall";
 
 const BARS = 64;
 const MIRROR_BARS = 48;
@@ -309,14 +311,23 @@ export type VizCanvasDrawOptions = {
   analyser: AnalyserNode | null;
   isPlaying: boolean;
   expanded?: boolean;
+  /** DiscoWall only: playback position (s), drives beat phase / live notes. */
+  currentTime?: number;
+  /** DiscoWall only: stable key of the current track (seeds colours/layout). */
+  trackKey?: string | null;
 };
 
 export class VizCanvasEngine {
+  private disco: DiscoWallRenderer | null = null;
   private freq = new Uint8Array(2048);
   private time = new Uint8Array(FFT_OSC);
   private frame = 0;
   private peaksBars = new Float32Array(BARS);
   private peaksMir = new Float32Array(MIRROR_BARS);
+  /** [x, y|height] pairs of peak caps, batched into one path per frame. */
+  private peakScratch = new Float32Array(Math.max(BARS, MIRROR_BARS) * 2);
+  /** Low-res offscreen layer for the Signals glow (replaces per-frame shadowBlur). */
+  private glow: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
   private softXs: Float32Array | null = null;
   private softYs0: Float32Array | null = null;
   private softYs1: Float32Array | null = null;
@@ -345,7 +356,14 @@ export class VizCanvasEngine {
   };
   private lastTheme: string | undefined;
 
+  /** DiscoWall pulse still decaying: callers may keep a faster cadence. */
+  get discoActive(): boolean {
+    return this.disco?.active ?? false;
+  }
+
   resetForMode(mode: VizMode): void {
+    if (mode !== "discowall") this.disco = null;
+    else this.disco?.reset();
     this.peaksBars.fill(0);
     this.peaksMir.fill(0);
     if (mode === "signals") {
@@ -389,9 +407,96 @@ export class VizCanvasEngine {
     else if (p1) this.pal.pageL2 = p1;
   }
 
+  /**
+   * Idle placeholder for the bar modes (nothing playing / paused): a calm,
+   * low, static hill of bars at reduced opacity.
+   */
+  private drawIdleBars(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    n: number,
+    x0: number,
+    bar: number,
+    bw: number,
+    mirror: boolean,
+  ): void {
+    const pal = this.pal;
+    const midRgb = mix(pal.accent, pal.accent2, 0.45);
+    const maxH = h * (mirror ? 0.06 : 0.1);
+    const g = ctx.createLinearGradient(0, h - maxH - h * 0.04, 0, h);
+    g.addColorStop(0, rgba(pal.accent2, 0.42));
+    g.addColorStop(0.6, rgba(midRgb, 0.3));
+    g.addColorStop(1, rgba(pal.pageL2, 0.08));
+    ctx.fillStyle = mirror ? rgba(midRgb, 0.34) : g;
+    ctx.beginPath();
+    const mid = h * 0.5;
+    for (let i = 0; i < n; i++) {
+      const u = n <= 1 ? 0.5 : i / (n - 1);
+      const hill = Math.pow(Math.sin(Math.PI * u), 1.6);
+      const ripple = 0.78 + 0.22 * Math.sin(i * 0.9) * Math.cos(i * 0.37);
+      const v = (0.12 + 0.88 * hill) * ripple;
+      const x = x0 + i * bar;
+      if (mirror) {
+        const he = 1.5 + v * maxH;
+        ctx.rect(x, mid - he, bw, he * 2);
+      } else {
+        const hy = h * 0.025 + v * maxH;
+        ctx.rect(x, h - hy, bw, hy);
+      }
+    }
+    ctx.fill();
+  }
+
+  /** Low-res glow layer sized to the frame (≈¼ resolution, upscaled = soft blur). */
+  private glowLayer(w: number, h: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; scale: number } | null {
+    if (typeof document === "undefined") return null;
+    if (!this.glow) {
+      const canvas = document.createElement("canvas");
+      const gctx = canvas.getContext("2d");
+      if (!gctx) return null;
+      this.glow = { canvas, ctx: gctx };
+    }
+    const scale = 0.25;
+    const gw = Math.max(1, Math.ceil(w * scale));
+    const gh = Math.max(1, Math.ceil(h * scale));
+    const { canvas, ctx } = this.glow;
+    if (canvas.width !== gw || canvas.height !== gh) {
+      canvas.width = gw;
+      canvas.height = gh;
+    } else {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, gw, gh);
+    }
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    return { canvas, ctx, scale };
+  }
+
+  /**
+   * True when the last frame cannot change until something else does: no
+   * analyser data and a mode without its own idle motion (everything but
+   * Signals / DiscoWall). The caller may then stop redrawing.
+   */
+  lastFrameStatic = false;
+
   drawFrame(ctx: CanvasRenderingContext2D, opts: VizCanvasDrawOptions): void {
+    this.lastFrameStatic =
+      !opts.analyser && opts.mode !== "signals" && opts.mode !== "discowall";
     const { width: w, height: h, mode, analyser: an, isPlaying, expanded = false } = opts;
     this.frame += 1;
+    if (mode === "discowall") {
+      this.disco ??= new DiscoWallRenderer();
+      this.disco.draw(ctx, {
+        width: w,
+        height: h,
+        analyser: an,
+        isPlaying,
+        expanded,
+        currentTime: opts.currentTime ?? 0,
+        trackKey: opts.trackKey ?? null,
+      });
+      return;
+    }
     const tId = document.documentElement.dataset.theme ?? "";
     if (tId !== this.lastTheme) {
       this.lastTheme = tId;
@@ -878,17 +983,36 @@ export class VizCanvasEngine {
         ctx.globalAlpha = 1;
         fillSilkRibbon(ctx, xs, ys0, ys1, silkN, gMid);
 
+        // Glow: the three strands stroked thick into a ¼-res layer and
+        // upscaled (bilinear = soft blur) — replaces per-stroke shadowBlur.
+        if (!expanded) {
+          const glow = this.glowLayer(w, h);
+          if (glow) {
+            const gc = glow.ctx;
+            gc.lineJoin = "round";
+            gc.lineCap = "round";
+            const glowStrand = (ys: Float32Array, width: number, alpha: number, blur: number) => {
+              gc.beginPath();
+              softWavePath(gc, xs, ys, silkN);
+              gc.strokeStyle = rgba(midRgb, alpha * 0.45);
+              gc.lineWidth = width + blur * 1.1;
+              gc.stroke();
+            };
+            glowStrand(ys2, 2.1, 0.25, 10);
+            glowStrand(ys1, 2.45, 0.38, 14);
+            glowStrand(ys0, 2.15, 0.32, 12);
+            ctx.save();
+            ctx.imageSmoothingEnabled = true;
+            ctx.drawImage(glow.canvas, 0, 0, w, h);
+            ctx.restore();
+          }
+        }
+
         const strokeLayer = (
           ys: Float32Array,
           width: number,
           alpha: number,
-          blur: number,
         ) => {
-          ctx.save();
-          ctx.shadowBlur = expanded ? 0 : blur;
-          ctx.shadowColor = expanded
-            ? "transparent"
-            : rgba(midRgb, alpha * 0.35);
           ctx.beginPath();
           softWavePath(ctx, xs, ys, silkN);
           const gl = ctx.createLinearGradient(0, 0, w, 0);
@@ -900,12 +1024,11 @@ export class VizCanvasEngine {
           ctx.lineJoin = "round";
           ctx.lineCap = "round";
           ctx.stroke();
-          ctx.restore();
         };
 
-        strokeLayer(ys2, expanded ? 1.75 : 2.1, 0.25, 10);
-        strokeLayer(ys1, expanded ? 2 : 2.45, 0.38, 14);
-        strokeLayer(ys0, expanded ? 1.85 : 2.15, 0.32, 12);
+        strokeLayer(ys2, expanded ? 1.75 : 2.1, 0.25);
+        strokeLayer(ys1, expanded ? 2 : 2.45, 0.38);
+        strokeLayer(ys0, expanded ? 1.85 : 2.15, 0.32);
         ctx.restore();
         return;
       }
@@ -913,10 +1036,22 @@ export class VizCanvasEngine {
       if (mode === "bars") {
         const pad = 2;
         const bar = (w - pad * 2) / BARS;
+        const bw = Math.max(1, bar * 0.7);
+        const pk = peaksBars.current;
+        if (!an) {
+          // Nothing to analyse (paused / idle): calm low hill, not a bar wall.
+          pk.fill(0);
+          this.drawIdleBars(ctx, w, h, BARS, pad, bar, bw, false);
+          return;
+        }
         const base = h * 0.2;
         const span = h * 0.68;
-        const pk = peaksBars.current;
         const pDecay = isPlaying ? 0.94 : 0.9;
+        // One gradient + one batched path for all bars (no per-bar gradients).
+        ctx.fillStyle = gbar(h, h - (base + span));
+        ctx.beginPath();
+        let peaksN = 0;
+        const peaksX = this.peakScratch;
         for (let i = 0; i < BARS; i++) {
           const xt = logBinT(i, BARS, fLen);
           const raw = sampleSpectrumLinear(fv, fLen, xt);
@@ -928,21 +1063,24 @@ export class VizCanvasEngine {
           const nh = Math.min(1, amp * barBassCalm(i, BARS) + wobble);
           pk[i] = Math.max(nh, pk[i]! * pDecay);
           const hy = base + nh * span;
-          const peakH = base + pk[i]! * span;
           const x = pad + i * bar;
-          const bw = Math.max(1, bar * 0.7);
-          ctx.fillStyle = gbar(h, h - hy);
-          ctx.beginPath();
           if (ctx.roundRect) {
             ctx.roundRect(x, h - hy, bw, hy, 3);
           } else {
             ctx.rect(x, h - hy, bw, hy);
           }
-          ctx.fill();
           if (pk[i]! > nh + 0.02) {
-            ctx.fillStyle = rgba(mix(pal.accent, pal.accent2, 0.35), 0.95);
-            ctx.fillRect(x, h - peakH, bw, 2);
+            peaksX[peaksN * 2] = x;
+            peaksX[peaksN * 2 + 1] = h - (base + pk[i]! * span);
+            peaksN += 1;
           }
+        }
+        ctx.fill();
+        if (peaksN) {
+          ctx.fillStyle = rgba(mix(pal.accent, pal.accent2, 0.35), 0.95);
+          ctx.beginPath();
+          for (let k = 0; k < peaksN; k++) ctx.rect(peaksX[k * 2]!, peaksX[k * 2 + 1]!, bw, 2);
+          ctx.fill();
         }
         return;
       }
@@ -950,11 +1088,25 @@ export class VizCanvasEngine {
       if (mode === "mirror") {
         const n = MIRROR_BARS;
         const bar = (w - 4) / n;
+        const bw = Math.max(1, bar * 0.75);
+        const pk = peaksMir.current;
+        if (!an) {
+          pk.fill(0);
+          this.drawIdleBars(ctx, w, h, n, 2, bar, bw, true);
+          return;
+        }
         const mid = h * 0.5;
         const midRgb = mix(pal.accent, pal.accent2, 0.45);
         const maxHalf = mid - 10;
-        const pk = peaksMir.current;
         const pDecay = isPlaying ? 0.94 : 0.9;
+        const g2 = ctx.createLinearGradient(0, mid - maxHalf, 0, mid + maxHalf);
+        g2.addColorStop(0, rgba(pal.accent2, 0.86));
+        g2.addColorStop(0.5, rgba(midRgb, 0.92));
+        g2.addColorStop(1, rgba(pal.accent, 0.78));
+        ctx.fillStyle = g2;
+        ctx.beginPath();
+        let peaksN = 0;
+        const peaksX = this.peakScratch;
         for (let i = 0; i < n; i++) {
           const xt = logBinT(i, n, fLen);
           const raw = sampleSpectrumLinear(fv, fLen, xt);
@@ -963,26 +1115,29 @@ export class VizCanvasEngine {
             barBassCalm(i, n);
           pk[i] = Math.max(v, pk[i]! * pDecay);
           const he = 4 + v * maxHalf * 0.9;
-          const peakHe = 4 + pk[i]! * maxHalf * 0.9;
           const x = 2 + i * bar;
-          const bw = Math.max(1, bar * 0.75);
-          const g2 = ctx.createLinearGradient(0, mid - he, 0, mid + he);
-          g2.addColorStop(0, rgba(pal.accent2, 0.86));
-          g2.addColorStop(0.5, rgba(midRgb, 0.92));
-          g2.addColorStop(1, rgba(pal.accent, 0.78));
-          ctx.fillStyle = g2;
-          ctx.beginPath();
           if (ctx.roundRect) {
             ctx.roundRect(x, mid - he, bw, he * 2, 2);
           } else {
             ctx.rect(x, mid - he, bw, he * 2);
           }
-          ctx.fill();
           if (pk[i]! > v + 0.02) {
-            ctx.fillStyle = rgba(pal.accent2, 0.85);
-            ctx.fillRect(x, mid - peakHe, bw, 1.5);
-            ctx.fillRect(x, mid + peakHe - 1.5, bw, 1.5);
+            peaksX[peaksN * 2] = x;
+            peaksX[peaksN * 2 + 1] = 4 + pk[i]! * maxHalf * 0.9;
+            peaksN += 1;
           }
+        }
+        ctx.fill();
+        if (peaksN) {
+          ctx.fillStyle = rgba(pal.accent2, 0.85);
+          ctx.beginPath();
+          for (let k = 0; k < peaksN; k++) {
+            const x = peaksX[k * 2]!;
+            const peakHe = peaksX[k * 2 + 1]!;
+            ctx.rect(x, mid - peakHe, bw, 1.5);
+            ctx.rect(x, mid + peakHe - 1.5, bw, 1.5);
+          }
+          ctx.fill();
         }
         return;
       }

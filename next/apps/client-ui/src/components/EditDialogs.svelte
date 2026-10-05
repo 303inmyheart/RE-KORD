@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { Button, Field, Modal, TextInput } from "@rekord/ui";
-  import { albumCoverUrl, api } from "../lib/api";
+  import { Button, Field, FileDrop, Modal, TextInput } from "@rekord/ui";
+  import { api, coverUrlFor } from "../lib/api";
   import { runAutoLrcQuickSaveForTrack } from "../lib/autoLrc";
   import { parseTrackGenres, serializeTrackGenres } from "../lib/genres";
   import { t } from "../lib/i18n.svelte";
@@ -16,7 +16,7 @@
     GENRE_POOL,
     TRACK_MOOD_COLORS,
     TRACK_MOOD_IDS,
-    TRACK_MOOD_LABELS,
+    trackMoodLabelKey,
     resolveTrackMoods,
     toDateInputValue,
     type TrackMoodId,
@@ -155,17 +155,13 @@
       tr.genre = genre;
       if (releaseDate) tr.release_date = releaseDate;
       tr.lyrics = draftLyrics || null;
-      const cat = session.catalogTracks.find((c) => c.rel_path === tr.rel_path);
-      if (cat) {
-        cat.genre = genre;
-        cat.lyrics = tr.lyrics;
-      }
-      const inAlbum = session.tracks.find((c) => c.rel_path === tr.rel_path);
-      if (inAlbum && inAlbum !== tr) {
-        inAlbum.genre = genre;
-        inAlbum.lyrics = tr.lyrics;
-      }
-      session.tick += 1;
+      // Lists are $state.raw: replace the track in them (also bumps session.tick).
+      session.patchTrack(tr.rel_path, {
+        title: tr.title,
+        genre,
+        lyrics: tr.lyrics,
+        ...(releaseDate ? { release_date: releaseDate } : {}),
+      });
       session.closeEdit();
     } catch (e) {
       editError = e instanceof Error ? e.message : String(e);
@@ -194,9 +190,7 @@
       await api.trackInfoSave(tr.rel_path, { lyrics: lyricsDraft });
       draftLyrics = lyricsDraft;
       tr.lyrics = lyricsDraft || null;
-      const cat = session.catalogTracks.find((c) => c.rel_path === tr.rel_path);
-      if (cat) cat.lyrics = tr.lyrics;
-      session.tick += 1;
+      session.patchTrack(tr.rel_path, { lyrics: tr.lyrics });
       lyricsOpen = false;
     } catch (e) {
       lyricsErr = e instanceof Error ? e.message : String(e);
@@ -245,9 +239,7 @@
       }
       draftLyrics = result.lyrics ?? "";
       if (result.status === "okPlain") editError = t("trackMeta.fetchLrcPlainFound");
-      const cat = session.catalogTracks.find((c) => c.rel_path === tr.rel_path);
-      if (cat) cat.lyrics = tr.lyrics;
-      session.tick += 1;
+      session.patchTrack(tr.rel_path, { lyrics: result.lyrics ?? tr.lyrics });
     } catch (e) {
       autoLrcStatus = "error";
       editError = e instanceof Error ? e.message : String(e);
@@ -276,6 +268,15 @@
       a.label = label || null;
       a.country = country || null;
       a.has_album_meta = true;
+      // `allAlbums` is $state.raw: swap in a copy so grids and Studio scans see it.
+      const patch = {
+        name: a.name,
+        release_date: a.release_date,
+        label: a.label,
+        country: a.country,
+        has_album_meta: true,
+      };
+      session.allAlbums = session.allAlbums.map((x) => (x.id === a.id ? { ...x, ...patch } : x));
       session.closeEdit();
     } catch (e) {
       editError = e instanceof Error ? e.message : String(e);
@@ -404,7 +405,7 @@
               type="button"
               class="genre-chip__x"
               onclick={() => removeGenre(i)}
-              aria-label="Rimuovi {g}"
+              aria-label={t("trackMeta.fieldGenreRemoveAria", { g })}
             >
               <UiIcon name="close" class="genre-chip__x-ic" />
             </button>
@@ -416,7 +417,7 @@
           <TextInput
             class="genre-search__input"
             bind:value={genreQuery}
-            placeholder="Cerca o scrivi un genere…"
+            placeholder={t("editDialogs.genreSearchPh")}
             autocomplete="off"
             role="combobox"
             aria-expanded={genreListOpen}
@@ -434,8 +435,8 @@
             type="button"
             class="genre-search__add"
             disabled={!canAddGenre}
-            aria-label="Aggiungi genere"
-            title="Aggiungi genere"
+            aria-label={t("trackMeta.fieldGenreAdd")}
+            title={t("trackMeta.fieldGenreAdd")}
             onclick={() => addGenre(genreQuery)}
           >
             <UiIcon name="add" class="genre-search__add-ic" />
@@ -443,7 +444,7 @@
         </div>
         {#if genreListOpen && (filteredGenres.length > 0 || genreQuery.trim())}
           {#if filteredGenres.length > 0}
-            <ul class="genre-search__list rk-scroll" role="listbox" aria-label="Aggiungi da libreria">
+            <ul class="genre-search__list rk-scroll" role="listbox" aria-label={t("editDialogs.genreAddFromLibrary")}>
               {#each filteredGenres as g (g)}
                 <li>
                   <button
@@ -461,28 +462,34 @@
           {:else}
             <p class="genre-search__empty">
               {canAddGenre
-                ? "Nessun genere in libreria corrisponde — usa + per aggiungerne uno nuovo"
-                : "Nessun altro genere in libreria da aggiungere"}
+                ? t("editDialogs.genreNoMatch")
+                : t("trackMeta.fieldGenreListEmpty")}
             </p>
           {/if}
         {/if}
       </div>
     </div>
     <div class="meta-field">
-      <span class="meta-label">{t("trackMeta.fieldMood")}</span>
+      <span class="meta-label meta-label--row">
+        <span>{t("trackMeta.fieldMood")}</span>
+        <span class="meta-label__count">
+          {t("ui.editDialogs.moodCount", { n: draftMoods.length, max: 3 })}
+        </span>
+      </span>
       <div class="mood-grid" role="group" aria-label={t("trackMeta.fieldMood")}>
-        {#each TRACK_MOOD_IDS as id}
+        {#each TRACK_MOOD_IDS as id (id)}
           {@const on = draftMoods.includes(id)}
           <button
             type="button"
             class="mood-btn"
             class:on
-            style="--mood-c: {TRACK_MOOD_COLORS[id]}"
+            style:--mood-c={TRACK_MOOD_COLORS[id]}
             aria-pressed={on}
-            title={TRACK_MOOD_LABELS[id]}
+            disabled={!on && draftMoods.length >= 3}
             onclick={() => toggleMood(id)}
           >
-            <TrackMoodGlyph mood={id} inheritColor />
+            <span class="mood-btn__glyph"><TrackMoodGlyph mood={id} inheritColor /></span>
+            <span class="mood-btn__label">{t(trackMoodLabelKey(id))}</span>
           </button>
         {/each}
       </div>
@@ -662,32 +669,31 @@
 
 <Modal
   open={session.editDialog === "cover"}
-  eyebrow="Cover album"
-  title={session.selectedAlbum?.name ?? "Cover"}
+  eyebrow={t("editDialogs.coverEyebrow")}
+  title={session.selectedAlbum?.name ?? t("editDialogs.coverFallbackTitle")}
   onclose={() => session.closeEdit()}
 >
   {#if session.selectedAlbum}
     <div class="cover-preview">
       {#if session.selectedAlbum.has_cover}
-        <img src={albumCoverUrl(session.selectedAlbum.id)} alt="" />
+        <img src={coverUrlFor(session.selectedAlbum) ?? ""} alt="" />
       {:else}
-        <div class="ph">Nessuna cover su disco</div>
+        <div class="ph">{t("editDialogs.coverNone")}</div>
       {/if}
     </div>
-    <p class="hint">Carica un JPEG/PNG/WebP come cover.jpg nella cartella album.</p>
-    <input
-      type="file"
+    <FileDrop
       accept="image/jpeg,image/png,image/webp,image/gif"
-      onchange={(e) => {
-        const f = (e.currentTarget as HTMLInputElement).files?.[0] ?? null;
-        coverFile = f;
-      }}
+      label={t("ui.editDialogs.coverDrop")}
+      hint={t("editDialogs.coverHint")}
+      buttonLabel={t("ui.editDialogs.coverChoose")}
+      fileName={coverFile?.name ?? ""}
+      onfiles={(files) => (coverFile = files[0] ?? null)}
     />
     {#if editError}<p class="warnline" role="alert">{editError}</p>{/if}
   {/if}
   {#snippet footer()}
-    <Button variant="ghost" onclick={() => session.closeEdit()}>Chiudi</Button>
-    <Button disabled={busy || !coverFile} onclick={() => void uploadCover()}>Carica</Button>
+    <Button variant="ghost" onclick={() => session.closeEdit()}>{t("ui.close")}</Button>
+    <Button disabled={busy || !coverFile} onclick={() => void uploadCover()}>{t("editDialogs.coverUpload")}</Button>
   {/snippet}
 </Modal>
 
@@ -886,58 +892,91 @@
     font-size: var(--rk-fs-sm);
   }
 
+  .meta-label--row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .meta-label__count {
+    font-weight: 550;
+    font-variant-numeric: tabular-nums;
+    font-size: var(--rk-fs-1);
+  }
+
+  /* Mood picker: glyph + name on every chip, so the choice reads without
+     hovering. Off chips are quiet but legible (no opacity / grayscale filter). */
   .mood-grid {
     display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(9.25rem, 1fr));
     gap: 0.4rem;
     margin-top: 0.1rem;
     max-width: 100%;
   }
 
   .mood-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 2.35rem;
-    padding: 0.3rem;
-    border-radius: var(--rk-radius);
-    cursor: pointer;
-    line-height: 0;
     --mood-c: var(--rk-muted);
-    opacity: 0.3;
-    border: 1px solid color-mix(in srgb, var(--rk-line) 82%, var(--mood-c) 18%);
-    background: color-mix(in srgb, var(--rk-surface-2) 97%, var(--rk-muted) 3%);
-    color: color-mix(in srgb, var(--rk-muted) 58%, var(--mood-c) 42%);
-    filter: grayscale(0.55) brightness(0.9);
-    box-shadow: none;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+    min-height: 2.25rem;
+    padding: 0.3rem 0.6rem;
+    border-radius: var(--rk-radius-chip);
+    border: 1px solid var(--rk-line);
+    background: var(--rk-surface-2);
+    color: var(--rk-muted-strong);
+    font: inherit;
+    font-size: var(--rk-fs-2);
+    font-weight: 600;
+    line-height: var(--rk-lh-tight);
+    text-align: left;
+    cursor: pointer;
+    transition:
+      border-color 0.12s ease,
+      background 0.12s ease;
   }
 
-  .mood-btn:hover:not(.on) {
-    opacity: 0.52;
-    border-color: color-mix(in srgb, var(--rk-line) 58%, var(--mood-c) 42%);
-    background: color-mix(in srgb, var(--mood-c) 9%, var(--rk-surface-2) 91%);
-    color: color-mix(in srgb, var(--mood-c) 65%, var(--rk-muted) 35%);
-    filter: grayscale(0.22) brightness(0.98);
+  .mood-btn__glyph {
+    display: inline-flex;
+    flex-shrink: 0;
+    color: color-mix(in srgb, var(--mood-c) 80%, var(--rk-ink));
   }
 
-  .mood-btn :global(svg) {
-    width: 1.1rem;
-    height: 1.1rem;
+  .mood-btn__glyph :global(svg) {
+    width: 1rem;
+    height: 1rem;
     display: block;
   }
 
-  .mood-btn.on {
-    opacity: 1;
-    filter: none;
-    border: 1px solid color-mix(in srgb, var(--mood-c) 68%, var(--rk-line) 32%);
-    background: color-mix(in srgb, var(--mood-c) 36%, var(--rk-surface-2) 64%);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--mood-c) 35%, transparent);
-    color: color-mix(in srgb, var(--mood-c) 96%, #000);
+  .mood-btn__label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .mood-btn.on:hover {
-    border-color: color-mix(in srgb, var(--mood-c) 75%, var(--rk-line) 25%);
-    filter: brightness(1.04);
+  .mood-btn:hover:not(.on):not(:disabled) {
+    border-color: color-mix(in srgb, var(--mood-c) 45%, var(--rk-line));
+    background: color-mix(in srgb, var(--mood-c) 8%, var(--rk-surface-2));
+    color: var(--rk-ink);
+  }
+
+  .mood-btn.on {
+    border-color: color-mix(in srgb, var(--mood-c) 65%, var(--rk-line));
+    background: color-mix(in srgb, var(--mood-c) 24%, var(--rk-surface-2));
+    color: var(--rk-ink);
+  }
+
+  .mood-btn:disabled {
+    cursor: not-allowed;
+    color: var(--rk-muted);
+    background: transparent;
+  }
+
+  .mood-btn:disabled .mood-btn__glyph {
+    color: var(--rk-muted);
   }
 
   .lyrics-row {
@@ -978,8 +1017,8 @@
   }
 
   .lyrics-dot--okLrc {
-    background: color-mix(in srgb, #22c55e 70%, transparent);
-    border-color: color-mix(in srgb, #22c55e 80%, transparent);
+    background: color-mix(in srgb, var(--rk-success) 70%, transparent);
+    border-color: color-mix(in srgb, var(--rk-success) 80%, transparent);
   }
 
   .lyrics-dot--okPlain {
@@ -988,8 +1027,8 @@
   }
 
   .lyrics-dot--missing {
-    background: color-mix(in srgb, #eab308 70%, transparent);
-    border-color: color-mix(in srgb, #eab308 80%, transparent);
+    background: color-mix(in srgb, var(--rk-warning) 70%, transparent);
+    border-color: color-mix(in srgb, var(--rk-warning) 80%, transparent);
   }
 
   .lyrics-dot--error {
@@ -1001,12 +1040,6 @@
     50% {
       opacity: 0.45;
     }
-  }
-
-  .hint {
-    margin: 0.35rem 0 0;
-    color: var(--rk-muted);
-    font-size: var(--rk-fs-sm);
   }
 
   .meta-edit-discogs {
@@ -1045,6 +1078,7 @@
   .cover-preview {
     width: 180px;
     height: 180px;
+    margin-inline: auto;
     border-radius: var(--rk-radius-lg);
     overflow: hidden;
     border: 1px solid var(--rk-line);
@@ -1105,13 +1139,13 @@
   }
 
   .warnline {
-    color: var(--rk-warn, #f59e0b);
+    color: var(--rk-warning);
     font-size: var(--rk-fs-sm);
   }
 
   @media (max-width: 559.98px) {
     .mood-grid {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 </style>

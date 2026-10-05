@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { sheetDrag } from "@rekord/ui";
+  import { modalSurface, sheetDrag } from "@rekord/ui";
   import type { ViewId } from "../lib/session.svelte";
   import GraphicEq from "./icons/GraphicEq.svelte";
   import UiIcon from "./icons/UiIcon.svelte";
@@ -39,31 +39,63 @@
 
 <nav class="bottom" aria-label={t("nav.mobileAria")}>
   <div class="inner">
-    <button type="button" class:active={active === "dashboard"} onclick={() => go("dashboard")}>
+    <button
+      type="button"
+      class:active={active === "dashboard"}
+      aria-current={active === "dashboard" ? "page" : undefined}
+      onclick={() => go("dashboard")}
+    >
       <span class="icon"><UiIcon name="home" /></span>
-      <span>{t("nav.home")}</span>
+      <span class="label">{t("nav.home")}</span>
     </button>
-    <button type="button" class:active={active === "studio"} onclick={() => go("studio")}>
+    <button
+      type="button"
+      class:active={active === "studio"}
+      aria-current={active === "studio" ? "page" : undefined}
+      onclick={() => go("studio")}
+    >
+      <!-- Posa statica "in ascolto": qui non si anima mai (costo WebKitGTK). -->
       <span class="icon"><GraphicEq animated={session.playing} /></span>
-      <span>{t("nav.studio")}</span>
+      <span class="label">{t("nav.studio")}</span>
     </button>
-    <button type="button" class:active={active === "library"} onclick={() => go("library")}>
+    <button
+      type="button"
+      class:active={active === "library"}
+      aria-current={active === "library" ? "page" : undefined}
+      onclick={() => go("library")}
+    >
       <span class="icon"><UiIcon name="disc" /></span>
-      <span>{t("nav.library")}</span>
+      <span class="label">{t("nav.library")}</span>
     </button>
-    <button type="button" class:active={moreActive} onclick={() => (moreOpen = !moreOpen)}>
+    <button
+      type="button"
+      class:active={moreActive || moreOpen}
+      aria-expanded={moreOpen}
+      aria-haspopup="dialog"
+      onclick={() => (moreOpen = !moreOpen)}
+    >
       <span class="icon"><UiIcon name="more" /></span>
-      <span>{t("nav.more")}</span>
+      <span class="label">{t("nav.more")}</span>
     </button>
   </div>
 </nav>
 
 {#if moreOpen}
-  <div class="sheet" role="dialog" aria-label={t("nav.more")}>
-    <button type="button" class="backdrop" aria-label={t("nav.close")} onclick={() => (moreOpen = false)}
+  <div class="sheet">
+    <button
+      type="button"
+      class="backdrop"
+      tabindex="-1"
+      aria-label={t("nav.close")}
+      onclick={() => (moreOpen = false)}
     ></button>
     <div
       class="panel"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("nav.more")}
+      tabindex="-1"
+      use:modalSurface={{ onclose: () => (moreOpen = false), focusPanelOnly: true }}
       use:sheetDrag={{
         enabled: true,
         gripSelector: "[data-sheet-grip]",
@@ -78,8 +110,13 @@
         </button>
       </header>
       <div class="grid">
-        {#each moreItems as item}
-          <button type="button" class:active={active === item.id} onclick={() => go(item.id)}>
+        {#each moreItems as item (item.id)}
+          <button
+            type="button"
+            class:active={active === item.id}
+            aria-current={active === item.id ? "page" : undefined}
+            onclick={() => go(item.id)}
+          >
             <UiIcon name={item.icon} />
             <span>{item.label}</span>
           </button>
@@ -103,53 +140,97 @@
       bottom: 0;
       z-index: var(--rk-z-nav);
       border-top: 1px solid var(--rk-line);
-      background: var(--rk-sidebar-bg);
+      background: color-mix(in srgb, var(--rk-surface-2) 97%, var(--rk-bg));
+      box-shadow: 0 -2px 18px color-mix(in srgb, black 28%, transparent);
       padding-bottom: env(safe-area-inset-bottom, 0px);
     }
 
     .inner {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
-      min-height: 3.25rem;
-      padding: 0.35rem max(0.15rem, env(safe-area-inset-right, 0px)) 0.35rem
-        max(0.15rem, env(safe-area-inset-left, 0px));
+      max-width: 32rem;
+      min-height: var(--rk-mobile-nav-h);
+      margin-inline: auto;
+      padding: 0 max(0.25rem, env(safe-area-inset-right, 0px)) 0
+        max(0.25rem, env(safe-area-inset-left, 0px));
     }
 
+    /* Parity 5.x: barra indicatrice in alto, icona tinta, etichetta in grassetto. */
     .inner > button {
       position: relative;
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      gap: 0.2rem;
+      min-width: 0;
+      min-height: var(--rk-mobile-nav-h);
+      padding: 0.5rem 0.1rem 0.4rem;
       border: 0;
       background: transparent;
       color: var(--rk-muted);
       font: inherit;
-      font-size: var(--rk-fs-4xs);
-      display: grid;
-      /* Icona e nome centrati in un bersaglio pieno: qui si tocca al volo e
-         spesso senza guardare. */
-      align-content: center;
-      min-height: var(--rk-tap-min);
-      gap: 0.12rem;
-      justify-items: center;
-      padding: 0.35rem 0.05rem;
+      font-size: var(--rk-fs-1);
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      line-height: var(--rk-lh-tight);
       cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      transition: color 0.15s ease;
+    }
+
+    .inner > button::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 50%;
+      width: 1.5rem;
+      height: 3px;
+      border-radius: 0 0 3px 3px;
+      background: var(--rk-accent-2);
+      transform: translateX(-50%) scaleX(0);
+      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
 
     .inner > button.active {
       color: var(--rk-ink);
     }
 
-    .inner > button.active::after {
-      content: "";
-      position: absolute;
-      bottom: 0.15rem;
-      width: 0.35rem;
-      height: 0.35rem;
-      border-radius: 50%;
-      background: var(--rk-accent-2);
+    .inner > button.active::before {
+      transform: translateX(-50%) scaleX(1);
     }
 
-    .icon :global(svg) {
-      width: 1.15rem;
-      height: 1.15rem;
+    .inner > button.active .icon {
+      color: var(--rk-accent-2);
+    }
+
+    .inner > button:active .icon {
+      transform: scale(0.9);
+    }
+
+    .inner > button:focus-visible {
+      outline: 2px solid var(--rk-focus);
+      outline-offset: -3px;
+      border-radius: var(--rk-radius);
+    }
+
+    .icon {
+      display: grid;
+      place-items: center;
+      transition: transform 0.12s ease;
+    }
+
+    .icon :global(svg),
+    .icon :global(.geq) {
+      width: 1.45rem;
+      height: 1.45rem;
+    }
+
+    .label {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
   }
 
@@ -180,6 +261,7 @@
     /* Il foglio non passa lo scorrimento alla pagina sotto. */
     overscroll-behavior: contain;
     animation: rk-sheet-rise 0.2s ease-out;
+    outline: none;
   }
 
   .panel header {
@@ -217,7 +299,10 @@
     gap: 0.35rem;
     justify-items: center;
     font: inherit;
-    font-size: var(--rk-fs-3xs);
+    font-size: var(--rk-fs-1);
+    font-weight: 600;
+    line-height: var(--rk-lh-tight);
+    text-align: center;
     cursor: pointer;
   }
 

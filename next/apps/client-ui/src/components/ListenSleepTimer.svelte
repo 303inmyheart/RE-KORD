@@ -2,39 +2,18 @@
   import UiIcon from "./icons/UiIcon.svelte";
   import { t } from "../lib/i18n.svelte";
   import { player } from "../lib/player";
-  import { session } from "../lib/session.svelte";
+  import { sleepCountdown } from "../lib/sleepCountdown.svelte";
 
   const PRESETS = [15, 30, 60] as const;
 
   let open = $state(false);
-  let now = $state(Date.now());
   let customHours = $state("0");
   let customMinutes = $state("45");
   let customError = $state(false);
 
-  $effect(() => {
-    if (!session.sleepTimerEndsAt) return;
-    now = Date.now();
-    const id = window.setInterval(() => {
-      now = Date.now();
-    }, 1000);
-    return () => window.clearInterval(id);
-  });
-
-  const remainingMs = $derived(
-    session.sleepTimerEndsAt ? Math.max(0, session.sleepTimerEndsAt - now) : 0,
-  );
-  const active = $derived(Boolean(session.sleepTimerEndsAt && remainingMs > 0));
-  const remainingLabel = $derived.by(() => {
-    const totalSec = Math.floor(remainingMs / 1000);
-    const h = Math.floor(totalSec / 3600);
-    const m = Math.floor((totalSec % 3600) / 60);
-    const s = totalSec % 60;
-    if (h > 0) {
-      return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-    }
-    return `${m}:${s.toString().padStart(2, "0")}`;
-  });
+  const countdown = sleepCountdown();
+  const active = $derived(countdown.active);
+  const remainingLabel = $derived(countdown.label);
 
   function digitsOnly(value: string): string {
     return value.replace(/\D/g, "");
@@ -48,7 +27,7 @@
 
   function startTimer(minutes: number) {
     player.setSleepTimer(minutes);
-    now = Date.now();
+    countdown.refresh();
     customError = false;
     open = false;
   }

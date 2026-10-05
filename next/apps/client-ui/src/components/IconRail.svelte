@@ -2,6 +2,7 @@
   import { BrandLogo, IconRailButton } from "@rekord/ui";
   import type { ViewId } from "../lib/session.svelte";
   import { session } from "../lib/session.svelte";
+  import { accountAchievements } from "../lib/accountLevel.svelte";
   import { t } from "../lib/i18n.svelte";
   import GraphicEq from "./icons/GraphicEq.svelte";
   import UiIcon from "./icons/UiIcon.svelte";
@@ -16,10 +17,15 @@
   } = $props();
 
   const studioAnimated = $derived(session.playing);
-  const level = $derived(Math.max(1, Math.min(99, Math.floor((session.stats?.track_count ?? 0) / 80) + 1)));
-  const pct = $derived(((session.stats?.track_count ?? 0) % 80) / 80 * 100);
+  // The account's achievements level — the same number the Achievements
+  // view and Settings › Account show (legacy SideBar), not the library size.
+  const level = $derived(accountAchievements.level ?? 1);
+  const pct = $derived(accountAchievements.pct);
+  const levelLoading = $derived(accountAchievements.level == null);
   const levelLabel = $derived(
-    t("nav.level", { level, pct: Math.round(pct) }),
+    levelLoading
+      ? t("levelRing.aria")
+      : t("nav.level", { level, pct: Math.round(pct) }),
   );
 </script>
 
@@ -41,7 +47,7 @@
         active={active === "studio"}
         onclick={() => onnavigate("studio")}
       >
-        <GraphicEq animated={studioAnimated} />
+        <GraphicEq animated={studioAnimated} live />
       </IconRailButton>
       <IconRailButton
         label={t("nav.library")}
@@ -115,7 +121,7 @@
     <LevelProgressRing
       {level}
       {pct}
-      loading={!session.stats}
+      loading={levelLoading}
       active={active === "achievements"}
       title={levelLabel}
       ariaLabel={levelLabel}

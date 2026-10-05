@@ -1,5 +1,6 @@
 <script lang="ts">
   import Button from "./Button.svelte";
+  import { uiLabels } from "../lib/uiLabels.svelte";
 
   let {
     title,
@@ -19,7 +20,7 @@
 <header class="rk-section-header">
   <div class="text">
     {#if onback}
-      <Button variant="ghost" onclick={onback}>{backLabel || "← Indietro"}</Button>
+      <Button variant="ghost" onclick={onback}>{backLabel || uiLabels.back}</Button>
     {/if}
     <div>
       <h2>{title}</h2>

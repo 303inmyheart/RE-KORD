@@ -1,77 +1,192 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { Banner, Button } from "@rekord/ui";
+  import { onMount, type Component } from "svelte";
+  import { Banner, Button, Skeleton, isModalOpen, setUiLabels } from "@rekord/ui";
   import { connectGate } from "../lib/connect.svelte";
   import { t } from "../lib/i18n.svelte";
+  import { bindNavHistory } from "../lib/navHistory.svelte";
+  import { reloadWithFreshShell } from "../lib/platform/pwa";
   import { player } from "../lib/player";
-  import { session } from "../lib/session.svelte";
+  import { session, type ViewId } from "../lib/session.svelte";
+  import {
+    SHORTCUT_SEEK_SECONDS,
+    SHORTCUTS_OFF_ATTR,
+    shortcutActionFor,
+  } from "../lib/shortcutList";
+  import { toasts } from "../lib/toasts.svelte";
   import { trackViewportMetrics } from "../lib/viewportMetrics";
-  import AchievementsView from "../views/AchievementsView.svelte";
+  // The landing view stays in the entry chunk; every other view is its own
+  // chunk, fetched on first visit (and warmed up once the app is idle).
   import DashboardView from "../views/DashboardView.svelte";
-  import FavoritesView from "../views/FavoritesView.svelte";
-  import LibraryView from "../views/LibraryView.svelte";
-  import PlectrView from "../views/PlectrView.svelte";
-  import PlaylistsView from "../views/PlaylistsView.svelte";
-  import QueueView from "../views/QueueView.svelte";
-  import RecentView from "../views/RecentView.svelte";
-  import SettingsView from "../views/SettingsView.svelte";
-  import StatisticsView from "../views/StatisticsView.svelte";
-  import StudioView from "../views/StudioView.svelte";
+  import ConfirmHost from "./ConfirmHost.svelte";
   import EditDialogs from "./EditDialogs.svelte";
   import IconRail from "./IconRail.svelte";
   import MobileBottomNav from "./MobileBottomNav.svelte";
   import PlayerDock from "./PlayerDock.svelte";
   import ToastStack from "./ToastStack.svelte";
   import TopBar from "./TopBar.svelte";
+  import ViewBoundary from "./ViewBoundary.svelte";
 
-  function isTypingTarget(el: EventTarget | null): boolean {
-    if (!(el instanceof HTMLElement)) return false;
-    const tag = el.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
-    return el.isContentEditable;
+  type LazyView = Exclude<ViewId, "dashboard">;
+  type ViewModule = { default: Component };
+
+  const VIEW_LOADERS: Record<LazyView, () => Promise<ViewModule>> = {
+    studio: () => import("../views/StudioView.svelte"),
+    library: () => import("../views/LibraryView.svelte"),
+    plectr: () => import("../views/PlectrView.svelte"),
+    favorites: () => import("../views/FavoritesView.svelte"),
+    playlists: () => import("../views/PlaylistsView.svelte"),
+    queue: () => import("../views/QueueView.svelte"),
+    recent: () => import("../views/RecentView.svelte"),
+    statistics: () => import("../views/StatisticsView.svelte"),
+    achievements: () => import("../views/AchievementsView.svelte"),
+    settings: () => import("../views/SettingsView.svelte"),
+  };
+
+  /** Loaded view components (plain object in $state: lookups stay reactive). */
+  let loadedViews = $state<Partial<Record<LazyView, Component>>>({});
+  let viewLoadErrors = $state<Partial<Record<LazyView, unknown>>>({});
+  const inFlight = new Map<LazyView, Promise<void>>();
+
+  function loadView(id: LazyView): Promise<void> {
+    if (loadedViews[id]) return Promise.resolve();
+    const pending = inFlight.get(id);
+    if (pending) return pending;
+    const p = VIEW_LOADERS[id]()
+      .then((mod) => {
+        loadedViews[id] = mod.default;
+        delete viewLoadErrors[id];
+      })
+      .catch((err: unknown) => {
+        viewLoadErrors[id] = err;
+      })
+      .finally(() => inFlight.delete(id));
+    inFlight.set(id, p);
+    return p;
+  }
+
+  /** Chunks that failed again after a Retry: the next Retry reloads the page. */
+  const retryFailed = new Set<LazyView>();
+
+  function retryView(id: LazyView) {
+    // Browsers keep a failed `import()` in their module map, so the same URL
+    // may keep failing without a new request (and after a hub update the old
+    // chunk is gone for good): once a plain retry failed, reload.
+    if (retryFailed.has(id) && viewLoadErrors[id]) {
+      void reloadWithFreshShell();
+      return;
+    }
+    delete viewLoadErrors[id];
+    void loadView(id).then(() => {
+      if (viewLoadErrors[id]) retryFailed.add(id);
+    });
+  }
+
+  const lazyId = $derived(
+    session.view === "dashboard" ? null : (session.view as LazyView),
+  );
+  const LazyComponent = $derived(lazyId ? (loadedViews[lazyId] ?? null) : null);
+
+  $effect(() => {
+    if (lazyId) void loadView(lazyId);
+  });
+
+  /** Warm the other chunks once the first screen is up, one at a time. */
+  onMount(() => {
+    let cancelled = false;
+    const idle = (cb: () => void) => {
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(cb, { timeout: 4000 });
+      } else {
+        setTimeout(cb, 1500);
+      }
+    };
+    const timer = window.setTimeout(() => {
+      const queue = Object.keys(VIEW_LOADERS) as LazyView[];
+      const next = () => {
+        if (cancelled) return;
+        const id = queue.shift();
+        if (!id) return;
+        void loadView(id).then(() => idle(next));
+      };
+      idle(next);
+    }, 2500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  });
+
+  function goHome() {
+    session.navigate("dashboard");
   }
 
   onMount(trackViewportMetrics);
 
+  // Shared components have no i18n: hand them the labels they show.
+  $effect(() => {
+    setUiLabels({
+      close: t("ui.close"),
+      empty: t("common.empty"),
+      search: t("common.search"),
+      searchPlaceholder: t("common.searchPlaceholder"),
+      back: t("common.back"),
+    });
+  });
+
+  // Section changes leave history entries: Android Back walks them (and closes
+  // open dialogs first) instead of quitting the app.
+  bindNavHistory();
+
+  function focusSearch() {
+    session.navigate("library");
+    window.dispatchEvent(new CustomEvent("rekord:focus-search"));
+  }
+
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isTypingTarget(e.target)) return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        session.navigate("library");
-        window.dispatchEvent(new CustomEvent("rekord:focus-search"));
-        return;
-      }
-      if (e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        session.navigate("library");
-        window.dispatchEvent(new CustomEvent("rekord:focus-search"));
-        return;
-      }
-      if (e.key === " " || e.code === "Space") {
-        e.preventDefault();
-        void player.toggle();
-        return;
-      }
-      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-        if (!player.current) return;
-        e.preventDefault();
-        const at = player.currentTime;
-        const dur = player.duration;
-        const delta = e.key === "ArrowLeft" ? -15 : 15;
-        const max = dur > 0 ? Math.max(0, dur - 0.5) : Number.POSITIVE_INFINITY;
-        player.seek(Math.min(max, Math.max(0, at + delta)));
-        return;
-      }
-      if (e.key.toLowerCase() === "i") {
-        e.preventDefault();
-        session.studioPane = "listen";
-        session.navigate("studio");
-        return;
-      }
-      if (e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        player.toggleShuffle();
+      const action = shortcutActionFor(e, {
+        modalOpen: isModalOpen(),
+        suspended: !!document.querySelector(`[${SHORTCUTS_OFF_ATTR}]`),
+      });
+      if (!action) return;
+      switch (action) {
+        case "search":
+          e.preventDefault();
+          focusSearch();
+          return;
+        case "play":
+          e.preventDefault();
+          void player.toggle();
+          return;
+        case "seekBack":
+        case "seekForward": {
+          if (!player.current) return;
+          e.preventDefault();
+          const at = player.currentTime;
+          const dur = player.duration;
+          const delta = action === "seekBack" ? -SHORTCUT_SEEK_SECONDS : SHORTCUT_SEEK_SECONDS;
+          const max = dur > 0 ? Math.max(0, dur - 0.5) : Number.POSITIVE_INFINITY;
+          player.seek(Math.min(max, Math.max(0, at + delta)));
+          return;
+        }
+        case "listen":
+          e.preventDefault();
+          session.studioPane = "listen";
+          session.navigate("studio");
+          return;
+        case "shuffle":
+          e.preventDefault();
+          player.toggleShuffle();
+          // The shortcut has no button under the cursor: say what changed.
+          toasts.flash(
+            t(player.shuffle ? "core.shortcut.shuffleOn" : "core.shortcut.shuffleOff"),
+            "shortcut",
+          );
+          return;
+        case "plectr":
+          e.preventDefault();
+          session.navigate("plectr");
+          return;
       }
     };
     window.addEventListener("keydown", onKey);
@@ -102,31 +217,30 @@
 
         {#if session.view === "dashboard"}
           {#key session.dashboardHomeTick}
-            <DashboardView />
+            <ViewBoundary name="dashboard">
+              <DashboardView />
+            </ViewBoundary>
           {/key}
-        {:else if session.view === "studio"}
-          {#key session.studioHomeTick}
-            <StudioView />
-          {/key}
-        {:else if session.view === "library"}
-          <LibraryView />
-        {:else if session.view === "plectr"}
-          <PlectrView />
-        {:else if session.view === "favorites"}
-          <FavoritesView />
-        {:else if session.view === "playlists"}
-          <PlaylistsView />
-        {:else if session.view === "queue"}
-          <QueueView />
-        {:else if session.view === "recent"}
-          <RecentView />
-        {:else if session.view === "statistics"}
-          <StatisticsView />
-        {:else if session.view === "achievements"}
-          <AchievementsView />
-        {:else}
-          {#key session.settingsHomeTick}
-            <SettingsView />
+        {:else if lazyId}
+          {#key `${lazyId}:${lazyId === "studio" ? session.studioHomeTick : lazyId === "settings" ? session.settingsHomeTick : 0}`}
+            <ViewBoundary
+              name={lazyId}
+              loadError={viewLoadErrors[lazyId] ?? null}
+              onretry={() => retryView(lazyId)}
+              onhome={goHome}
+            >
+              {#if LazyComponent}
+                <LazyComponent />
+              {:else}
+                <!-- Chunk still loading: the page's shape, not a blank area. -->
+                <div class="view-skeleton" role="status" aria-label={t("ui.loading")}>
+                  <div class="view-skeleton__head rk-surface-card">
+                    <Skeleton variant="text" lines={2} width="14rem" />
+                  </div>
+                  <Skeleton variant="row" count={4} />
+                </div>
+              {/if}
+            </ViewBoundary>
           {/key}
         {/if}
       </div>
@@ -134,42 +248,47 @@
   </div>
 
   {#if session.hasQueue}
-    <PlayerDock
-      current={session.current}
-      playing={session.playing}
-      currentTime={session.currentTime}
-      duration={session.duration}
-      shuffle={session.shuffle}
-      repeat={session.repeat}
-      favorited={session.isFavoriteCurrent}
-      excluded={session.isCurrentExcluded}
-      excludeLocked={session.isCurrentAlbumExcluded}
-      ontoggle={() => void player.toggle()}
-      onprev={() => void player.prev()}
-      onnext={() => void player.next()}
-      onseek={(s) => player.seek(s)}
-      ontoggleShuffle={() => player.toggleShuffle()}
-      oncycleRepeat={() => player.cycleRepeat()}
-      ontoggleFavorite={() => void session.toggleFavoriteCurrent()}
-      ontoggleExclude={() => session.toggleExcludeCurrent()}
-      onradio={() => void session.radioFromCurrent()}
-      onopenAlbum={() => {
-        const t = session.current;
-        if (t) void session.openLibraryForTrack(t);
-      }}
-      onopenArtist={() => {
-        const t = session.current;
-        if (t) void session.openLibraryArtist(t);
-      }}
-      onopenStudio={() => {
-        session.studioPane = "listen";
-        session.navigate("studio");
-      }}
-    />
+    <ViewBoundary name="player" compact>
+      <PlayerDock
+        current={session.current}
+        playing={session.playing}
+        currentTime={session.currentTime}
+        duration={session.duration}
+        shuffle={session.shuffle}
+        repeat={session.repeat}
+        favorited={session.isFavoriteCurrent}
+        excluded={session.isCurrentExcluded}
+        excludeLocked={session.isCurrentAlbumExcluded}
+        ontoggle={() => void player.toggle()}
+        onprev={() => void player.prev()}
+        onnext={() => void player.next()}
+        onseek={(s) => player.seek(s)}
+        ontoggleShuffle={() => player.toggleShuffle()}
+        oncycleRepeat={() => player.cycleRepeat()}
+        ontoggleFavorite={() => void session.toggleFavoriteCurrent()}
+        ontoggleExclude={() => session.toggleExcludeCurrent()}
+        onradio={() => void session.radioFromCurrent()}
+        onopenAlbum={() => {
+          const t = session.current;
+          if (t) void session.openLibraryForTrack(t);
+        }}
+        onopenArtist={() => {
+          const t = session.current;
+          if (t) void session.openLibraryArtist(t);
+        }}
+        onopenStudio={() => {
+          session.studioPane = "listen";
+          session.navigate("studio");
+        }}
+      />
+    </ViewBoundary>
   {/if}
 
   <MobileBottomNav active={session.view} onnavigate={(id) => session.activateNav(id)} />
-  <EditDialogs />
+  <ViewBoundary name="edit-dialogs" compact>
+    <EditDialogs />
+  </ViewBoundary>
+  <ConfirmHost />
   <ToastStack />
 </div>
 
@@ -210,6 +329,15 @@
     scroll-padding-bottom: calc(
       env(safe-area-inset-bottom, 0px) + var(--rk-dock-h) + var(--rk-page-pad-x)
     );
+  }
+
+  .view-skeleton {
+    display: grid;
+    gap: var(--rk-section-gap);
+  }
+
+  .view-skeleton__head {
+    padding-block: var(--rk-space-lg);
   }
 
   .offline-out {

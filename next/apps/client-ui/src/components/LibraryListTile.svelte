@@ -2,13 +2,12 @@
   import { CoverArt } from "@rekord/ui";
   import MetaBadgeCluster from "./MetaBadgeCluster.svelte";
   import UiIcon from "./icons/UiIcon.svelte";
-  import { initials } from "../lib/initials";
   let {
     kind = "artist" as "artist" | "album",
     title,
     subtitle = "",
     metaLine = "",
-    coverSrc = "",
+    coverSrc = null,
     coverSeed = "",
     favoriteCount = 0,
     albumsMissingMetaCount = 0,
@@ -25,7 +24,8 @@
     title: string;
     subtitle?: string;
     metaLine?: string;
-    coverSrc?: string;
+    /** Cover URL, or null/"" when there is none (no request, placeholder). */
+    coverSrc?: string | null;
     coverSeed?: string;
     favoriteCount?: number;
     albumsMissingMetaCount?: number;
@@ -41,8 +41,7 @@
   } = $props();
 
   const albumMetaMissing = $derived(kind === "album" ? genreMissing : false);
-  const badge = $derived(initials(title) || title.charAt(0).toUpperCase());
-  const useBadge = $derived(kind === "artist" && showInitialsFallback && !coverSrc);
+  const src = $derived(coverSrc || null);
 </script>
 
 <button
@@ -52,19 +51,16 @@
   class:library-list-tile--album={kind === "album"}
   {onclick}
 >
-  {#if kind === "artist"}
-    <div class="library-list-tile__media">
-      {#if useBadge}
-        <div class="library-list-tile__badge">{badge}</div>
-      {:else}
-        <CoverArt {title} src={coverSrc} seed={coverSeed || title} size="tile" />
-      {/if}
-    </div>
-  {:else}
-    <div class="library-list-tile__album-wrap">
-      <CoverArt {title} src={coverSrc} seed={coverSeed || title} size="tile" />
-    </div>
-  {/if}
+  <div class="library-list-tile__media">
+    <!-- Artist without a photo: initials. Album without a cover: disc glyph. -->
+    <CoverArt
+      kind={kind === "artist" && showInitialsFallback ? "artist" : "album"}
+      {title}
+      {src}
+      seed={coverSeed || title}
+      size="tile"
+    />
+  </div>
 
   <div class="library-list-tile__body">
     <div class="library-list-tile__title-row">

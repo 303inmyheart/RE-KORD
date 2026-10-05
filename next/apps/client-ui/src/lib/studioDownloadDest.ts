@@ -49,13 +49,19 @@ export function resolveStudioDownloadOutputDir(
   return norm;
 }
 
-export function buildStudioDownloadConfirm(args: {
-  dlPath: string;
-  scope: StudioDownloadScope;
-  releaseTitle?: string;
-  trackCount?: number | null;
-  preamble?: string;
-}): { variant: "danger" | "warning"; message: string } {
+/** Translator injected by the caller (`t` from i18n), so this stays testable in node. */
+export type ConfirmTranslate = (key: string, vars?: Record<string, string | number>) => string;
+
+export function buildStudioDownloadConfirm(
+  args: {
+    dlPath: string;
+    scope: StudioDownloadScope;
+    releaseTitle?: string;
+    trackCount?: number | null;
+    preamble?: string;
+  },
+  tr: ConfirmTranslate,
+): { variant: "danger" | "warning"; message: string } {
   const pickedNorm = normalizeDownloadDestPath(args.dlPath);
   const outputDir = resolveStudioDownloadOutputDir(
     args.dlPath,
@@ -70,14 +76,14 @@ export function buildStudioDownloadConfirm(args: {
   let msg = args.preamble?.trim() ?? "";
   if (msg) msg += "\n\n";
   msg += artistFolderTarget
-    ? `Scaricare in cartella artista «${outputDir}»?\nI file andranno direttamente lì.`
-    : `Scaricare i brani in «${outputDir}»?`;
+    ? tr("studio.dl.confirmArtistFolder", { path: outputDir })
+    : tr("studio.dl.confirmAlbumFolder", { path: outputDir });
   if (
     args.scope === "playlist" &&
     args.trackCount != null &&
     args.trackCount > 0
   ) {
-    msg += `\n\nBrani previsti: ${args.trackCount}.`;
+    msg += `\n\n${tr("studio.dl.confirmTrackCount", { n: args.trackCount })}`;
   }
   return {
     variant: artistFolderTarget ? "danger" : "warning",

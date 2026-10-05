@@ -1,6 +1,19 @@
-import { mediaUrl } from "./config";
-import { albumCoverUrl, type Track } from "./api";
+import { getSelectedAccountId } from "./account";
+import { markNeedsTranscode, mediaUrl } from "./config";
+import { ApiError, api, coverUrlFor, type Track } from "./api";
+import {
+  constantLevel,
+  createLeaseCounter,
+  createLeaseSwitch,
+  elementVolume,
+  levelAt,
+  rampActive,
+  retargetLevel,
+  type LeaseSwitch,
+  type LevelRamp,
+} from "./audioLevels";
 import { touchListeningActivity } from "./achievements";
+import { t } from "./i18n.svelte";
 import {
   clearMediaSessionPosition,
   registerMediaSessionActions,
@@ -20,23 +33,60 @@ import {
   CARD_QUEUE_CAP,
   shuffleTailFromCurrent,
 } from "./smartShuffle";
+import { PlaybackGuards } from "./playbackGuards";
+import { toasts } from "./toasts.svelte";
 import {
+  getPlayCountsMap,
+  getRecentRelPaths,
   loadUserPrefs,
   patchUserPrefs,
-  playCountFor,
+  playCountIn,
   type CrossfadeSec,
 } from "./userPrefs";
 
 export type RepeatMode = "off" | "all" | "one";
 
+/**
+ * Where audio goes while it is not played locally (e.g. a Cast receiver).
+ * Installed with `player.setRemoteOutput(output)`: from then on the player
+ * keeps managing the queue and its state, but never starts local audio —
+ * track loads and play/pause/seek are handed to this object, and the remote
+ * reports back through `reportRemoteState` / `notifyRemoteEnded`.
+ */
+export type RemoteOutput = {
+  /** Current track changed (or output just installed): play it from `startTime`. */
+  loadTrack(track: Track, startTime: number, autoplay: boolean): void;
+  play(): void;
+  pause(): void;
+  seek(seconds: number): void;
+};
+
 type Listener = () => void;
 type DeckIx = 0 | 1;
 
 const SLEEP_FADE_MS = 30_000;
-const SLEEP_FADE_INTERVAL_MS = 180;
-/** Always-on listening session: queue + currentIndex (not seek/volume/view). */
+/** How often element volumes are resampled while a fade runs without Web Audio. */
+const LEVEL_TICK_MS = 40;
+/**
+ * Always-on listening session: queue + currentIndex (not volume/view), per
+ * account (`<prefix>.<accountId>`). The un-suffixed keys are what older
+ * builds wrote for whichever account was bound; read once, then dropped.
+ */
 const SESSION_QUEUE_KEY = "rekord.next.sessionQueue";
 const SESSION_QUEUE_PERSIST_MS = 300;
+/** Playback position, kept apart so a timeupdate never rewrites the queue. */
+const SESSION_POSITION_KEY = "rekord.next.sessionPosition";
+const SESSION_POSITION_PERSIST_MS = 5000;
+/** Below this a restored position is not worth a seek. */
+const RESTORE_POSITION_MIN_SEC = 3;
+/** Consecutive tracks that failed to load before playback gives up. */
+const MAX_CONSECUTIVE_TRACK_ERRORS = 3;
+/** Health probe deciding "file broken" vs "hub gone" after a media error. */
+const MEDIA_ERROR_PROBE_MS = 4000;
+/** Hub-synced cursor (index + position) while playing: at most this often. */
+const CURSOR_SYNC_MIN_MS = 60_000;
+/** Gapless warm-up window when crossfade is off (seconds before the end). */
+const GAPLESS_PREFETCH_SEC = 12;
 /** The OS extrapolates position between updates; this only corrects drift. */
 const MEDIA_POSITION_REFRESH_MS = 5000;
 
@@ -44,7 +94,69 @@ type PersistedSessionQueue = {
   version: 1;
   tracks: Track[];
   currentIndex: number;
+  /** When this queue was last changed (ms); decides local vs hub on restore. */
+  updatedAt?: number;
 };
+
+/** Queue state handed to / taken from the hub user-state (`settings.queue`). */
+export type QueueSnapshot = {
+  relPaths: string[];
+  index: number;
+  /** Track the position belongs to (guards a stale cursor). */
+  relPath: string | null;
+  /** Seconds into `relPath`. */
+  time: number;
+  /** When the queue or cursor last changed (ms since epoch). */
+  updatedAt: number;
+};
+
+/** What changed since the last sync: the list (heavy) and/or the cursor (light). */
+export type QueueSyncChange = {
+  list: boolean;
+  cursor: boolean;
+  snapshot: QueueSnapshot;
+};
+
+function accountSuffix(accountId: string | null | undefined): string {
+  return (accountId || "").trim() || "default";
+}
+
+function nowMs(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+/**
+ * Dropping the analyser graph means swapping in fresh `<audio>` decks (a
+ * media element stays bound to its MediaElementSource forever). iOS / iPadOS
+ * WebKit unlocks playback per element on a user gesture, so a fresh deck might
+ * refuse to auto-advance there: on those devices the graph stays engaged until
+ * reload instead.
+ */
+function deckRebuildSafe(): boolean {
+  if (typeof navigator === "undefined") return true;
+  const ua = navigator.userAgent || "";
+  if (/iPhone|iPad|iPod/i.test(ua)) return false;
+  if (/Macintosh/i.test(ua) && (navigator.maxTouchPoints ?? 0) > 1) return false;
+  return true;
+}
+
+let volumeWorks: boolean | null = null;
+
+/**
+ * Whether `HTMLMediaElement.volume` really changes the level. iOS / iPadOS
+ * ignore it (it always reads back 1): there fades need the Web Audio graph.
+ */
+function elementVolumeWorks(): boolean {
+  if (volumeWorks != null) return volumeWorks;
+  try {
+    const probe = new Audio();
+    probe.volume = 0.5;
+    volumeWorks = Math.abs(probe.volume - 0.5) < 0.01;
+  } catch {
+    volumeWorks = false;
+  }
+  return volumeWorks;
+}
 
 function isTrackLike(v: unknown): v is Track {
   if (!v || typeof v !== "object") return false;
@@ -57,10 +169,28 @@ function isTrackLike(v: unknown): v is Track {
   );
 }
 
-function loadPersistedSessionQueue(): PersistedSessionQueue | null {
+function tracksFromRelPaths(relPaths: unknown[]): Track[] {
+  return relPaths
+    .filter((p): p is string => typeof p === "string" && p.length > 0)
+    .map(
+      (rel_path, i) =>
+        ({
+          id: -1 - i,
+          rel_path,
+          title: rel_path.split("/").pop() || rel_path,
+          artist_name: "",
+          album_name: "",
+          duration_ms: 0,
+          track_number: null,
+          album_id: null,
+          artist_id: null,
+        }) satisfies Track,
+    );
+}
+
+function parsePersistedSessionQueue(raw: string | null): PersistedSessionQueue | null {
+  if (!raw) return null;
   try {
-    const raw = localStorage.getItem(SESSION_QUEUE_KEY);
-    if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PersistedSessionQueue> & {
       relPaths?: string[];
     };
@@ -69,57 +199,157 @@ function loadPersistedSessionQueue(): PersistedSessionQueue | null {
       tracks = parsed.tracks.filter(isTrackLike);
     } else if (Array.isArray(parsed.relPaths)) {
       // Older shape: only paths — restore needs catalog remap.
-      tracks = parsed.relPaths
-        .filter((p): p is string => typeof p === "string" && p.length > 0)
-        .map(
-          (rel_path, i) =>
-            ({
-              id: -1 - i,
-              rel_path,
-              title: rel_path.split("/").pop() || rel_path,
-              artist_name: "",
-              album_name: "",
-              duration_ms: 0,
-              track_number: null,
-              album_id: null,
-              artist_id: null,
-            }) satisfies Track,
-        );
+      tracks = tracksFromRelPaths(parsed.relPaths);
     }
     if (!tracks.length) return null;
     const currentIndex =
       typeof parsed.currentIndex === "number" && Number.isFinite(parsed.currentIndex)
         ? Math.max(0, Math.floor(parsed.currentIndex))
         : 0;
-    return { version: 1, tracks, currentIndex };
+    const updatedAt = Number(parsed.updatedAt);
+    return {
+      version: 1,
+      tracks,
+      currentIndex,
+      updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 0,
+    };
   } catch {
     return null;
   }
 }
 
-function savePersistedSessionQueue(queue: Track[], currentIndex: number) {
-  if (!queue.length) {
+/**
+ * This account's saved queue. The pre-account global key is adopted once by
+ * the account bound when it is first read (it was that account's queue), and
+ * removed so no other account can ever restore it.
+ */
+function loadPersistedSessionQueue(accountId: string): PersistedSessionQueue | null {
+  try {
+    const own = localStorage.getItem(`${SESSION_QUEUE_KEY}.${accountId}`);
+    if (own) return parsePersistedSessionQueue(own);
+    const legacy = localStorage.getItem(SESSION_QUEUE_KEY);
+    if (!legacy) return null;
     localStorage.removeItem(SESSION_QUEUE_KEY);
-    return;
+    if (accountId !== accountSuffix(getSelectedAccountId())) return null;
+    localStorage.setItem(`${SESSION_QUEUE_KEY}.${accountId}`, legacy);
+    const pos = localStorage.getItem(SESSION_POSITION_KEY);
+    if (pos) {
+      localStorage.setItem(`${SESSION_POSITION_KEY}.${accountId}`, pos);
+      localStorage.removeItem(SESSION_POSITION_KEY);
+    }
+    return parsePersistedSessionQueue(legacy);
+  } catch {
+    return null;
   }
-  const payload: PersistedSessionQueue = {
-    version: 1,
-    tracks: queue.map((t) => ({ ...t })),
-    currentIndex: Math.max(0, Math.min(currentIndex, queue.length - 1)),
-  };
-  localStorage.setItem(SESSION_QUEUE_KEY, JSON.stringify(payload));
+}
+
+/** Snapshot fields worth keeping; lyrics can be kilobytes per track. */
+function slimTrack(track: Track): Track {
+  const { lyrics: _lyrics, ...rest } = track;
+  return rest;
+}
+
+/**
+ * Best effort: a full localStorage (quota) or a disabled one (private mode,
+ * blocked site data) must never break playback. Falls back to paths only,
+ * which the restore remaps through the catalog.
+ */
+function savePersistedSessionQueue(
+  accountId: string,
+  queue: Track[],
+  currentIndex: number,
+  updatedAt: number,
+) {
+  const key = `${SESSION_QUEUE_KEY}.${accountId}`;
+  try {
+    if (!queue.length) {
+      localStorage.removeItem(key);
+      return;
+    }
+    const index = Math.max(0, Math.min(currentIndex, queue.length - 1));
+    const payload: PersistedSessionQueue = {
+      version: 1,
+      tracks: queue.map(slimTrack),
+      currentIndex: index,
+      updatedAt,
+    };
+    try {
+      localStorage.setItem(key, JSON.stringify(payload));
+    } catch {
+      localStorage.setItem(
+        key,
+        JSON.stringify({ relPaths: queue.map((t) => t.rel_path), currentIndex: index, updatedAt }),
+      );
+    }
+  } catch {
+    /* storage full or unavailable: the session simply is not restored */
+  }
+}
+
+type PersistedPosition = { relPath: string; time: number; updatedAt?: number };
+
+function loadPersistedPosition(accountId: string): PersistedPosition | null {
+  try {
+    const raw = localStorage.getItem(`${SESSION_POSITION_KEY}.${accountId}`);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as Partial<PersistedPosition>;
+    if (typeof p.relPath !== "string" || !p.relPath) return null;
+    const time = Number(p.time);
+    if (!Number.isFinite(time) || time < 0) return null;
+    const updatedAt = Number(p.updatedAt);
+    return { relPath: p.relPath, time, updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0 };
+  } catch {
+    return null;
+  }
+}
+
+function savePersistedPosition(accountId: string, pos: PersistedPosition | null) {
+  const key = `${SESSION_POSITION_KEY}.${accountId}`;
+  try {
+    if (!pos) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(pos));
+  } catch {
+    /* ignore: position restore is a nicety */
+  }
 }
 
 class PlayerController {
-  private deck0 = new Audio();
-  private deck1 = new Audio();
+  private deck0: HTMLAudioElement;
+  private deck1: HTMLAudioElement;
+  /** Aborting one detaches every listener of that deck (it is being replaced). */
+  private deckBindings: [AbortController | null, AbortController | null] = [null, null];
   private active: DeckIx = 0;
+  /**
+   * Web Audio graph, only while something needs the analyser (see
+   * `acquireAnalyser`). Routing the decks through it is expensive on some
+   * engines (WebKitGTK re-renders every decoded frame through a second
+   * pipeline), so plain playback, crossfades and fades never need it.
+   */
   private ctx: AudioContext | null = null;
-  private gain0: GainNode | null = null;
-  private gain1: GainNode | null = null;
+  /** Per-deck crossfade level while the deck is wired (element volume stays 1). */
+  private gains: [GainNode | null, GainNode | null] = [null, null];
+  /** Non-null = that deck element plays through the graph (irreversible for it). */
+  private sources: [MediaElementAudioSourceNode | null, MediaElementAudioSourceNode | null] = [
+    null,
+    null,
+  ];
+  /** Master (sleep fade) level for wired decks. */
   private outputGain: GainNode | null = null;
   private analyser: AnalyserNode | null = null;
-  private graphReady = false;
+  private analyserLeases = createLeaseCounter(
+    () => this.engageGraph(),
+    () => this.onAnalyserIdle(),
+  );
+  /** Crossfade level of each deck: 1 = heard, 0 = silent. */
+  private deckLevels: [LevelRamp, LevelRamp] = [constantLevel(1), constantLevel(0)];
+  /** Whole-output level (sleep-timer fade). */
+  private masterLevel: LevelRamp = constantLevel(1);
+  /** Resamples element volumes while a ramp runs on an unwired deck. */
+  private levelTicker = 0;
+  /** Async deck work holding element references across awaits (no deck swap meanwhile). */
+  private deckOpsInFlight = 0;
+  /** Permanent graph lease where element volume is ignored (iOS): fades need GainNodes there. */
+  private fadeLease: (() => void) | null = null;
   private crossfadeBusy = false;
   private crossfadeTimer = 0;
   private crossfadeGen = 0;
@@ -132,6 +362,14 @@ class PlayerController {
   private listeners = new Set<Listener>();
   /** Progress-only listeners (timeupdate) — must not drive full app re-renders. */
   private progressListeners = new Set<Listener>();
+  /** Play/pause only — cheaper than a full state emit (lists don't care). */
+  private playStateListeners = new Set<Listener>();
+  /** Latest requested seek, applied once per animation frame. */
+  private pendingSeek: number | null = null;
+  private seekFrame = 0;
+  private lastPositionSaveAt = 0;
+  /** Position to apply once the restored track has metadata. */
+  private restorePosition: PersistedPosition | null = null;
 
   queue: Track[] = [];
   index = -1;
@@ -144,7 +382,7 @@ class PlayerController {
   sleepTimerEndsAt: number | null = null;
   private privateQueue: Track[] = [];
   private sleepTimeout = 0;
-  private sleepFadeInterval = 0;
+  private sleepFadeTimer = 0;
   private excludedRelPaths = new Set<string>();
   private excludedAlbumIds = new Set<number>();
   /** Paths inserted via "add to queue" — stay ahead of auto-fill inserts. */
@@ -153,9 +391,36 @@ class PlayerController {
   private halfListenCounted = false;
   private halfListenPath: string | null = null;
   private persistQueueTimer = 0;
-  private lastQueuePersistSig = "";
+  /** Last saved list signature / index (see `flushPersistQueue`). */
+  private lastQueueListSig = "";
+  private lastPersistIndex = -1;
+  private lastPersistLen = -1;
+  private lastPersistFirst = "";
+  private lastPersistCurrent = "";
+  /** A mutation the cheap pre-check cannot see (reorder in the middle). */
+  private queueDirty = false;
+  private queueUpdatedAt = 0;
+  private lastCursorSyncAt = 0;
+  private queueSync: ((change: QueueSyncChange) => void) | null = null;
+  /** Account the saved queue / position belong to. */
+  private boundAccount = accountSuffix(getSelectedAccountId());
+  /** While true nothing is persisted (account switch in progress). */
+  private persistSuspended = false;
   private restoringSession = false;
   private sessionRestored = false;
+  /** Tracks in a row that failed to load (missing / unreadable files). */
+  private consecutiveErrors = 0;
+  /** Set while the hub is unreachable: what to resume once it is back. */
+  private outage: { relPath: string; time: number; play: boolean } | null = null;
+  private outageListener: (() => void) | null = null;
+  private mediaErrorBusy = false;
+  /** Hold / seek lock / crossfade override laid over the player (Plectr). */
+  private guards = new PlaybackGuards();
+  /** Set when a held track reached its end (cleared by the next load / play). */
+  private heldEndedFlag = false;
+  private heldEndListeners = new Set<(track: Track | null) => void>();
+  /** The sticky "playback stopped" notice, dismissed once something plays. */
+  private errorNoticeId: number | null = null;
   private lastMediaPositionAt = 0;
   /**
    * Favourites live in the session store, which already imports the player;
@@ -163,6 +428,8 @@ class PlayerController {
    * an import cycle.
    */
   private favoriteToggle: (() => void) | null = null;
+  /** Remote playback target (Cast); null = local decks. */
+  private remote: RemoteOutput | null = null;
 
   constructor() {
     const prefs = loadUserPrefs();
@@ -170,15 +437,15 @@ class PlayerController {
     this.excludedRelPaths = new Set(prefs.excludedRelPaths);
     this.excludedAlbumIds = new Set(prefs.excludedAlbumIds);
 
-    for (const a of [this.deck0, this.deck1]) {
-      a.preload = "auto";
-      a.crossOrigin = "anonymous";
-    }
-    this.bindDeck(this.deck0, 0);
-    this.bindDeck(this.deck1, 1);
+    this.deck0 = this.createDeck(0);
+    this.deck1 = this.createDeck(1);
+    this.applyLevels();
 
     if (typeof window !== "undefined") {
-      window.addEventListener("pagehide", () => this.flushPersistQueue());
+      window.addEventListener("pagehide", () => {
+        this.flushPersistQueue();
+        this.persistPosition(true);
+      });
       // Registered once: the OS keeps the same handlers across track changes.
       registerMediaSessionActions(() => this.mediaBridge());
     }
@@ -201,7 +468,7 @@ class PlayerController {
       prev: () => void this.prev(),
       seek: (seconds) => this.seek(seconds),
       seekBy: (delta) => {
-        const at = this.activeAudio().currentTime;
+        const at = this.pendingSeek ?? this.activeAudio().currentTime;
         const max = this.duration > 0 ? this.duration : Number.POSITIVE_INFINITY;
         this.seek(Math.min(max, Math.max(0, at + delta)));
       },
@@ -215,8 +482,29 @@ class PlayerController {
     };
   }
 
-  private bindDeck(audio: HTMLAudioElement, ix: DeckIx) {
-    audio.addEventListener("timeupdate", () => {
+  private createDeck(ix: DeckIx): HTMLAudioElement {
+    const audio = new Audio();
+    audio.preload = "auto";
+    audio.crossOrigin = "anonymous";
+    const binding = new AbortController();
+    this.deckBindings[ix] = binding;
+    this.bindDeck(audio, ix, binding.signal);
+    return audio;
+  }
+
+  private deckEl(ix: DeckIx): HTMLAudioElement {
+    return ix === 0 ? this.deck0 : this.deck1;
+  }
+
+  private bindDeck(audio: HTMLAudioElement, ix: DeckIx, signal: AbortSignal) {
+    const on = (type: string, fn: () => void) =>
+      audio.addEventListener(type, fn, { signal });
+    on("timeupdate", () => {
+      // Backstop for the level ticker: media events keep coming when timers
+      // are throttled (hidden window, phone in a pocket).
+      if (this.levelTicker) this.applyElementLevels();
+      // Decks are silent while a remote output plays: their events are stale.
+      if (this.remote) return;
       if (this.crossfadeBusy) {
         // Keep UI moving during fade (outgoing until swap).
         if (this.crossfadeOutIx === ix) {
@@ -226,25 +514,39 @@ class PlayerController {
         return;
       }
       if (ix !== this.active) return;
+      // A seek is queued for the next frame: the element still reports the
+      // old position and would make the timeline jump back for one tick.
+      if (this.pendingSeek != null) return;
       this.currentTime = audio.currentTime;
       this.prefetchNextDeck();
       this.maybeStartCrossfade();
       this.maybeCountHalfListen();
       this.syncMediaPosition();
+      this.persistPosition();
       this.emitProgress();
     });
-    audio.addEventListener("durationchange", () => {
+    on("loadedmetadata", () => {
+      // Decks are silent while a remote output plays: their events are stale.
+      if (this.remote) return;
+      if (ix !== this.active) return;
+      this.applyRestorePosition(audio);
+    });
+    on("durationchange", () => {
+      // Decks are silent while a remote output plays: their events are stale.
+      if (this.remote) return;
       if (this.crossfadeBusy && this.crossfadeInIx === ix) {
-        this.duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+        this.duration = this.deckDuration(audio);
         this.emitProgress();
         return;
       }
       if (ix !== this.active) return;
-      this.duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      this.duration = this.deckDuration(audio);
       this.syncMediaPosition(true);
       this.emitProgress();
     });
-    audio.addEventListener("play", () => {
+    on("play", () => {
+      // Decks are silent while a remote output plays: their events are stale.
+      if (this.remote) return;
       if (this.crossfadeBusy) {
         if (this.crossfadeInIx === ix || this.crossfadeOutIx === ix) {
           this.playing = true;
@@ -254,17 +556,26 @@ class PlayerController {
         return;
       }
       if (ix !== this.active) return;
+      if (this.playing) return;
       this.playing = true;
       this.syncMediaPlaybackState();
-      this.emit();
+      this.emitPlayState();
     });
-    audio.addEventListener("pause", () => {
+    on("pause", () => {
+      // Decks are silent while a remote output plays: their events are stale.
+      if (this.remote) return;
       if (ix !== this.active || this.crossfadeBusy) return;
+      // `ended` also pauses: the advance that follows is the real change.
+      if (audio.ended) return;
+      if (!this.playing) return;
       this.playing = false;
       this.syncMediaPlaybackState();
-      this.emit();
+      this.persistPosition(true);
+      this.emitPlayState();
     });
-    audio.addEventListener("ended", () => {
+    on("ended", () => {
+      // Decks are silent while a remote output plays: their events are stale.
+      if (this.remote) return;
       if (this.crossfadeBusy) {
         if (ix === this.crossfadeOutIx) this.finalizeCrossfade();
         return;
@@ -272,6 +583,320 @@ class PlayerController {
       if (ix !== this.active) return;
       void this.onEnded();
     });
+    on("playing", () => {
+      if (ix === this.active) this.heldEndedFlag = false;
+      if (this.remote) return;
+      if (ix !== this.active && !(this.crossfadeBusy && this.crossfadeInIx === ix)) return;
+      // A track really plays: the failure streak and any outage are over.
+      this.consecutiveErrors = 0;
+      this.outage = null;
+      if (this.errorNoticeId != null) {
+        toasts.dismiss(this.errorNoticeId);
+        this.errorNoticeId = null;
+      }
+    });
+    on("error", () => {
+      if (this.remote) return;
+      const src = audio.getAttribute("src");
+      if (!src) return;
+      const cur = this.current;
+      if (ix !== this.active || !cur || src !== mediaUrl(cur.rel_path)) {
+        // A warm-up of the next track failed: forget it, the real load retries.
+        if (ix !== this.active && this.prefetchedRelPath && src === mediaUrl(this.prefetchedRelPath)) {
+          this.prefetchedRelPath = null;
+        }
+        return;
+      }
+      // The incoming deck of a load is handled by `loadCurrentDecks` itself.
+      void this.onTrackFailed(cur, this.playing, this.currentTime, audio.error?.code);
+    });
+  }
+
+  /**
+   * The current track would not load or broke off. Either the hub is gone
+   * (then nothing is skipped: the session probes the hub and
+   * `resumeAfterOutage` picks up where it stopped) or the file is missing /
+   * unreadable (then it is skipped, like legacy; after
+   * MAX_CONSECUTIVE_TRACK_ERRORS failures in a row playback stops with a
+   * notice that stays until dismissed or until something plays).
+   */
+  private async onTrackFailed(track: Track, wantPlay: boolean, at = 0, errorCode?: number) {
+    if (this.mediaErrorBusy || this.remote) return;
+    // "Format not supported" (e.g. WMA/AIFF/ALAC in WebKitGTK or Chromium): try
+    // the hub's transcoded stream once before calling the file broken.
+    if (
+      errorCode === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED &&
+      markNeedsTranscode(track.rel_path)
+    ) {
+      this.cancelPendingLoad();
+      this.abortCrossfade();
+      await this.loadCurrent(wantPlay);
+      return;
+    }
+    this.mediaErrorBusy = true;
+    const gen = this.loadGen;
+    let skipTo: number | null = null;
+    try {
+      const reachable = await this.hubReachable();
+      // The user moved on meanwhile: that load decides for itself.
+      if (gen !== this.loadGen || this.current?.rel_path !== track.rel_path) return;
+      if (!reachable) {
+        this.outage = { relPath: track.rel_path, time: Math.max(0, at), play: wantPlay };
+        // The previous track may still be draining its buffer on the other
+        // deck: the user asked for this one, so silence until it can play.
+        this.deck0.pause();
+        this.deck1.pause();
+        this.playing = false;
+        this.syncMediaPlaybackState();
+        this.emitPlayState();
+        this.outageListener?.();
+        return;
+      }
+      this.consecutiveErrors += 1;
+      if (this.consecutiveErrors >= MAX_CONSECUTIVE_TRACK_ERRORS) {
+        this.consecutiveErrors = 0;
+        this.deck0.pause();
+        this.deck1.pause();
+        this.playing = false;
+        this.syncMediaPlaybackState();
+        this.emit();
+        // One notice for the whole streak: the "skipped" toast it replaces goes.
+        toasts.dismissKey("player-track-skipped");
+        this.errorNoticeId = toasts.error(t("core.player.tooManyErrors"), {
+          key: "player-too-many-errors",
+          duration: null,
+        });
+        return;
+      }
+      toasts.error(t("core.player.trackSkipped", { title: track.title }), {
+        key: "player-track-skipped",
+      });
+      skipTo = this.nextIndexAfterFailure();
+      if (skipTo == null) {
+        this.playing = false;
+        this.syncMediaPlaybackState();
+        this.emit();
+      }
+    } finally {
+      this.mediaErrorBusy = false;
+    }
+    if (skipTo != null) {
+      this.cancelPendingLoad();
+      this.abortCrossfade();
+      this.index = skipTo;
+      await this.loadCurrent(wantPlay);
+    }
+  }
+
+  /** Next index when skipping a broken track (repeat-one would loop on it). */
+  private nextIndexAfterFailure(): number | null {
+    if (this.index < this.queue.length - 1) return this.index + 1;
+    if (this.repeat !== "off" && this.queue.length > 1) return 0;
+    return null;
+  }
+
+  /** Does the hub answer at all? (Any HTTP answer counts as yes.) */
+  private async hubReachable(): Promise<boolean> {
+    try {
+      await api.health({ timeoutMs: MEDIA_ERROR_PROBE_MS });
+      return true;
+    } catch (e) {
+      return !(e instanceof ApiError && e.offline);
+    }
+  }
+
+  /** The session hears from here when playback stopped because the hub went away. */
+  setOutageListener(fn: (() => void) | null) {
+    this.outageListener = fn;
+  }
+
+  /** True while playback waits for the hub to come back. */
+  get waitingForHub(): boolean {
+    return this.outage != null;
+  }
+
+  /**
+   * The hub is reachable again: reload the current track where it stopped
+   * and resume if it was playing. Also covers a deck that stalled or broke
+   * off without telling us. Returns whether anything was reloaded.
+   */
+  resumeAfterOutage(): boolean {
+    if (this.remote) return false;
+    const cur = this.current;
+    const o = this.outage;
+    if (!cur) {
+      this.outage = null;
+      return false;
+    }
+    const el = this.activeAudio();
+    const broken =
+      el.error != null ||
+      (this.playing && el.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && !el.seeking);
+    if (!o && !broken) return false;
+    const time = o && o.relPath === cur.rel_path ? o.time : this.currentTime;
+    const play = o ? o.play : this.playing;
+    this.outage = null;
+    void this.reloadCurrentAt(time, play);
+    return true;
+  }
+
+  /** Fresh load of the current track on the active deck at `time`. */
+  private async reloadCurrentAt(time: number, play: boolean) {
+    const cur = this.current;
+    if (!cur) return;
+    this.deckOpsInFlight += 1;
+    try {
+      const gen = ++this.loadGen;
+      this.abortCrossfade();
+      this.cancelPendingSeek();
+      const a = this.activeAudio();
+      this.prefetchedRelPath = null;
+      a.loop = this.repeat === "one";
+      this.restorePosition = time >= 1 ? { relPath: cur.rel_path, time } : null;
+      this.currentTime = time;
+      this.emitProgress();
+      a.src = mediaUrl(cur.rel_path);
+      a.load();
+      if (!play) {
+        this.emit();
+        return;
+      }
+      await this.waitForAudioReady(a, 8000, this.knownDuration(cur) > 0);
+      if (gen !== this.loadGen) return;
+      try {
+        const resume = this.resumeGraphForPlay();
+        if (resume) await resume;
+        await a.play();
+        if (gen !== this.loadGen) return;
+        this.playing = true;
+        this.syncMediaPlaybackState();
+      } catch (e) {
+        if (gen !== this.loadGen) return;
+        this.playing = false;
+        this.reportPlayFailure(e);
+      }
+      this.emit();
+    } finally {
+      this.deckOpsInFlight -= 1;
+      this.maybeDropGraph();
+    }
+  }
+
+  /** True while a remote output (Cast) plays instead of the local decks. */
+  get remoteOutputActive(): boolean {
+    return this.remote != null;
+  }
+
+  /**
+   * Route playback to a remote output (`null` → back to local audio).
+   *
+   * Installing it pauses the decks and hands over the current track at the
+   * current position (playing if it was playing). Removing it resumes the
+   * decks at the last position the remote reported, playing if the remote was.
+   * All other player APIs keep working unchanged.
+   */
+  setRemoteOutput(output: RemoteOutput | null): void {
+    if (output === this.remote) return;
+    if (output) {
+      const wasPlaying = this.playing;
+      const pos = this.remote ? this.currentTime : this.activeAudio().currentTime || this.currentTime;
+      this.cancelPendingLoad();
+      this.abortCrossfade();
+      this.cancelPendingSeek();
+      this.deck0.pause();
+      this.deck1.pause();
+      this.remote = output;
+      this.playing = wasPlaying;
+      this.currentTime = pos;
+      this.emit();
+      const cur = this.current;
+      if (cur) output.loadTrack(cur, pos, wasPlaying);
+      return;
+    }
+    const pos = this.currentTime;
+    const resume = this.playing;
+    this.remote = null;
+    this.playing = false;
+    this.syncMediaPlaybackState();
+    void this.resumeLocalAt(pos, resume);
+  }
+
+  /** Back from remote: make sure the active deck holds the current track, seek, play. */
+  private async resumeLocalAt(pos: number, play: boolean) {
+    this.deckOpsInFlight += 1;
+    try {
+      await this.resumeLocalDeckAt(pos, play);
+    } finally {
+      this.deckOpsInFlight -= 1;
+      this.maybeDropGraph();
+    }
+  }
+
+  private async resumeLocalDeckAt(pos: number, play: boolean) {
+    const cur = this.current;
+    if (!cur) {
+      this.emit();
+      return;
+    }
+    const gen = ++this.loadGen;
+    const a = this.activeAudio();
+    const url = mediaUrl(cur.rel_path);
+    if (a.getAttribute("src") !== url) {
+      this.prefetchedRelPath = null;
+      a.loop = this.repeat === "one";
+      a.src = url;
+      a.load();
+      await this.waitForAudioReady(a, 8000, this.knownDuration(cur) > 0);
+      if (gen !== this.loadGen || this.remote) return;
+    }
+    try {
+      a.currentTime = pos;
+    } catch {
+      /* not seekable yet */
+    }
+    this.currentTime = pos;
+    this.emit();
+    this.emitProgress();
+    if (play) await this.toggle();
+  }
+
+  /** Remote status (≈1 Hz): mirrors play state / position into the player. */
+  reportRemoteState(state: { playing: boolean; currentTime: number; duration?: number }): void {
+    if (!this.remote) return;
+    if (state.playing !== this.playing) {
+      this.playing = state.playing;
+      this.syncMediaPlaybackState();
+      this.emitPlayState();
+    }
+    if (Number.isFinite(state.currentTime)) this.currentTime = Math.max(0, state.currentTime);
+    if (state.duration && state.duration > 0) this.duration = state.duration;
+    // Same half-listen rule as local playback.
+    const track = this.current;
+    if (track && this.duration > 0) {
+      if (this.halfListenPath !== track.rel_path) this.resetHalfListen(track);
+      if (this.halfListenCounted && this.currentTime < this.duration * 0.1) this.halfListenCounted = false;
+      if (!this.halfListenCounted && this.currentTime >= this.duration * 0.5) {
+        this.halfListenCounted = true;
+        this.bumpPlayCount(track);
+        this.emit();
+      }
+    }
+    this.syncMediaPosition();
+    this.emitProgress();
+  }
+
+  /** The remote finished the current track: advance like a local `ended`. */
+  notifyRemoteEnded(): void {
+    if (!this.remote) return;
+    if (!this.guards.advanceOnEnd()) {
+      this.finishHeldTrack();
+      return;
+    }
+    if (this.repeat === "one") {
+      void this.loadCurrent(true);
+      return;
+    }
+    void this.onEnded();
   }
 
   /** State changes (track/queue/playing) — safe for full UI refresh. */
@@ -286,24 +911,79 @@ class PlayerController {
     return () => this.progressListeners.delete(fn);
   }
 
+  /**
+   * Play/pause flips only. `subscribe` no longer fires for them: a pause does
+   * not change what lists show, and re-deriving them on every toggle was the
+   * main cost of pressing play.
+   */
+  subscribePlayState(fn: Listener) {
+    this.playStateListeners.add(fn);
+    return () => this.playStateListeners.delete(fn);
+  }
+
   private emit() {
     this.schedulePersistQueue();
     for (const fn of this.listeners) fn();
+    for (const fn of this.playStateListeners) fn();
   }
 
   private emitProgress() {
     for (const fn of this.progressListeners) fn();
   }
 
-  private queuePersistSig() {
-    if (!this.queue.length || this.index < 0) return "";
-    return `${this.index}\0${this.queue.map((t) => t.rel_path).join("\0")}`;
+  private emitPlayState() {
+    for (const fn of this.playStateListeners) fn();
+  }
+
+  /** Throttled save of the playback position (forced on pause / pagehide). */
+  private persistPosition(force = false) {
+    if (this.restoringSession || this.restorePosition || this.persistSuspended) return;
+    const track = this.current;
+    if (!track) return;
+    const now = Date.now();
+    if (!force && now - this.lastPositionSaveAt < SESSION_POSITION_PERSIST_MS) return;
+    this.lastPositionSaveAt = now;
+    savePersistedPosition(this.boundAccount, {
+      relPath: track.rel_path,
+      time: this.currentTime,
+      updatedAt: now,
+    });
+    // A forced save marks a moment worth syncing (pause, leaving, switching).
+    if (force) this.emitQueueSync(false, true);
+  }
+
+  /** Seek the restored track to where the last session stopped (once). */
+  private applyRestorePosition(audio: HTMLAudioElement) {
+    const pos = this.restorePosition;
+    if (!pos) return;
+    this.restorePosition = null;
+    if (this.current?.rel_path !== pos.relPath) return;
+    const d = this.deckDuration(audio, this.current);
+    if (d > 0 && pos.time >= d - 5) return;
+    try {
+      audio.currentTime = pos.time;
+      this.currentTime = pos.time;
+      this.syncMediaPosition(true);
+      this.emitProgress();
+    } catch {
+      /* not seekable yet: start from the top */
+    }
+  }
+
+  /** The list part of the queue (index excluded): changes far less often. */
+  private queueListSig() {
+    if (!this.queue.length) return "";
+    return this.queue.map((t) => t.rel_path).join("\0");
   }
 
   private schedulePersistQueue() {
-    if (this.restoringSession) return;
-    const sig = this.queuePersistSig();
-    if (sig === this.lastQueuePersistSig) return;
+    if (this.restoringSession || this.persistSuspended) return;
+    if (this.queue.length === this.lastPersistLen && this.index === this.lastPersistIndex) {
+      // Cheap pre-check before joining hundreds of paths on every emit.
+      const first = this.queue[0]?.rel_path ?? "";
+      const cur = this.queue[this.index]?.rel_path ?? "";
+      if (first === this.lastPersistFirst && cur === this.lastPersistCurrent && !this.queueDirty) return;
+    }
     if (this.persistQueueTimer) window.clearTimeout(this.persistQueueTimer);
     this.persistQueueTimer = window.setTimeout(() => {
       this.persistQueueTimer = 0;
@@ -311,37 +991,119 @@ class PlayerController {
     }, SESSION_QUEUE_PERSIST_MS);
   }
 
-  /** Flush queue + currentIndex to localStorage (always on, like legacy enqueueQueuePatch). */
+  /**
+   * Flush queue + currentIndex of the bound account to localStorage (always
+   * on, like legacy enqueueQueuePatch), only when the list or the index
+   * changed — never on play/pause or progress; the position lives apart.
+   */
   flushPersistQueue() {
-    if (this.restoringSession) return;
+    if (this.restoringSession || this.persistSuspended) return;
     if (this.persistQueueTimer) {
       window.clearTimeout(this.persistQueueTimer);
       this.persistQueueTimer = 0;
     }
-    const sig = this.queuePersistSig();
-    if (sig === this.lastQueuePersistSig) return;
-    this.lastQueuePersistSig = sig;
-    savePersistedSessionQueue(this.queue, this.index);
+    this.queueDirty = false;
+    const listSig = this.queueListSig();
+    const listChanged = listSig !== this.lastQueueListSig;
+    const cursorChanged = this.index !== this.lastPersistIndex || listChanged;
+    this.lastPersistLen = this.queue.length;
+    this.lastPersistIndex = this.index;
+    this.lastPersistFirst = this.queue[0]?.rel_path ?? "";
+    this.lastPersistCurrent = this.queue[this.index]?.rel_path ?? "";
+    if (!listChanged && !cursorChanged) return;
+    this.lastQueueListSig = listSig;
+    this.queueUpdatedAt = Date.now();
+    savePersistedSessionQueue(this.boundAccount, this.queue, this.index, this.queueUpdatedAt);
+    this.emitQueueSync(listChanged, cursorChanged);
   }
 
   /**
-   * Restore queue + currentIndex. Always on (ignores prefs.restoreSession).
-   * Does not restore seek position, volume, or UI view; does not autoplay.
-   * Remaps ids from catalog when available; keeps snapshots otherwise.
+   * Hub sync of the queue (session → `settings.queue`). The list goes when it
+   * changes; the cursor (index + position) on pause, on leaving, on account
+   * switch, and at most once a minute while tracks change.
    */
-  restorePersistedQueue(catalog: Track[] = []): boolean {
-    if (this.sessionRestored) return false;
-    const persisted = loadPersistedSessionQueue();
-    if (!persisted?.tracks.length) {
-      this.sessionRestored = true;
-      return false;
+  setQueueSync(fn: ((change: QueueSyncChange) => void) | null) {
+    this.queueSync = fn;
+  }
+
+  private emitQueueSync(list: boolean, cursor: boolean, force = false) {
+    const fn = this.queueSync;
+    if (!fn || this.persistSuspended || this.restoringSession) return;
+    const now = Date.now();
+    if (!list && cursor && !force && this.playing && now - this.lastCursorSyncAt < CURSOR_SYNC_MIN_MS) {
+      return;
     }
+    if (cursor || list) this.lastCursorSyncAt = now;
+    fn({ list, cursor, snapshot: this.queueSnapshot() });
+  }
+
+  /** Queue + cursor as the hub stores it. */
+  queueSnapshot(): QueueSnapshot {
+    const cur = this.current;
+    return {
+      relPaths: this.queue.map((t) => t.rel_path),
+      index: Math.max(0, this.index),
+      relPath: cur?.rel_path ?? null,
+      time: cur ? Math.max(0, Math.round((this.currentTime || 0) * 10) / 10) : 0,
+      updatedAt: Math.max(this.queueUpdatedAt, this.lastPositionSaveAt) || Date.now(),
+    };
+  }
+
+  /** Account whose queue / position the player reads and writes. */
+  get accountId(): string {
+    return this.boundAccount;
+  }
+
+  /**
+   * Saved queue of the bound account on this device (null when none), with
+   * the position when it belongs to the current track. For the session to
+   * weigh against the hub's copy.
+   */
+  localQueueSnapshot(): QueueSnapshot | null {
+    const persisted = loadPersistedSessionQueue(this.boundAccount);
+    if (!persisted?.tracks.length) return null;
+    const index = Math.min(persisted.currentIndex, persisted.tracks.length - 1);
+    const relPath = persisted.tracks[index]?.rel_path ?? null;
+    const pos = loadPersistedPosition(this.boundAccount);
+    const time = pos && pos.relPath === relPath ? pos.time : 0;
+    return {
+      relPaths: persisted.tracks.map((t) => t.rel_path),
+      index,
+      relPath,
+      time,
+      updatedAt: Math.max(persisted.updatedAt ?? 0, pos?.updatedAt ?? 0),
+    };
+  }
+
+  /**
+   * Restore queue + currentIndex (+ position) of the bound account. Always
+   * on; never autoplays; remaps ids from the catalog when available.
+   * Pass `preferred` (the hub's copy, when newer) to restore that instead.
+   */
+  restorePersistedQueue(catalog: Track[] = [], preferred?: QueueSnapshot | null): boolean {
+    if (this.sessionRestored) return false;
     // User already started listening during bootstrap — keep that session.
     if (this.playing || this.queue.length > 0) {
       this.sessionRestored = true;
       return false;
     }
+    const persisted = loadPersistedSessionQueue(this.boundAccount);
+    const local = this.localQueueSnapshot();
+    const useHub =
+      preferred != null &&
+      preferred.relPaths.length > 0 &&
+      (!local || (preferred.updatedAt || 0) > (local.updatedAt || 0));
     this.sessionRestored = true;
+    if (useHub) {
+      const snapshot = tracksFromRelPaths(preferred!.relPaths);
+      const pos =
+        preferred!.relPath && preferred!.time >= RESTORE_POSITION_MIN_SEC
+          ? { relPath: preferred!.relPath, time: preferred!.time }
+          : null;
+      return this.hydrateQueueSnapshot(snapshot, preferred!.index, catalog, pos);
+    }
+    if (!persisted?.tracks.length) return false;
+    this.queueUpdatedAt = persisted.updatedAt ?? 0;
     return this.hydrateQueueSnapshot(persisted.tracks, persisted.currentIndex, catalog);
   }
 
@@ -351,32 +1113,28 @@ class PlayerController {
     currentIndex: number,
     catalog: Track[] = [],
   ): boolean {
-    // One-shot: never re-apply on Refresh / Dashboard re-nav (would stop audio).
-    if (this.sessionRestored) return false;
     if (!relPaths.length) return false;
     if (this.playing || this.queue.length > 0) {
       this.sessionRestored = true;
       return false;
     }
-    const tracks = relPaths.map((rel_path, i) => ({
-      id: -1 - i,
-      rel_path,
-      title: rel_path.split("/").pop() || rel_path,
-      artist_name: "",
-      album_name: "",
-      duration_ms: 0,
-      track_number: null,
-      album_id: null,
-      artist_id: null,
-    })) satisfies Track[];
     this.sessionRestored = true;
-    return this.hydrateQueueSnapshot(tracks, currentIndex, catalog);
+    const ok = this.hydrateQueueSnapshot(tracksFromRelPaths(relPaths), currentIndex, catalog);
+    // A queue restored from elsewhere is this account's queue from now on.
+    if (ok) this.emitQueueSync(true, true, true);
+    return ok;
+  }
+
+  /** Whether the player has already restored (or started) a session. */
+  get sessionWasRestored(): boolean {
+    return this.sessionRestored;
   }
 
   private hydrateQueueSnapshot(
     snapshot: Track[],
     currentIndex: number,
     catalog: Track[] = [],
+    position?: { relPath: string; time: number } | null,
   ): boolean {
     if (!snapshot.length) return false;
     // Never tear down a live listening session (refresh races, duplicate restore).
@@ -391,25 +1149,241 @@ class PlayerController {
       this.abortCrossfade();
       this.privateQueue = [...tracks];
       this.queue = [...tracks];
+      this.queueDirty = true;
       this.index = index;
       this.playing = false;
       this.currentTime = 0;
       this.duration = 0;
+      this.consecutiveErrors = 0;
       const track = this.current;
       if (track) {
         const audio = this.activeAudio();
         audio.loop = this.repeat === "one";
+        const pos = position ?? loadPersistedPosition(this.boundAccount);
+        // The hub's duration is the seek bar's length at once (no wait on the file).
+        if (track.duration_ms > 0) this.duration = track.duration_ms / 1000;
+        if (pos && pos.relPath === track.rel_path && pos.time >= RESTORE_POSITION_MIN_SEC) {
+          this.restorePosition = { relPath: pos.relPath, time: pos.time };
+          // Show it at once; the element seeks when metadata arrives.
+          this.currentTime = pos.time;
+        }
         audio.src = mediaUrl(track.rel_path);
-        this.prefetchedRelPath = track.rel_path;
         this.updateMediaSession(track);
       }
-      this.lastQueuePersistSig = this.queuePersistSig();
-      savePersistedSessionQueue(this.queue, this.index);
+      this.lastQueueListSig = this.queueListSig();
+      this.lastPersistIndex = this.index;
+      this.lastPersistLen = this.queue.length;
+      this.lastPersistFirst = this.queue[0]?.rel_path ?? "";
+      this.lastPersistCurrent = this.queue[this.index]?.rel_path ?? "";
+      if (!this.queueUpdatedAt) this.queueUpdatedAt = Date.now();
+      savePersistedSessionQueue(this.boundAccount, this.queue, this.index, this.queueUpdatedAt);
+      if (this.restorePosition) {
+        savePersistedPosition(this.boundAccount, {
+          relPath: this.restorePosition.relPath,
+          time: this.restorePosition.time,
+          updatedAt: this.queueUpdatedAt,
+        });
+      }
       this.emit();
     } finally {
       this.restoringSession = false;
     }
     return true;
+  }
+
+  /**
+   * Account switch, step 1 (old account still bound): save its queue and
+   * position locally and hand the snapshot to the hub sync, then stop
+   * playback and empty the player without writing anything — the queue on
+   * disk stays the old account's. Returns the old account's snapshot.
+   */
+  releaseAccount(opts?: { sync?: boolean }): QueueSnapshot | null {
+    const had = this.queue.length > 0;
+    // The binding may already point elsewhere (another tab, a dead account):
+    // then the snapshot must not reach the hub sync, which speaks for it.
+    const sync = opts?.sync !== false;
+    const syncFn = this.queueSync;
+    if (!sync) this.queueSync = null;
+    if (this.remote) this.remote.pause();
+    // Position first: the element still knows where it is.
+    if (this.current && !this.remote) {
+      const el = this.activeAudio();
+      if (Number.isFinite(el.currentTime) && el.currentTime > 0) this.currentTime = el.currentTime;
+    }
+    this.flushPersistQueue();
+    this.persistPosition(true);
+    const snapshot = had ? this.queueSnapshot() : null;
+    if (sync) this.emitQueueSync(true, true, true);
+    this.queueSync = syncFn;
+    this.persistSuspended = true;
+    try {
+      this.cancelPendingLoad();
+      this.abortCrossfade();
+      this.cancelPendingSeek();
+      this.manualQueuedPaths.clear();
+      this.deck0.pause();
+      this.deck1.pause();
+      for (const el of [this.deck0, this.deck1]) {
+        try {
+          el.removeAttribute("src");
+          el.load();
+        } catch {
+          /* already empty */
+        }
+      }
+      this.prefetchedRelPath = null;
+      this.queue = [];
+      this.privateQueue = [];
+      this.index = -1;
+      this.playing = false;
+      this.currentTime = 0;
+      this.duration = 0;
+      this.restorePosition = null;
+      this.outage = null;
+      this.consecutiveErrors = 0;
+      this.resetHalfListen(null);
+      this.updateMediaSession(null);
+      this.emit();
+      this.emitProgress();
+    } finally {
+      // Stays suspended until `bindAccount`: the empty player must never be
+      // written over the released account's saved queue.
+      this.persistSuspended = true;
+    }
+    return snapshot;
+  }
+
+  /**
+   * Account switch, step 2: from now on queue and position belong to
+   * `accountId`. The next `restorePersistedQueue` restores its session.
+   */
+  bindAccount(accountId: string | null | undefined) {
+    const next = accountSuffix(accountId);
+    this.persistSuspended = false;
+    if (next === this.boundAccount) return;
+    this.boundAccount = next;
+    this.sessionRestored = false;
+    this.lastQueueListSig = "";
+    this.lastPersistIndex = -1;
+    this.lastPersistLen = -1;
+    this.lastPersistFirst = "";
+    this.lastPersistCurrent = "";
+    this.queueUpdatedAt = 0;
+    this.lastPositionSaveAt = 0;
+    this.lastCursorSyncAt = 0;
+  }
+
+  // ---- Guards (hold, seek lock, crossfade override) -------------------------
+
+  /**
+   * Hold the player (`null` releases): no auto-advance and no crossfade into
+   * the next track. A held track plays to its end and stops there; then
+   * `heldEnded` is true and `onHeldEnd` listeners fire. Repeat-one looping is
+   * off while held (the end must be reached).
+   */
+  setHold(reason: string | null) {
+    if (!this.guards.setHold(reason)) return;
+    const a = this.activeAudio();
+    a.loop = this.guards.held ? false : this.repeat === "one";
+    if (this.guards.held) {
+      // A fade already under way finishes on the next track: undo it.
+      if (this.crossfadeBusy) this.abortCrossfade();
+    } else {
+      this.heldEndedFlag = false;
+    }
+    this.emit();
+  }
+
+  /** Why the player is held, or null. */
+  get holdReason(): string | null {
+    return this.guards.hold;
+  }
+
+  /** A held track reached its end and the player is waiting. */
+  get heldEnded(): boolean {
+    return this.heldEndedFlag;
+  }
+
+  /** Called with the track that ended while held. Returns an unsubscribe. */
+  onHeldEnd(fn: (track: Track | null) => void): () => void {
+    this.heldEndListeners.add(fn);
+    return () => this.heldEndListeners.delete(fn);
+  }
+
+  private finishHeldTrack() {
+    this.heldEndedFlag = true;
+    this.playing = false;
+    if (this.duration > 0) this.currentTime = this.duration;
+    this.syncMediaPlaybackState();
+    this.emit();
+    this.emitProgress();
+    const track = this.current;
+    for (const fn of [...this.heldEndListeners]) {
+      try {
+        fn(track);
+      } catch {
+        /* a listener must not break playback */
+      }
+    }
+  }
+
+  /**
+   * Crossfade seconds replacing the user's setting until `null`. Never saved
+   * to prefs; `crossfadeSec` keeps reporting the user's value.
+   */
+  setCrossfadeOverride(sec: number | null) {
+    if (!this.guards.setCrossfadeOverride(sec)) return;
+    if (this.crossfadeBusy && this.effectiveCrossfadeSec === 0) this.abortCrossfade();
+    this.emit();
+  }
+
+  /** The crossfade in use (override, else the user's setting). */
+  get effectiveCrossfadeSec(): number {
+    return this.guards.crossfade(this.crossfadeSec);
+  }
+
+  /**
+   * Refuse user seeks (`null` releases): dock timeline, media keys, keyboard
+   * shortcuts. `seek(t, { force: true })` still works for the lock owner.
+   */
+  setSeekLock(reason: string | null) {
+    if (!this.guards.setSeekLock(reason)) return;
+    if (this.guards.seekLocked) this.cancelPendingSeek();
+    this.emit();
+  }
+
+  get seekLocked(): boolean {
+    return this.guards.seekLocked;
+  }
+
+  get seekLockReason(): string | null {
+    return this.guards.seekLock;
+  }
+
+  /**
+   * Make `track` current: its index when it is in the queue, else a queue of
+   * `opts.queue` (or the track alone). With `autoplay: false` it is prepared
+   * paused at 0:00 — the previous track stops at once, nothing is heard.
+   * Resolves once the track is loaded (or the load was superseded).
+   */
+  async load(
+    track: Track,
+    opts: { autoplay?: boolean; queue?: Track[] } = {},
+  ): Promise<void> {
+    const autoplay = opts.autoplay !== false;
+    this.cancelPendingLoad();
+    this.abortCrossfade();
+    let idx = opts.queue ? -1 : this.queue.findIndex((t) => t.rel_path === track.rel_path);
+    if (idx < 0) {
+      const list = opts.queue?.length ? opts.queue : [track];
+      idx = Math.max(0, list.findIndex((t) => t.rel_path === track.rel_path));
+      this.manualQueuedPaths.clear();
+      this.privateQueue = [...list];
+      this.queue = [...list];
+      this.queueDirty = true;
+    }
+    this.index = idx;
+    await this.loadCurrent(autoplay);
   }
 
   get current(): Track | null {
@@ -451,62 +1425,332 @@ class PlayerController {
     this.emit();
   }
 
-  private ensureGraph() {
-    if (this.graphReady) return;
+  // ---- Levels -------------------------------------------------------------
+  //
+  // Every level is a plan (`LevelRamp`): per-deck crossfade level times the
+  // master (sleep fade) level. An unwired deck plays at that product through
+  // `element.volume`, resampled every LEVEL_TICK_MS while something moves. A
+  // deck wired into the analyser graph keeps `element.volume = 1`; its level
+  // is scheduled on its GainNode and the master on `outputGain`, so the level
+  // is never applied twice and switching mid-fade continues the same plan.
+
+  /** Move each deck's crossfade level to `levels`, over `durationMs` (0 = now). */
+  private setDeckLevels(levels: [number, number], durationMs = 0) {
+    const now = nowMs();
+    this.deckLevels = [
+      retargetLevel(this.deckLevels[0], levels[0], now, durationMs),
+      retargetLevel(this.deckLevels[1], levels[1], now, durationMs),
+    ];
+    this.applyLevels(now);
+  }
+
+  /** Move the master (sleep fade) level to `level`, over `durationMs` (0 = now). */
+  private setMasterLevel(level: number, durationMs = 0) {
+    const now = nowMs();
+    this.masterLevel = retargetLevel(this.masterLevel, level, now, durationMs);
+    this.applyLevels(now);
+  }
+
+  /** Only `ix` heard, at once (track swap, aborted fade). */
+  private snapSolo(ix: DeckIx) {
+    this.setDeckLevels(ix === 0 ? [1, 0] : [0, 1]);
+  }
+
+  /** Push the current plan to wherever each level lives (GainNode or element). */
+  private applyLevels(now = nowMs()) {
+    const ctx = this.ctx;
+    for (const ix of [0, 1] as const) {
+      const gain = this.gains[ix];
+      if (ctx && gain && this.sources[ix]) {
+        this.scheduleParam(ctx, gain.gain, this.deckLevels[ix], now);
+        this.setElementVolume(this.deckEl(ix), 1);
+      }
+    }
+    if (ctx && this.outputGain) this.scheduleParam(ctx, this.outputGain.gain, this.masterLevel, now);
+    this.applyElementLevels(now);
+  }
+
+  /** Sample the plan into the volume of every deck not wired into the graph. */
+  private applyElementLevels(now = nowMs()) {
+    const master = levelAt(this.masterLevel, now);
+    for (const ix of [0, 1] as const) {
+      if (this.sources[ix]) continue;
+      this.setElementVolume(this.deckEl(ix), elementVolume(levelAt(this.deckLevels[ix], now), master));
+    }
+    this.syncLevelTicker(now);
+  }
+
+  private setElementVolume(el: HTMLAudioElement, v: number) {
+    if (Math.abs(el.volume - v) < 1e-4) return;
     try {
-      const ctx = new AudioContext();
-      const s0 = ctx.createMediaElementSource(this.deck0);
-      const s1 = ctx.createMediaElementSource(this.deck1);
-      const g0 = ctx.createGain();
-      const g1 = ctx.createGain();
-      const out = ctx.createGain();
-      const analyser = ctx.createAnalyser();
-      g0.gain.value = 1;
-      g1.gain.value = 0;
-      out.gain.value = 1;
-      analyser.fftSize = 1024;
-      analyser.smoothingTimeConstant = 0.62;
-      analyser.minDecibels = -88;
-      analyser.maxDecibels = -28;
-      s0.connect(g0);
-      s1.connect(g1);
-      g0.connect(out);
-      g1.connect(out);
-      // Match legacy: output → analyser → destination
-      out.connect(analyser);
-      analyser.connect(ctx.destination);
-      this.ctx = ctx;
-      this.gain0 = g0;
-      this.gain1 = g1;
-      this.outputGain = out;
-      this.analyser = analyser;
-      this.graphReady = true;
+      el.volume = v;
     } catch {
-      this.graphReady = false;
+      /* out-of-range guard: elementVolume already clamps */
     }
   }
 
-  /** Web Audio analyser for Listen visualizers (null until graph is ready). */
+  /** Keep the resampling timer alive only while an unwired deck has a moving level. */
+  private syncLevelTicker(now: number) {
+    const unwired = !this.sources[0] || !this.sources[1];
+    const moving =
+      rampActive(this.deckLevels[0], now) ||
+      rampActive(this.deckLevels[1], now) ||
+      rampActive(this.masterLevel, now);
+    const need = unwired && moving && typeof window !== "undefined";
+    if (need && !this.levelTicker) {
+      this.levelTicker = window.setInterval(() => this.applyElementLevels(), LEVEL_TICK_MS);
+    } else if (!need && this.levelTicker) {
+      window.clearInterval(this.levelTicker);
+      this.levelTicker = 0;
+    }
+  }
+
+  /** Same plan on the audio thread: exact even when the page's timers are throttled. */
+  private scheduleParam(ctx: AudioContext, param: AudioParam, ramp: LevelRamp, now: number) {
+    const t = ctx.currentTime;
+    const v = levelAt(ramp, now);
+    try {
+      param.cancelScheduledValues(t);
+      param.setValueAtTime(v, t);
+      if (rampActive(ramp, now)) {
+        param.linearRampToValueAtTime(ramp.to, t + (ramp.endMs - now) / 1000);
+      }
+    } catch {
+      param.value = v;
+    }
+  }
+
+  // ---- Analyser graph -------------------------------------------------------
+
+  /**
+   * Take a lease on the analyser. The first lease builds the Web Audio graph
+   * and routes the decks through it (as soon as the context runs); the
+   * returned release is idempotent. While no lease is held the decks play
+   * directly, which is far cheaper on WebKitGTK. Read the node per frame with
+   * `getAnalyser()` — it is null until the decks are actually routed.
+   */
+  acquireAnalyser(): () => void {
+    return this.analyserLeases.acquire();
+  }
+
+  /** On/off handle over `acquireAnalyser` for components (call `set` freely, `dispose` on destroy). */
+  analyserLease(): LeaseSwitch {
+    return createLeaseSwitch(() => this.acquireAnalyser());
+  }
+
+  /**
+   * The analyser, while the graph is engaged (some lease is or was held and a
+   * deck is routed through it); null otherwise. Never builds the graph: take a
+   * lease with `acquireAnalyser` / `analyserLease` for that.
+   */
   getAnalyser(): AnalyserNode | null {
-    this.ensureGraph();
-    if (this.ctx?.state === "suspended") {
-      void this.ctx.resume();
+    if (!this.graphWired()) return null;
+    const ctx = this.ctx;
+    if (ctx && ctx.state !== "running" && ctx.state !== "closed") {
+      void ctx.resume().catch(() => {});
     }
     return this.analyser;
+  }
+
+  /**
+   * Crossfade and sleep fade normally ramp `element.volume`. Where that is
+   * ignored (iOS), keep the old behaviour instead: the graph is engaged from
+   * the first play (called from play paths, so a user gesture can start the
+   * context) and stays for the session.
+   */
+  private ensureFadeControl() {
+    if (this.fadeLease || elementVolumeWorks()) return;
+    this.fadeLease = this.acquireAnalyser();
+  }
+
+  private graphWired(): boolean {
+    return this.sources[0] != null || this.sources[1] != null;
+  }
+
+  /** First lease: build the graph (nodes only), wire the decks once the context runs. */
+  private engageGraph() {
+    if (!this.ctx) {
+      const Ctor =
+        typeof window !== "undefined"
+          ? (window.AudioContext ??
+            (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext)
+          : undefined;
+      if (!Ctor) return;
+      try {
+        const ctx = new Ctor();
+        const g0 = ctx.createGain();
+        const g1 = ctx.createGain();
+        const out = ctx.createGain();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 1024;
+        analyser.smoothingTimeConstant = 0.62;
+        analyser.minDecibels = -88;
+        analyser.maxDecibels = -28;
+        g0.connect(out);
+        g1.connect(out);
+        // Match legacy: output → analyser → destination
+        out.connect(analyser);
+        analyser.connect(ctx.destination);
+        ctx.onstatechange = () => {
+          if (ctx === this.ctx) this.wireDecks();
+        };
+        this.ctx = ctx;
+        this.gains = [g0, g1];
+        this.outputGain = out;
+        this.analyser = analyser;
+      } catch {
+        this.ctx = null;
+        return;
+      }
+    }
+    const ctx = this.ctx;
+    if (ctx.state === "running") this.wireDecks();
+    // Outside a user gesture this may stay suspended (autoplay policy): the
+    // decks are then left alone — routing them into a silent context would
+    // mute playback — and get wired by `onstatechange` once a play gesture
+    // resumes it (see `resumeGraphForPlay`).
+    else void ctx.resume().catch(() => {});
+  }
+
+  /**
+   * Route every not-yet-routed deck through its GainNode. Only while a lease
+   * is held and the context runs. The gain takes the deck's current level
+   * before the element switches to volume 1, so there is no jump — even in
+   * the middle of a crossfade or sleep fade.
+   */
+  private wireDecks() {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== "running" || this.analyserLeases.count === 0) return;
+    const now = nowMs();
+    let changed = false;
+    if (this.outputGain) this.scheduleParam(ctx, this.outputGain.gain, this.masterLevel, now);
+    for (const ix of [0, 1] as const) {
+      const gain = this.gains[ix];
+      if (this.sources[ix] || !gain) continue;
+      this.scheduleParam(ctx, gain.gain, this.deckLevels[ix], now);
+      try {
+        const src = ctx.createMediaElementSource(this.deckEl(ix));
+        src.connect(gain);
+        this.sources[ix] = src;
+        changed = true;
+      } catch {
+        /* this element cannot be routed: it keeps playing directly */
+      }
+    }
+    if (changed) this.applyLevels(now);
+  }
+
+  /** Last lease released: the graph goes once its decks can be swapped out. */
+  private onAnalyserIdle() {
+    if (!this.ctx) return;
+    if (!this.graphWired()) {
+      this.closeGraph();
+      return;
+    }
+    this.maybeDropGraph();
+  }
+
+  /**
+   * With no lease held, swap each idle routed deck (inactive, paused, empty)
+   * for a fresh element that plays directly; once neither deck is routed, close
+   * the context. The active deck is never touched: it is swapped after it
+   * stops being active (next track change), so playback never gaps.
+   */
+  private maybeDropGraph() {
+    if (!this.ctx || this.analyserLeases.count > 0) return;
+    if (!this.graphWired()) {
+      this.closeGraph();
+      return;
+    }
+    if (!deckRebuildSafe()) return;
+    if (this.crossfadeBusy || this.deckOpsInFlight > 0) return;
+    const ix: DeckIx = this.active === 0 ? 1 : 0;
+    const el = this.deckEl(ix);
+    if (this.sources[ix] && el.paused && !el.getAttribute("src")) this.replaceDeck(ix);
+    if (!this.graphWired()) this.closeGraph();
+  }
+
+  private replaceDeck(ix: DeckIx) {
+    const old = this.deckEl(ix);
+    this.deckBindings[ix]?.abort();
+    this.deckBindings[ix] = null;
+    try {
+      old.pause();
+      old.removeAttribute("src");
+      old.load();
+    } catch {
+      /* already empty */
+    }
+    try {
+      this.sources[ix]?.disconnect();
+    } catch {
+      /* ignore */
+    }
+    this.sources[ix] = null;
+    const fresh = this.createDeck(ix);
+    if (ix === 0) this.deck0 = fresh;
+    else this.deck1 = fresh;
+    // Its level goes back from the GainNode to the element.
+    this.applyLevels();
+  }
+
+  /** Only once no deck is routed: closing earlier would mute that deck for good. */
+  private closeGraph() {
+    const ctx = this.ctx;
+    if (!ctx || this.graphWired()) return;
+    ctx.onstatechange = null;
+    this.ctx = null;
+    this.gains = [null, null];
+    this.outputGain = null;
+    this.analyser = null;
+    void ctx.close().catch(() => {});
+  }
+
+  /**
+   * Before starting a deck. A routed deck is silent until the context runs,
+   * so then the caller must await the returned promise. With no routed deck
+   * the play never waits; resuming is still attempted (inside a user gesture
+   * this is what lets a pending graph start, e.g. on iOS).
+   */
+  private resumeGraphForPlay(): Promise<void> | null {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state === "running" || ctx.state === "closed") return null;
+    const p = ctx.resume().catch(() => {});
+    return this.graphWired() ? p : null;
+  }
+
+  /**
+   * The deck currently heard (the outgoing one until a crossfade swaps).
+   * Read-only use: clocks, visualizers. Null while a remote output plays —
+   * the local elements are silent and their time is stale then.
+   */
+  getActiveAudio(): HTMLAudioElement | null {
+    if (this.remote) return null;
+    return this.activeAudio();
+  }
+
+  /**
+   * The deck holding `relPath`, preferring one that is playing (during a
+   * crossfade both decks may be busy). Null when no deck has that file or a
+   * remote output plays.
+   */
+  getAudioForTrack(relPath: string): HTMLAudioElement | null {
+    if (this.remote || !relPath) return null;
+    const src = mediaUrl(relPath);
+    const active = this.activeAudio();
+    const other = this.inactiveDeck();
+    let match: HTMLAudioElement | null = null;
+    for (const el of [active, other]) {
+      if (el.getAttribute("src") !== src) continue;
+      if (!match || (match.paused && !el.paused)) match = el;
+    }
+    return match;
   }
 
   private activeAudio() {
     return this.active === 0 ? this.deck0 : this.deck1;
   }
 
-  private snapSolo(ix: DeckIx) {
-    if (!this.ctx || !this.gain0 || !this.gain1) return;
-    const t = this.ctx.currentTime;
-    this.gain0.gain.cancelScheduledValues(t);
-    this.gain1.gain.cancelScheduledValues(t);
-    this.gain0.gain.setValueAtTime(ix === 0 ? 1 : 0, t);
-    this.gain1.gain.setValueAtTime(ix === 1 ? 1 : 0, t);
-  }
 
   private persistExclusions() {
     patchUserPrefs({
@@ -581,12 +1825,13 @@ class PlayerController {
   }
 
   private bumpPlayCount(track: Track) {
-    const prefs = loadUserPrefs();
+    // The cached map is shared and frozen: build the next one.
+    const counts = { ...getPlayCountsMap(this.boundAccount) };
     const key = track.rel_path;
-    const prev = playCountFor(prefs, track);
-    prefs.playCounts[key] = prev + 1;
-    delete prefs.playCounts[String(track.id)];
-    patchUserPrefs({ playCounts: prefs.playCounts });
+    const prev = playCountIn(counts, track);
+    counts[key] = prev + 1;
+    delete counts[String(track.id)];
+    patchUserPrefs({ playCounts: counts }, this.boundAccount);
     touchListeningActivity();
   }
 
@@ -595,26 +1840,26 @@ class PlayerController {
     const path = track.rel_path;
     window.setTimeout(() => {
       if (this.current?.rel_path !== path) return;
-      const prefs = loadUserPrefs();
       const recent = [
         path,
-        ...prefs.recentRelPaths.filter((p) => p !== path),
+        ...getRecentRelPaths(this.boundAccount).filter((p) => p !== path),
       ].slice(0, 80);
-      patchUserPrefs({ recentRelPaths: recent, recentTrackIds: [] });
+      patchUserPrefs({ recentRelPaths: recent, recentTrackIds: [] }, this.boundAccount);
       this.emit();
     }, 0);
   }
 
+  /** Cheap (in-memory prefs). Lists should prefer `prefsRevision.playCountsMap`. */
   playCount(track: { id: number; rel_path: string } | number) {
-    const prefs = loadUserPrefs();
+    const counts = getPlayCountsMap();
     if (typeof track === "number") {
-      return prefs.playCounts[String(track)] ?? 0;
+      return counts[String(track)] ?? 0;
     }
-    return playCountFor(prefs, track);
+    return playCountIn(counts, track);
   }
 
-  recentRelPaths() {
-    return loadUserPrefs().recentRelPaths;
+  recentRelPaths(): string[] {
+    return [...getRecentRelPaths()];
   }
 
   /** @deprecated use recentRelPaths — kept for brief call-site migration */
@@ -627,8 +1872,9 @@ class PlayerController {
     this.emit();
   }
 
-  allPlayCounts() {
-    return loadUserPrefs().playCounts;
+  /** Shared, read-only map of the bound account's play counts. */
+  allPlayCounts(): Readonly<Record<string, number>> {
+    return getPlayCountsMap();
   }
 
   filterShufflePool(tracks: Track[], seed: Track | null = null) {
@@ -646,7 +1892,7 @@ class PlayerController {
   }
 
   private recentRelPathSet() {
-    return new Set(loadUserPrefs().recentRelPaths.slice(0, 48));
+    return new Set(getRecentRelPaths().slice(0, 48));
   }
 
   /**
@@ -657,7 +1903,7 @@ class PlayerController {
   playTracks(
     tracks: Track[],
     startIndex = 0,
-    opts?: { preserveQueueOrder?: boolean },
+    opts?: { preserveQueueOrder?: boolean; autoplay?: boolean },
   ) {
     if (!tracks.length) return;
     this.cancelPendingLoad();
@@ -671,6 +1917,7 @@ class PlayerController {
       const start = tracks[idx]!;
       // Avvio immediato sul brano cliccato; coda completa al frame successivo.
       this.queue = [start];
+      this.queueDirty = true;
       this.index = 0;
       void this.loadCurrent(true);
       const gen = this.loadGen;
@@ -683,20 +1930,22 @@ class PlayerController {
         const ordered = shuffleTailFromCurrent(all, focus);
         this.privateQueue = [...all];
         this.queue = ordered;
+        this.queueDirty = true;
         this.index = focus;
         this.emit();
       }, 0);
       return;
     }
     this.queue = [...this.privateQueue];
+    this.queueDirty = true;
     this.index = idx;
-    void this.loadCurrent(true);
+    void this.loadCurrent(opts?.autoplay !== false);
   }
 
   playTrack(
     track: Track,
     context: Track[] = [track],
-    opts?: { preserveQueueOrder?: boolean },
+    opts?: { preserveQueueOrder?: boolean; autoplay?: boolean },
   ) {
     const idx = context.findIndex((t) => t.id === track.id);
     this.playTracks(context, idx >= 0 ? idx : 0, opts);
@@ -748,6 +1997,7 @@ class PlayerController {
     // privateQueue = ordine sorgente (per restore quando si spegne shuffle).
     this.privateQueue = seed ? [...tracks] : [...pool];
     this.queue = [first];
+    this.queueDirty = true;
     this.index = 0;
     void this.loadCurrent(true);
     const gen = this.loadGen;
@@ -756,6 +2006,7 @@ class PlayerController {
       if (this.loadGen !== gen) return;
       if (this.current?.rel_path !== firstPath) return;
       this.queue = full;
+      this.queueDirty = true;
       this.index = 0;
       this.emit();
     }, 0);
@@ -776,6 +2027,7 @@ class PlayerController {
     const first = full[0]!;
     this.privateQueue = [...pool];
     this.queue = [first];
+    this.queueDirty = true;
     this.index = 0;
     void this.loadCurrent(true);
     const gen = this.loadGen;
@@ -784,6 +2036,7 @@ class PlayerController {
       if (this.loadGen !== gen) return;
       if (this.current?.rel_path !== firstPath) return;
       this.queue = full;
+      this.queueDirty = true;
       this.index = 0;
       this.emit();
     }, 0);
@@ -806,6 +2059,7 @@ class PlayerController {
     // Start audio on the seed immediately; score the library after paint.
     this.privateQueue = [seed];
     this.queue = [seed];
+    this.queueDirty = true;
     this.index = 0;
     void this.loadCurrent(true);
     const gen = this.loadGen;
@@ -822,6 +2076,7 @@ class PlayerController {
       if (!queue.length) return;
       this.privateQueue = [...queue];
       this.queue = queue;
+      this.queueDirty = true;
       this.index = 0;
       this.emit();
     }, 0);
@@ -856,6 +2111,7 @@ class PlayerController {
     this.manualQueuedPaths.clear();
     this.privateQueue = [...fullQueue];
     this.queue = [...fullQueue];
+    this.queueDirty = true;
     this.index = focusIdx;
     this.emit();
   }
@@ -879,6 +2135,7 @@ class PlayerController {
     });
     for (const t of add) this.manualQueuedPaths.add(t.rel_path);
     this.queue = insertTracksInQueue(this.queue, add, at);
+    this.queueDirty = true;
     const curPath = this.current?.rel_path;
     const privFocus = curPath
       ? this.privateQueue.findIndex((t) => t.rel_path === curPath)
@@ -903,6 +2160,7 @@ class PlayerController {
     if (removedPath) this.manualQueuedPaths.delete(removedPath);
     const removingCurrent = index === this.index;
     this.queue = this.queue.filter((_, i) => i !== index);
+    this.queueDirty = true;
     this.privateQueue = this.queue.slice();
     if (!this.queue.length) {
       this.index = -1;
@@ -947,6 +2205,7 @@ class PlayerController {
     else if (from < idx && clamped >= idx) idx -= 1;
     else if (from > idx && clamped <= idx) idx += 1;
     this.queue = next;
+    this.queueDirty = true;
     this.privateQueue = next.slice();
     this.index = idx;
     this.emit();
@@ -968,18 +2227,65 @@ class PlayerController {
 
   async toggle() {
     if (!this.current) return;
-    this.ensureGraph();
-    if (this.ctx?.state === "suspended") await this.ctx.resume();
+    if (this.remote) {
+      if (this.playing) this.remote.pause();
+      else this.remote.play();
+      return;
+    }
+    if (this.outage) {
+      // Nothing to play until the hub is back: remember the intent instead.
+      this.outage.play = !this.outage.play;
+      if (this.outage.play) toasts.info(t("core.player.waitingHub"), { key: "player-waiting-hub" });
+      return;
+    }
     const a = this.activeAudio();
-    if (a.paused) await a.play();
-    else a.pause();
+    if (!a.paused) {
+      a.pause();
+      return;
+    }
+    if (a.error != null && a.getAttribute("src")) {
+      // The element broke earlier (hub hiccup): play() would just fail again.
+      await this.reloadCurrentAt(this.currentTime, true);
+      return;
+    }
+    this.ensureFadeControl();
+    try {
+      // No graph (the usual case): nothing to wait for, play stays in the gesture.
+      const resume = this.resumeGraphForPlay();
+      if (resume) await resume;
+      // Restored session with no source yet (e.g. the deck was reset).
+      if (!a.src && this.current) a.src = mediaUrl(this.current.rel_path);
+      await a.play();
+    } catch (e) {
+      this.playing = false;
+      this.syncMediaPlaybackState();
+      this.emitPlayState();
+      this.reportPlayFailure(e);
+    }
+  }
+
+  /** Superseded loads abort on purpose; anything else deserves a word. */
+  private reportPlayFailure(e: unknown) {
+    if (e instanceof DOMException && e.name === "AbortError") return;
+    const key =
+      e instanceof DOMException && e.name === "NotAllowedError"
+        ? "core.player.playBlocked"
+        : "core.player.playFailed";
+    toasts.error(t(key), { key: "player-play-failed" });
   }
 
   pause() {
+    if (this.remote) {
+      this.remote.pause();
+      return;
+    }
     this.activeAudio().pause();
   }
 
   private pauseHard() {
+    // Queue emptied while casting: the receiver must stop too — the dock (and
+    // its Cast button) goes away with the queue.
+    this.remote?.pause();
     this.deck0.pause();
     this.deck1.pause();
     this.playing = false;
@@ -1005,7 +2311,8 @@ class PlayerController {
     const wasFading = this.crossfadeBusy;
     this.cancelPendingLoad();
     this.abortCrossfade();
-    if (!wasFading && this.activeAudio().currentTime > 3) {
+    const position = this.remote ? this.currentTime : this.activeAudio().currentTime;
+    if (!wasFading && position > 3) {
       this.seek(0);
       return;
     }
@@ -1013,12 +2320,58 @@ class PlayerController {
     await this.loadCurrent(true);
   }
 
-  seek(seconds: number) {
-    const a = this.activeAudio();
-    a.currentTime = seconds;
-    this.currentTime = seconds;
+  /**
+   * Cheap on purpose: dragging the timeline calls this dozens of times a
+   * second. The UI value moves at once (progress emit only, no full state
+   * emit); the element itself is seeked at most once per frame.
+   */
+  seek(seconds: number, opts?: { force?: boolean }) {
+    if (!Number.isFinite(seconds)) return;
+    // Seek lock (Plectr run): the timeline, media keys and shortcuts are
+    // refused; code that owns the lock passes `{ force: true }`.
+    if (!this.guards.allowSeek(opts)) return;
+    const target = Math.max(0, seconds);
+    this.currentTime = target;
+    if (this.remote) {
+      this.emitProgress();
+      this.remote.seek(target);
+      return;
+    }
+    this.pendingSeek = target;
+    this.emitProgress();
+    // Hidden pages get no animation frames (lock-screen seek): apply now.
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      this.applyPendingSeek();
+      return;
+    }
+    if (!this.seekFrame) {
+      this.seekFrame = window.requestAnimationFrame(() => this.applyPendingSeek());
+    }
+  }
+
+  private applyPendingSeek() {
+    if (this.seekFrame) window.cancelAnimationFrame(this.seekFrame);
+    this.seekFrame = 0;
+    const target = this.pendingSeek;
+    this.pendingSeek = null;
+    if (target == null) return;
+    // A user seek beats a queued restore of the previous session's position.
+    this.restorePosition = null;
+    try {
+      this.activeAudio().currentTime = target;
+    } catch {
+      /* not seekable yet */
+    }
+    this.currentTime = target;
     this.syncMediaPosition(true);
-    this.emit();
+    this.persistPosition();
+  }
+
+  /** Drop a queued seek: a new track starts from its own position. */
+  private cancelPendingSeek() {
+    if (this.seekFrame) window.cancelAnimationFrame(this.seekFrame);
+    this.seekFrame = 0;
+    this.pendingSeek = null;
   }
 
   toggleShuffle() {
@@ -1030,9 +2383,11 @@ class PlayerController {
         this.privateQueue.filter((t) => t.id !== currentId),
       );
       this.queue = cur ? [cur, ...this.shuffled(rest)] : this.shuffled(rest);
+      this.queueDirty = true;
       this.index = cur ? 0 : this.index;
     } else {
       this.queue = [...this.privateQueue];
+      this.queueDirty = true;
       if (currentId != null) {
         const i = this.queue.findIndex((t) => t.id === currentId);
         this.index = i >= 0 ? i : 0;
@@ -1047,20 +2402,16 @@ class PlayerController {
 
   cycleRepeat() {
     this.repeat = this.repeat === "off" ? "all" : this.repeat === "all" ? "one" : "off";
-    this.activeAudio().loop = this.repeat === "one";
+    this.activeAudio().loop = this.repeat === "one" && !this.guards.held;
     this.emit();
   }
 
   setSleepTimer(minutes: number | null) {
     if (this.sleepTimeout) window.clearTimeout(this.sleepTimeout);
-    if (this.sleepFadeInterval) window.clearInterval(this.sleepFadeInterval);
+    if (this.sleepFadeTimer) window.clearTimeout(this.sleepFadeTimer);
     this.sleepTimeout = 0;
-    this.sleepFadeInterval = 0;
-    if (this.outputGain) this.outputGain.gain.value = 1;
-    else {
-      this.deck0.volume = 1;
-      this.deck1.volume = 1;
-    }
+    this.sleepFadeTimer = 0;
+    this.setMasterLevel(1);
     if (minutes == null || minutes <= 0) {
       this.sleepTimerEndsAt = null;
       this.emit();
@@ -1070,20 +2421,18 @@ class PlayerController {
     this.sleepTimerEndsAt = endsAt;
     const delay = Math.max(0, endsAt - Date.now() - SLEEP_FADE_MS);
     this.sleepTimeout = window.setTimeout(() => {
-      const start = Date.now();
-      this.sleepFadeInterval = window.setInterval(() => {
-        const elapsed = Date.now() - start;
-        const ratio = Math.max(0, 1 - elapsed / SLEEP_FADE_MS);
-        if (this.outputGain) this.outputGain.gain.value = ratio;
-        else {
-          this.deck0.volume = ratio;
-          this.deck1.volume = ratio;
-        }
-        if (elapsed >= SLEEP_FADE_MS) {
-          this.setSleepTimer(null);
-          this.pause();
-        }
-      }, SLEEP_FADE_INTERVAL_MS);
+      this.sleepTimeout = 0;
+      // Linear 30 s fade of the master level (GainNode or element volume).
+      this.setMasterLevel(0, SLEEP_FADE_MS);
+      this.sleepFadeTimer = window.setTimeout(() => {
+        this.sleepFadeTimer = 0;
+        // Land on silence even if the ticker lagged, pause while still
+        // silent, then restore the level: the other order plays a few ms at
+        // full volume right before stopping.
+        this.setMasterLevel(0);
+        this.pause();
+        this.setSleepTimer(null);
+      }, SLEEP_FADE_MS);
     }, delay);
     this.emit();
   }
@@ -1099,9 +2448,18 @@ class PlayerController {
     return audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
   }
 
-  private waitForAudioReady(audio: HTMLAudioElement, timeoutMs = 4000) {
+  /**
+   * Resolves once `audio` can start: first data by default, or just metadata
+   * (`HAVE_METADATA`) with `metadataEnough` — for tracks whose duration the
+   * hub already knows, so a multi-hour file is not held up by buffering;
+   * `play()` then starts as soon as data arrives. Never `canplaythrough`.
+   */
+  private waitForAudioReady(audio: HTMLAudioElement, timeoutMs = 4000, metadataEnough = false) {
+    const minReady = metadataEnough
+      ? HTMLMediaElement.HAVE_METADATA
+      : HTMLMediaElement.HAVE_FUTURE_DATA;
     return new Promise<boolean>((resolve) => {
-      if (this.audioReadyEnough(audio)) {
+      if (audio.readyState >= minReady) {
         resolve(true);
         return;
       }
@@ -1110,28 +2468,77 @@ class PlayerController {
         if (settled) return;
         settled = true;
         window.clearTimeout(timer);
+        audio.removeEventListener("loadedmetadata", onMetadata);
         audio.removeEventListener("canplay", onReady);
-        audio.removeEventListener("canplaythrough", onReady);
         audio.removeEventListener("loadeddata", onReady);
         audio.removeEventListener("error", onFail);
         resolve(ok);
       };
       const onReady = () => finish(true);
+      const onMetadata = () => {
+        if (metadataEnough) finish(true);
+      };
       const onFail = () => finish(false);
-      const timer = window.setTimeout(() => finish(this.audioReadyEnough(audio)), timeoutMs);
+      const timer = window.setTimeout(
+        () => finish(audio.error == null && audio.readyState >= minReady),
+        timeoutMs,
+      );
+      audio.addEventListener("loadedmetadata", onMetadata, { once: true });
       audio.addEventListener("canplay", onReady, { once: true });
-      audio.addEventListener("canplaythrough", onReady, { once: true });
       audio.addEventListener("loadeddata", onReady, { once: true });
       audio.addEventListener("error", onFail, { once: true });
     });
+  }
+
+  /** The hub's scanned duration of `track`, in seconds (0 when unknown). */
+  private knownDuration(track: Track | null | undefined): number {
+    return track && track.duration_ms > 0 ? track.duration_ms / 1000 : 0;
+  }
+
+  /** The queued track `audio` is loaded with, if any. */
+  private trackOnDeck(audio: HTMLAudioElement): Track | null {
+    const src = audio.getAttribute("src");
+    if (!src) return null;
+    const cur = this.current;
+    if (cur && mediaUrl(cur.rel_path) === src) return cur;
+    return this.queue.find((t) => mediaUrl(t.rel_path) === src) ?? null;
+  }
+
+  /**
+   * Seek-bar length for a deck: the hub's scanned duration when known. It is
+   * exact (frame-counted for VBR MP3s without a Xing header), while the
+   * element only estimates those from the bitrate — off by minutes on a long
+   * DJ set — and reports nothing useful for a transcoded stream.
+   */
+  private deckDuration(audio: HTMLAudioElement, track?: Track | null): number {
+    const known = this.knownDuration(track === undefined ? this.trackOnDeck(audio) : track);
+    if (known > 0) return known;
+    return Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
   }
 
   private inactiveDeck(): HTMLAudioElement {
     return this.active === 0 ? this.deck1 : this.deck0;
   }
 
+  /**
+   * The deck really holds `path`, buffered. `prefetchedRelPath` alone is only
+   * a hint: it survives skips now (gapless), so the element is the authority.
+   */
+  private deckReadyWith(el: HTMLAudioElement, path: string): boolean {
+    return (
+      this.prefetchedRelPath === path &&
+      el.getAttribute("src") === mediaUrl(path) &&
+      this.audioReadyEnough(el)
+    );
+  }
+
+  /**
+   * Warm the inactive deck with the next track. With crossfade the fade
+   * picks it up; without, `onEnded` → `loadCurrent` finds it buffered and
+   * starts it at once instead of waiting for the network (gapless-ish).
+   */
   private prefetchNextDeck() {
-    if (!this.crossfadeSec || this.repeat === "one" || this.crossfadeBusy) return;
+    if (this.repeat === "one" || this.crossfadeBusy || this.guards.held) return;
     const nextIdx = this.resolveNextIndex();
     if (nextIdx == null || nextIdx === this.index) return;
     const nextTr = this.queue[nextIdx];
@@ -1141,11 +2548,13 @@ class PlayerController {
     if (!Number.isFinite(d) || d <= 0) return;
     const remain = d - out.currentTime;
     // Warm the next deck a bit before the fade window.
-    if (remain > this.crossfadeSec + 10 || remain < 0.2) return;
+    const fade = this.effectiveCrossfadeSec;
+    const lead = fade ? fade + 10 : GAPLESS_PREFETCH_SEC;
+    if (remain > lead || remain < 0.2) return;
     const path = nextTr.rel_path;
     const inEl = this.inactiveDeck();
-    if (this.prefetchedRelPath === path && this.audioReadyEnough(inEl)) return;
-    if (this.prefetchedRelPath !== path) {
+    if (this.deckReadyWith(inEl, path)) return;
+    if (this.prefetchedRelPath !== path || inEl.getAttribute("src") !== mediaUrl(path)) {
       this.prefetchedRelPath = path;
       inEl.src = mediaUrl(path);
       inEl.load();
@@ -1161,13 +2570,16 @@ class PlayerController {
     this.crossfadeOutIx = null;
     this.crossfadeInIx = null;
     this.crossfadeNextIdx = null;
-    this.prefetchedRelPath = null;
+    // Not fading: the inactive deck still holds what was prefetched, and
+    // `loadCurrent` reuses it when the next track is that one (gapless).
     if (!wasBusy) return;
+    this.prefetchedRelPath = null;
     this.snapSolo(this.active);
     const inactive = this.inactiveDeck();
     inactive.pause();
     inactive.removeAttribute("src");
     void inactive.load();
+    this.maybeDropGraph();
   }
 
   /** Invalidate in-flight dual-deck loads (next/prev/playTracks). */
@@ -1206,49 +2618,44 @@ class PlayerController {
     this.snapSolo(inIx);
     if (nextTr) {
       this.index = nextIdx;
-      this.duration = Number.isFinite(inEl.duration) ? inEl.duration : 0;
+      this.duration = this.deckDuration(inEl, nextTr);
       this.currentTime = inEl.currentTime;
       this.playing = !inEl.paused;
       this.resetHalfListen(nextTr);
       this.pushRecentDeferred(nextTr);
       this.updateMediaSession(nextTr);
     }
+    this.maybeDropGraph();
     this.emit();
   }
 
   private maybeStartCrossfade() {
-    if (!this.crossfadeSec || this.repeat === "one" || this.crossfadeBusy) return;
+    const fade = this.effectiveCrossfadeSec;
+    if (!fade || this.repeat === "one" || this.crossfadeBusy || this.guards.held) return;
     const out = this.activeAudio();
     const d = out.duration;
     if (!Number.isFinite(d) || d <= 0) return;
     const remain = d - out.currentTime;
-    if (remain > this.crossfadeSec + 0.25 || remain < 0.08) return;
+    if (remain > fade + 0.25 || remain < 0.08) return;
     void this.startCrossfade();
   }
 
   private async startCrossfade() {
-    if (!this.crossfadeSec || this.crossfadeBusy || this.repeat === "one") return;
+    const fade = this.effectiveCrossfadeSec;
+    if (!fade || this.crossfadeBusy || this.repeat === "one" || this.guards.held) return;
     const nextIdx = this.resolveNextIndex();
     if (nextIdx == null || nextIdx === this.index) return;
     const nextTr = this.queue[nextIdx];
     if (!nextTr) return;
 
-    this.ensureGraph();
-    if (!this.ctx || !this.gain0 || !this.gain1) {
-      // No Web Audio graph → skip fade (avoid mute/stuck), natural advance on ended.
-      return;
-    }
-
     const outIx = this.active;
     const inIx: DeckIx = outIx === 0 ? 1 : 0;
     const outEl = outIx === 0 ? this.deck0 : this.deck1;
     const inEl = inIx === 0 ? this.deck0 : this.deck1;
-    const gOut = outIx === 0 ? this.gain0 : this.gain1;
-    const gIn = inIx === 0 ? this.gain0 : this.gain1;
 
     const d = outEl.duration;
     if (!Number.isFinite(d) || d <= 0) return;
-    const fadeWindow = Math.min(this.crossfadeSec, d);
+    const fadeWindow = Math.min(fade, d);
     if (outEl.currentTime < d - fadeWindow - 0.02) return;
     const remain = d - outEl.currentTime;
     if (remain < 0.08) return;
@@ -1264,14 +2671,15 @@ class PlayerController {
     // Never await canplay here — that ate the fade window and broke seamless.
     const path = nextTr.rel_path;
     const url = mediaUrl(path);
-    if (this.prefetchedRelPath !== path || !inEl.src) {
+    if (this.prefetchedRelPath !== path || inEl.getAttribute("src") !== url) {
       inEl.src = url;
       inEl.load();
       this.prefetchedRelPath = path;
     }
 
     try {
-      if (this.ctx.state === "suspended") await this.ctx.resume();
+      const resume = this.resumeGraphForPlay();
+      if (resume) await resume;
       if (token !== this.crossfadeGen || !this.crossfadeBusy) return;
       try {
         inEl.currentTime = 0;
@@ -1290,6 +2698,7 @@ class PlayerController {
       inEl.removeAttribute("src");
       void inEl.load();
       this.prefetchedRelPath = null;
+      this.maybeDropGraph();
       return;
     }
 
@@ -1300,17 +2709,11 @@ class PlayerController {
       this.finalizeCrossfade();
       return;
     }
-    const fadeLen = Math.min(this.crossfadeSec, liveRemain);
+    const fadeLen = Math.min(fade, liveRemain);
 
-    const now = this.ctx.currentTime;
-    const vOut = gOut.gain.value;
-    const vIn = gIn.gain.value;
-    gOut.gain.cancelScheduledValues(now);
-    gIn.gain.cancelScheduledValues(now);
-    gOut.gain.setValueAtTime(vOut, now);
-    gIn.gain.setValueAtTime(vIn, now);
-    gOut.gain.linearRampToValueAtTime(0, now + fadeLen);
-    gIn.gain.linearRampToValueAtTime(1, now + fadeLen);
+    // Out → 0, in → 1, from wherever they are now: on the GainNodes when the
+    // analyser graph is engaged, on the elements' volume otherwise.
+    this.setDeckLevels(inIx === 0 ? [1, 0] : [0, 1], fadeLen * 1000);
 
     this.crossfadeTimer = window.setTimeout(() => {
       if (token !== this.crossfadeGen) return;
@@ -1324,11 +2727,39 @@ class PlayerController {
    * from setting `src` on the active element and awaiting `play()`.
    */
   private async loadCurrent(autoplay: boolean) {
+    // Holds deck references across awaits: no deck may be swapped meanwhile.
+    this.deckOpsInFlight += 1;
+    try {
+      await this.loadCurrentDecks(autoplay);
+    } finally {
+      this.deckOpsInFlight -= 1;
+      this.maybeDropGraph();
+    }
+  }
+
+  private async loadCurrentDecks(autoplay: boolean) {
     const track = this.current;
     if (!track) return;
     const gen = ++this.loadGen;
     this.resetHalfListen(track);
+    this.cancelPendingSeek();
+    this.restorePosition = null;
 
+    if (this.remote) {
+      // Remote output: state and events only, the receiver does the playing.
+      this.currentTime = 0;
+      this.duration = track.duration_ms > 0 ? track.duration_ms / 1000 : 0;
+      this.playing = autoplay;
+      this.syncMediaPlaybackState();
+      this.updateMediaSession(track);
+      if (autoplay) this.pushRecentDeferred(track);
+      this.emit();
+      this.emitProgress();
+      this.remote.loadTrack(track, 0, autoplay);
+      return;
+    }
+
+    this.ensureFadeControl();
     const outIx = this.active;
     const inIx: DeckIx = outIx === 0 ? 1 : 0;
     const outEl = outIx === 0 ? this.deck0 : this.deck1;
@@ -1336,9 +2767,20 @@ class PlayerController {
     const url = mediaUrl(track.rel_path);
     const path = track.rel_path;
 
+    this.heldEndedFlag = false;
+    if (!autoplay) {
+      // Prepared paused: nothing of the previous track may keep sounding
+      // while the new one buffers.
+      outEl.pause();
+      if (this.playing) {
+        this.playing = false;
+        this.syncMediaPlaybackState();
+        this.emitPlayState();
+      }
+    }
+
     // Kick off buffering before UI/graph work so the click path stays lean.
-    const alreadyBuffered =
-      this.prefetchedRelPath === path && this.audioReadyEnough(inEl);
+    const alreadyBuffered = this.deckReadyWith(inEl, path);
     if (!alreadyBuffered) {
       this.prefetchedRelPath = path;
       inEl.src = url;
@@ -1356,22 +2798,30 @@ class PlayerController {
     }, 0);
 
     if (!alreadyBuffered) {
-      const ready = await this.waitForAudioReady(inEl, 8000);
+      // Known duration: the seek bar is already right, metadata is enough.
+      const ready = await this.waitForAudioReady(inEl, 8000, this.knownDuration(track) > 0);
       if (gen !== this.loadGen) return;
+      if (!ready && inEl.error != null) {
+        // The file would not load (missing, unreadable, hub gone).
+        this.prefetchedRelPath = null;
+        await this.onTrackFailed(track, autoplay, 0, inEl.error.code);
+        return;
+      }
       if (!ready) {
         // Last resort: load on the active deck (may gap) so playback isn't stuck.
-        this.ensureGraph();
         outEl.loop = this.repeat === "one";
         outEl.src = url;
         if (autoplay) {
           try {
-            if (this.ctx?.state === "suspended") await this.ctx.resume();
+            const resume = this.resumeGraphForPlay();
+            if (resume) await resume;
             if (gen !== this.loadGen) return;
             await outEl.play();
             this.playing = true;
             this.pushRecentDeferred(track);
-          } catch {
+          } catch (e) {
             this.playing = false;
+            if (gen === this.loadGen) this.reportPlayFailure(e);
           }
         }
         this.emit();
@@ -1381,27 +2831,25 @@ class PlayerController {
 
     if (gen !== this.loadGen) return;
 
-    this.ensureGraph();
-    inEl.loop = this.repeat === "one";
-    try {
-      inEl.currentTime = 0;
-    } catch {
-      /* ignore */
+    inEl.loop = this.repeat === "one" && !this.guards.held;
+    // Only rewind a deck that moved: a needless seek restarts the request.
+    if (inEl.currentTime !== 0) {
+      try {
+        inEl.currentTime = 0;
+      } catch {
+        /* ignore */
+      }
     }
 
-    if (this.ctx?.state === "suspended") await this.ctx.resume();
+    const resume = this.resumeGraphForPlay();
+    if (resume) await resume;
     if (gen !== this.loadGen) return;
 
     this.snapSolo(inIx);
-    if (!this.graphReady) {
-      inEl.volume = 1;
-      outEl.volume = 0;
-    }
     this.active = inIx;
 
-    if (Number.isFinite(inEl.duration) && inEl.duration > 0) {
-      this.duration = inEl.duration;
-    }
+    const length = this.deckDuration(inEl, track);
+    if (length > 0) this.duration = length;
     this.currentTime = inEl.currentTime;
 
     if (autoplay) {
@@ -1411,23 +2859,18 @@ class PlayerController {
         outEl.pause();
         outEl.removeAttribute("src");
         void outEl.load();
-        if (!this.graphReady) {
-          outEl.volume = 1;
-        }
         this.playing = true;
         this.pushRecentDeferred(track);
         this.updateMediaSession(track);
-      } catch {
+      } catch (e) {
         if (gen !== this.loadGen) return;
         this.playing = false;
+        this.reportPlayFailure(e);
       }
     } else {
       outEl.pause();
       outEl.removeAttribute("src");
       void outEl.load();
-      if (!this.graphReady) {
-        outEl.volume = 1;
-      }
     }
     this.prefetchedRelPath = path;
     this.emit();
@@ -1435,6 +2878,10 @@ class PlayerController {
   }
 
   private async onEnded() {
+    if (!this.guards.advanceOnEnd()) {
+      this.finishHeldTrack();
+      return;
+    }
     if (this.repeat === "one") return;
     if (this.index < this.queue.length - 1 || this.repeat === "all") {
       await this.next();
@@ -1446,16 +2893,22 @@ class PlayerController {
 
   private shuffled(list: Track[]) {
     return buildSmartRandomQueue(list, {
-      recentRelPaths: new Set(loadUserPrefs().recentRelPaths),
+      recentRelPaths: new Set(getRecentRelPaths()),
     });
   }
 
+  /** Albums whose cover was warmed already (one request per album, not per call). */
+  private warmedCovers = new Set<string>();
+
   private prefetchQueueCovers() {
     for (const t of this.queue.slice(this.index + 1, this.index + 6)) {
-      if (t.album_id == null) continue;
-      const img = new Image();
       // The shade and the dock both show the 256 variant: warm that one.
-      img.src = albumCoverUrl(t.album_id, 256);
+      const url = coverUrlFor(t, 256);
+      if (!url || this.warmedCovers.has(url)) continue;
+      if (this.warmedCovers.size > 400) this.warmedCovers.clear();
+      this.warmedCovers.add(url);
+      const img = new Image();
+      img.src = url;
     }
   }
 
@@ -1472,6 +2925,8 @@ class PlayerController {
       artist: track.artist_name,
       album: track.album_name,
       albumId: track.album_id,
+      hasCover: coverUrlFor(track) != null,
+      coverVersion: track.cover_version ?? null,
     });
     setMediaSessionPlaybackState(this.playing ? "playing" : "paused");
     this.syncMediaPosition(true);
@@ -1502,7 +2957,10 @@ export const player = new PlayerController();
 
 export function formatTime(sec: number) {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
-  const m = Math.floor(sec / 60);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
   const s = Math.floor(sec % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
+  const ss = s.toString().padStart(2, "0");
+  // Long DJ sets: "6:00:00" reads better than "360:00".
+  return h > 0 ? `${h}:${m.toString().padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }

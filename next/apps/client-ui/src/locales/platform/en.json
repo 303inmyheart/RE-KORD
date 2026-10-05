@@ -1,0 +1,16 @@
+{
+  "platform.update.clientTooOld.title": "Update this app",
+  "platform.update.clientTooOld.body": "The hub ({{hub}}) needs RE-KORD {{min}} or newer and this app is {{client}}: some features may not work until you update it.",
+  "platform.update.hubNewer.title": "Update available",
+  "platform.update.hubNewer.body": "Your hub already runs {{hub}}, this app is {{client}}.",
+  "platform.update.hubOlder.title": "Update your hub",
+  "platform.update.hubOlder.body": "Your hub runs {{hub}}, older than this app ({{client}}): update it to get every feature.",
+  "platform.update.reload.title": "New version",
+  "platform.update.reload.body": "The hub was updated to {{hub}}: reload to use the new interface.",
+  "platform.update.download": "Download",
+  "platform.update.howTo": "How to update",
+  "platform.update.reload": "Reload",
+  "platform.update.dismiss": "Dismiss",
+  "platform.download.saved": "Saved to {{path}}",
+  "platform.download.failed": "Could not save the file: {{error}}"
+}

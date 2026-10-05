@@ -7,8 +7,11 @@
  * chi installa conosce.
  */
 
-import type { Account } from "./account";
+import { getSelectedAccountId, type Account, type AccountsResponse } from "./account";
 import { getServerBaseUrl, setServerBaseUrl } from "./config";
+import { i18n } from "./i18n.svelte";
+import { checkHubCompat, compat } from "./platform/compatState.svelte";
+import { isTauri } from "./platform/env";
 
 export type ConnectPhase =
   /** Sonda muta all'avvio: si mostra il logo, non ancora una domanda. */
@@ -24,7 +27,16 @@ export type ProbeFailure =
   | { reason: "no-accounts" };
 
 export type HubProbe =
-  | { ok: true; accounts: Account[]; defaultAccountId: string; version: string }
+  | {
+      ok: true;
+      accounts: Account[];
+      defaultAccountId: string;
+      version: string;
+      /** Versione dell'API `/api/v1` dichiarata dall'hub (assente sugli hub < 5.1). */
+      apiVersion: number | null;
+      /** Client piu' vecchio che l'hub accetta (vedi `platform/compat.ts`). */
+      minClientVersion: string;
+    }
   | ({ ok: false } & ProbeFailure);
 
 /**
@@ -76,11 +88,19 @@ export async function probeHub(
     return { ok: false, reason: name === "TimeoutError" ? "timeout" : "unreachable" };
   }
   if (health.status !== 200) return { ok: false, reason: "http", status: health.status };
-  const info = (health.body ?? {}) as { service?: string; version?: string };
+  const info = (health.body ?? {}) as {
+    service?: string;
+    version?: string;
+    apiVersion?: unknown;
+    minClientVersion?: unknown;
+  };
   // Un portale wifi o un altro server sulla stessa porta risponde 200 a tutto:
   // senza questo controllo la procedura si chiuderebbe su un indirizzo che non
   // e' un hub, e l'errore salterebbe fuori dieci schermate dopo.
   if (info.service !== "RE-KORD") return { ok: false, reason: "not-hub" };
+  // L'avviso di versione si decide gia' qui: un client troppo vecchio deve
+  // saperlo prima di entrare, non dieci schermate dopo.
+  compat.apply(info);
 
   let accounts: { status: number; body: unknown };
   try {
@@ -102,13 +122,54 @@ export async function probeHub(
     accounts: list,
     defaultAccountId: envelope.data?.defaultAccountId || list[0].id,
     version: info.version || "",
+    apiVersion: typeof info.apiVersion === "number" ? info.apiVersion : null,
+    minClientVersion: typeof info.minClientVersion === "string" ? info.minClientVersion : "",
   };
+}
+
+/**
+ * L'hub locale si indovina solo dal guscio nativo: da una pagina web servita da
+ * un'altra origine la prova sarebbe una richiesta cross-origin (errore CORS in
+ * console) verso una porta che quasi mai e' quella giusta.
+ */
+function mayProbeLocalHub(): boolean {
+  if (isTauri()) return true;
+  if (typeof location === "undefined") return false;
+  return !/^https?:$/.test(location.protocol);
 }
 
 class ConnectGate {
   phase = $state<ConnectPhase>("probing");
   /** Indirizzo da riproporre nei campi: l'ultimo salvato, se c'era. */
   savedBase = $state("");
+  /** Account a cui il client e' legato ora (la schermata lo segna nella lista). */
+  currentAccountId = $state<string | null>(getSelectedAccountId());
+
+  /** Ultima sonda riuscita all'avvio: la sessione la riusa invece di rifarla. */
+  private lastProbe: { base: string; at: number; data: AccountsResponse } | null = null;
+
+  private rememberProbe(base: string, probe: HubProbe) {
+    if (!probe.ok) return;
+    this.lastProbe = {
+      base,
+      at: Date.now(),
+      data: { accounts: probe.accounts, defaultAccountId: probe.defaultAccountId },
+    };
+  }
+
+  /**
+   * Risposta «account» della sonda d'avvio, se e' recente e riguarda l'hub in
+   * uso: l'avvio della sessione non rifa' le stesse due richieste. Una volta sola.
+   */
+  takeRecentProbe(maxAgeMs: number): AccountsResponse | null {
+    const p = this.lastProbe;
+    this.lastProbe = null;
+    if (!p || Date.now() - p.at > maxAgeMs) return null;
+    const base = (getServerBaseUrl() || (typeof location === "undefined" ? "" : location.origin))
+      .replace(/\/+$/, "");
+    if (p.base.replace(/\/+$/, "") !== base) return null;
+    return p.data;
+  }
 
   /**
    * All'avvio: con un indirizzo gia' salvato si entra e basta — se l'hub non
@@ -121,35 +182,46 @@ class ConnectGate {
    * l'interfaccia servita dall'hub.
    */
   async decideOnStart(): Promise<boolean> {
+    // The boot splash has no text: wait there for the user's language, so
+    // nothing is ever painted in the fallback language first.
+    const ready = await this.decide();
+    await i18n.ready;
+    this.phase = ready ? "app" : "connect";
+    return ready;
+  }
+
+  private async decide(): Promise<boolean> {
     this.savedBase = getServerBaseUrl();
     if (this.savedBase) {
-      this.phase = "app";
+      // Si entra subito; la compatibilita' con l'hub si verifica in background.
+      void checkHubCompat(this.savedBase);
       return true;
     }
     const origin = typeof location === "undefined" ? "" : location.origin;
     if (origin.startsWith("http")) {
       const probe = await probeHub(origin, STARTUP_PROBE_TIMEOUT_MS);
       if (probe.ok) {
-        this.phase = "app";
+        this.rememberProbe(origin, probe);
         return true;
       }
     }
+    if (!mayProbeLocalHub()) return false;
     const local = await probeHub(LOCAL_HUB, LOCAL_PROBE_TIMEOUT_MS);
     if (local.ok) {
+      this.rememberProbe(LOCAL_HUB, local);
       // Va salvato: nel guscio nativo l'origine e' l'app, e senza base le
       // chiamate finirebbero su tauri://localhost.
       setServerBaseUrl(LOCAL_HUB);
       this.savedBase = LOCAL_HUB;
-      this.phase = "app";
       return true;
     }
-    this.phase = "connect";
     return false;
   }
 
   /** Riapre la procedura: dalle impostazioni, o quando l'hub ha cambiato indirizzo. */
   open() {
     this.savedBase = getServerBaseUrl();
+    this.currentAccountId = getSelectedAccountId();
     this.phase = "connect";
   }
 

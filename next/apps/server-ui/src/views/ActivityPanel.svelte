@@ -1,25 +1,26 @@
 <script lang="ts">
   import { Button, EmptyState, Field, Panel, Select, TextInput } from "@rekord/ui";
   import { admin, humanTime } from "../lib/admin.svelte";
+  import { hubActivityMsg, hubKind, t } from "../lib/i18n.svelte";
 
-  const scopeOptions = [
-    { value: "all", label: "Tutto" },
-    { value: "system", label: "Solo hub" },
-    { value: "user", label: "Solo account" },
-  ];
+  const scopeOptions = $derived([
+    { value: "all", label: t("activity.scope.all") },
+    { value: "system", label: t("activity.scope.system") },
+    { value: "user", label: t("activity.scope.user") },
+  ]);
 
   const entries = $derived(admin.activity);
 </script>
 
-<Panel title="Registro attività">
+<Panel title={t("activity.title")}>
   {#snippet actions()}
     <Button variant="secondary" disabled={admin.busy} onclick={() => void admin.loadActivity()}>
-      Aggiorna
+      {t("common.refresh")}
     </Button>
   {/snippet}
 
   <div class="filters">
-    <Field label="Giorno">
+    <Field label={t("activity.day")}>
       <TextInput
         type="date"
         value={admin.activityDay}
@@ -29,7 +30,7 @@
         }}
       />
     </Field>
-    <Field label="Origine">
+    <Field label={t("activity.scope")}>
       <Select
         options={scopeOptions}
         value={admin.activityScope}
@@ -42,14 +43,14 @@
   </div>
 
   {#if entries.length === 0}
-    <EmptyState message="Nessuna attività in questo giorno" />
+    <EmptyState message={t("activity.empty")} />
   {:else}
     <ul class="log">
       {#each entries as e}
         <li>
           <span class="ts">{humanTime(e.ts)}</span>
-          <span class="kind">{e.kind}</span>
-          <span class="msg">{e.message}</span>
+          <span class="kind">{hubKind(e.kind)}</span>
+          <span class="msg">{hubActivityMsg(e)}</span>
           {#if e.accountName || e.accountId}
             <span class="who">{e.accountName ?? e.accountId}</span>
           {/if}

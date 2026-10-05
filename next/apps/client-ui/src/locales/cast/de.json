@@ -1,0 +1,14 @@
+{
+  "cast.device": "Gerät",
+  "cast.start": "Auf ein Gerät streamen (Chromecast / Google Home)",
+  "cast.stopOn": "Streaming auf {{name}} beenden",
+  "cast.connecting": "Verbindung zum Gerät…",
+  "cast.connected": "Streaming gestartet",
+  "cast.connectedTo": "Streaming auf {{name}}",
+  "cast.castingTo": "Streaming auf {{name}}",
+  "cast.connectFailed": "Cast-Verbindung fehlgeschlagen: {{error}}",
+  "cast.noLanUrl": "Das Cast-Gerät erreicht den Hub nicht: Öffne den Client über seine Adresse im lokalen Netz (nicht localhost) oder aktiviere den Fernzugriff.",
+  "cast.loadFailed": "„{{title}}“ konnte nicht gestreamt werden: {{error}}",
+  "cast.sessionFailed": "das Gerät hat die Verbindung nicht angenommen (Code {{code}})",
+  "cast.timeout": "das Cast-Gerät hat nicht geantwortet"
+}

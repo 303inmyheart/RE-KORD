@@ -71,7 +71,8 @@
     background: linear-gradient(180deg, var(--rk-accent), var(--rk-accent-2));
   }
 
-  .rk-rail-btn.active :global(svg) {
+  .rk-rail-btn.active :global(svg),
+  .rk-rail-btn.active :global(.geq) {
     color: var(--rk-accent-2);
   }
 

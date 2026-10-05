@@ -1,6 +1,149 @@
 /**
- * Campo `genre` serializzato con `"; "` (indice libreria / metadati traccia).
- * Accetta anche stili legacy: "a/b", "a, b".
+ * Genres: the one place that knows how a `genre` field is written and read.
+ *
+ * Tags and sidecars write lists in several styles ("Hip Hop; Pop Rap",
+ * "Rock/Pop", "Rock, Pop", "Rock | Pop") and the same genre in several
+ * spellings ("Hip Hop", "hip-hop", "HipHop"). Everything that groups, counts,
+ * filters or matches genres (dashboard chips, statistics, achievements, smart
+ * shuffle, search, library) goes through here, so they all agree:
+ *
+ * - `parseTrackGenres(raw)`  → the tokens of one field (first spelling kept);
+ * - `normalizeGenreKey(g)`   → identity of a genre (case/space/hyphen-insensitive);
+ * - `canonicalGenreLabel(g)` → the label to show for that identity;
+ * - `trackGenres(track, album?)` → canonical labels of a track (prefers the
+ *   hub's `genres: string[]` when it sends one).
+ */
+
+/** List separators found in tags: `;` (our canonical), `/`, `,` and `|`. */
+const SPLIT_RE = /\s*[;/,|\0]\s*/;
+
+/** Junk tokens left by taggers: "8", "(12)", "2019"... */
+const NUMERIC_ONLY_RE = /^\(?\d+\)?$/;
+
+/** Placeholder "genres" (hub `is_stub_genre`). */
+const STUB_GENRES = new Set([
+  "music",
+  "unknown",
+  "other",
+  "misc",
+  "miscellaneous",
+  "various",
+  "none",
+  "n/a",
+  "na",
+  "undefined",
+  "genre",
+  "null",
+  "unclassified",
+]);
+
+/**
+ * Identity of a genre, the same as the hub's (`db::text::genre_key`, and the
+ * `key` of `GET /library/genres`): lowercase, accents folded, whitespace and
+ * `- _ . '` dropped. "Hip Hop", "hip-hop" and "HipHop" share one key.
+ */
+export function normalizeGenreKey(raw: string | null | undefined): string {
+  if (raw == null) return "";
+  return String(raw)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ß/g, "ss")
+    .replace(/æ/gi, "ae")
+    .replace(/œ/gi, "oe")
+    .toLowerCase()
+    .replace(/[\s\-_.'’]+/g, "");
+}
+
+/** Spellings that vary between providers, by key (hub `metadata::genres::CANONICAL`). */
+const KNOWN_LABELS: Record<string, string> = {
+  hiphop: "Hip Hop",
+  rap: "Rap",
+  rnb: "R&B",
+  "r&b": "R&B",
+  randb: "R&B",
+  rhythmandblues: "R&B",
+  "rhythm&blues": "R&B",
+  poprock: "Pop Rock",
+  electronic: "Electronic",
+  electronica: "Electronica",
+  edm: "EDM",
+  dancepop: "Dance Pop",
+  synthpop: "Synth-pop",
+  triphop: "Trip Hop",
+  lofi: "Lo-Fi",
+  lofihiphop: "Lo-Fi Hip Hop",
+  drumandbass: "Drum and Bass",
+  "drum&bass": "Drum and Bass",
+  drumnbass: "Drum and Bass",
+  dnb: "Drum and Bass",
+  kpop: "K-Pop",
+  jpop: "J-Pop",
+  altrock: "Alternative Rock",
+  alternativerock: "Alternative Rock",
+  alternative: "Alternative",
+  indierock: "Indie Rock",
+  indiepop: "Indie Pop",
+  hardrock: "Hard Rock",
+  heavymetal: "Heavy Metal",
+  numetal: "Nu Metal",
+  punkrock: "Punk Rock",
+  poppunk: "Pop Punk",
+  rocknroll: "Rock & Roll",
+  rockandroll: "Rock & Roll",
+  "rock&roll": "Rock & Roll",
+  rock: "Rock",
+  pop: "Pop",
+  soul: "Soul",
+  funk: "Funk",
+  jazz: "Jazz",
+  blues: "Blues",
+  metal: "Metal",
+  punk: "Punk",
+  reggae: "Reggae",
+  reggaeton: "Reggaeton",
+  trap: "Trap",
+  house: "House",
+  techno: "Techno",
+  trance: "Trance",
+  dubstep: "Dubstep",
+  ambient: "Ambient",
+  classical: "Classical",
+  country: "Country",
+  folk: "Folk",
+  soundtrack: "Soundtrack",
+  singersongwriter: "Singer-Songwriter",
+  cantautorato: "Cantautorato",
+  italianpop: "Italian Pop",
+  popitaliano: "Pop italiano",
+  rapitaliano: "Rap italiano",
+  hiphopitaliano: "Hip Hop italiano",
+  worldwide: "Worldwide",
+};
+
+function titleCase(s: string): string {
+  return s
+    .split(" ")
+    .map((w) => (w ? w[0]!.toUpperCase() + w.slice(1).toLowerCase() : w))
+    .join(" ");
+}
+
+/**
+ * Label to show for a genre token, like the hub: a known spelling, else the
+ * token with spacing squashed; an all-lower-case token gets Title Case
+ * ("pop rap" → "Pop Rap"). Empty for empty input.
+ */
+export function canonicalGenreLabel(raw: string | null | undefined): string {
+  const token = String(raw ?? "").trim().replace(/\s+/g, " ");
+  if (!token) return "";
+  const known = KNOWN_LABELS[normalizeGenreKey(token)];
+  if (known) return known;
+  return token === token.toLowerCase() ? titleCase(token) : token;
+}
+
+/**
+ * Tokens of one `genre` field, in order, without duplicates (by
+ * `normalizeGenreKey`, first spelling kept) and without numeric junk.
+ * Accepts `"; "` (canonical), `/`, `,` and `|` as separators.
  */
 export function parseTrackGenres(raw: string | null | undefined): string[] {
   if (raw == null) return [];
@@ -8,38 +151,104 @@ export function parseTrackGenres(raw: string | null | undefined): string[] {
   if (!s) return [];
   const seen = new Set<string>();
   const out: string[] = [];
-  const add = (t: string) => {
-    const x = t.trim();
-    if (!x) return;
-    const k = x.toLowerCase();
-    if (seen.has(k)) return;
-    seen.add(k);
-    out.push(x);
-  };
-  for (const seg of s.split(/;/)) {
-    for (const p of seg.split(/(?:\s*\/\s*|\s*,\s*)/)) {
-      add(p);
-    }
+  for (const part of s.split(SPLIT_RE)) {
+    const token = part.trim().replace(/\s+/g, " ");
+    if (token.length < 2 || NUMERIC_ONLY_RE.test(token)) continue;
+    if (STUB_GENRES.has(token.toLowerCase())) continue;
+    const key = normalizeGenreKey(token);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(token);
   }
   return out;
 }
 
+/** Canonical `"; "`-joined form for saving, or null when nothing is left. */
 export function serializeTrackGenres(genres: readonly string[] | null | undefined): string | null {
   if (!genres?.length) return null;
   const s = parseTrackGenres(genres.join("; ")).join("; ");
   return s || null;
 }
 
-export function trackHasGenre(
-  raw: string | null | undefined,
-  genreToken: string,
-): boolean {
-  const low = genreToken.trim().toLowerCase();
-  if (!low) return false;
-  return parseTrackGenres(raw).some((g) => g.toLowerCase() === low);
+/** Whether the field holds `genreToken` (same key: spelling does not matter). */
+export function trackHasGenre(raw: string | null | undefined, genreToken: string): boolean {
+  const key = normalizeGenreKey(genreToken.trim());
+  if (!key) return false;
+  return parseTrackGenres(raw).some((g) => normalizeGenreKey(g) === key);
 }
 
 export function formatTrackGenresForDisplay(raw: string | null | undefined): string {
-  const g = parseTrackGenres(raw);
+  const g = parseTrackGenres(raw).map(canonicalGenreLabel);
   return g.length ? g.join(" · ") : "";
+}
+
+/** Anything with a genre: a track (maybe with the hub's `genres` list) or an album. */
+export type GenreSource = {
+  genre?: string | null;
+  genres?: readonly string[] | null;
+};
+
+function rawTokens(src: GenreSource | null | undefined): string[] {
+  if (!src) return [];
+  if (Array.isArray(src.genres) && src.genres.length) {
+    return parseTrackGenres(src.genres.filter((g) => typeof g === "string").join("; "));
+  }
+  return parseTrackGenres(src.genre);
+}
+
+/**
+ * Canonical genre labels of a track, falling back to its album's when the
+ * track has none. Prefers the hub's `genres` array when it sends one.
+ */
+export function trackGenres(
+  track: GenreSource | null | undefined,
+  album?: GenreSource | null,
+): string[] {
+  // The hub's `genres` are canonical labels already: shown as they are, so
+  // they match `GET /library/genres`. A raw `genre` string is canonicalized.
+  const fromHub = (src: GenreSource | null | undefined) =>
+    Array.isArray(src?.genres) && src!.genres!.length > 0;
+  let source: GenreSource | null | undefined = track;
+  let tokens = rawTokens(track);
+  if (!tokens.length) {
+    source = album;
+    tokens = rawTokens(album);
+  }
+  const verbatim = fromHub(source);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const token of tokens) {
+    const label = verbatim ? token : canonicalGenreLabel(token);
+    const key = normalizeGenreKey(label);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(label);
+  }
+  return out;
+}
+
+/** Normalized keys of a track's genres (for set operations and matching). */
+export function trackGenreKeys(
+  track: GenreSource | null | undefined,
+  album?: GenreSource | null,
+): string[] {
+  return trackGenres(track, album).map(normalizeGenreKey);
+}
+
+/** First genre of a track (canonical label), or null. */
+export function primaryGenre(
+  track: GenreSource | null | undefined,
+  album?: GenreSource | null,
+): string | null {
+  return trackGenres(track, album)[0] ?? null;
+}
+
+/**
+ * Whether any genre of `src` matches the free-text `query` (substring on the
+ * normalized key, so "hip hop" finds "Hip-Hop"). Used by search.
+ */
+export function genresMatchQuery(src: GenreSource | null | undefined, query: string): boolean {
+  const q = normalizeGenreKey(query);
+  if (!q) return false;
+  return rawTokens(src).some((g) => normalizeGenreKey(g).includes(q));
 }

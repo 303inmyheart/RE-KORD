@@ -1,0 +1,16 @@
+{
+  "platform.update.clientTooOld.title": "App da aggiornare",
+  "platform.update.clientTooOld.body": "L'hub ({{hub}}) chiede almeno RE-KORD {{min}}, questa app è la {{client}}: alcune funzioni potrebbero non andare finché non la aggiorni.",
+  "platform.update.hubNewer.title": "Aggiornamento disponibile",
+  "platform.update.hubNewer.body": "L'hub è già alla {{hub}}, questa app è la {{client}}.",
+  "platform.update.hubOlder.title": "Hub da aggiornare",
+  "platform.update.hubOlder.body": "L'hub è alla {{hub}}, più vecchio di questa app ({{client}}): aggiornalo per avere tutte le funzioni.",
+  "platform.update.reload.title": "Nuova versione",
+  "platform.update.reload.body": "L'hub è stato aggiornato alla {{hub}}: ricarica per usare la nuova interfaccia.",
+  "platform.update.download": "Scarica",
+  "platform.update.howTo": "Come aggiornare",
+  "platform.update.reload": "Ricarica",
+  "platform.update.dismiss": "Chiudi avviso",
+  "platform.download.saved": "Salvato in {{path}}",
+  "platform.download.failed": "Salvataggio non riuscito: {{error}}"
+}

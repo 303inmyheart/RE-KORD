@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ActionRow, Banner, Button, Field, Panel, TextInput } from "@rekord/ui";
   import { admin } from "../lib/admin.svelte";
+  import { t } from "../lib/i18n.svelte";
 
   let cookieInput = $state<HTMLInputElement | null>(null);
 
@@ -18,26 +19,26 @@
 <Panel title="YouTube (yt-dlp)">
   {#if cfg}
     <div class="state">
-      <span class="k">Download</span>
-      <span class="v">{cfg.ytdlpEnabled ? "disponibile" : "yt-dlp non trovato"}</span>
-      <span class="k">Cookie</span>
+      <span class="k">{t("integrations.yt.download")}</span>
+      <span class="v">
+        {cfg.ytdlpEnabled ? t("common.available") : t("integrations.yt.missing")}
+      </span>
+      <span class="k">{t("integrations.yt.cookies")}</span>
       <span class="v">
         {cfg.youtubeCookiesConfigured
-          ? (cfg.youtubeCookiesLabel || "configurati")
-          : "non configurati"}
+          ? cfg.youtubeCookiesLabel || t("integrations.yt.cookiesSet")
+          : t("integrations.yt.cookiesUnset")}
       </span>
     </div>
     {#if cfg.youtubeCookiesLockedByEnv}
-      <Banner tone="info">
-        I cookie arrivano da una variabile d'ambiente: modificali sul sistema.
-      </Banner>
+      <Banner tone="info">{t("integrations.yt.lockedByEnv")}</Banner>
     {:else}
       <ActionRow>
         <Button
           disabled={locked || cfg.youtubeCookiesWritable === false}
           onclick={() => cookieInput?.click()}
         >
-          Carica cookies.txt
+          {t("integrations.yt.upload")}
         </Button>
         {#if cfg.youtubeCookiesConfigured}
           <Button
@@ -45,7 +46,7 @@
             disabled={locked || cfg.youtubeCookiesWritable === false}
             onclick={() => void admin.clearCookies()}
           >
-            Rimuovi
+            {t("common.remove")}
           </Button>
         {/if}
       </ActionRow>
@@ -57,33 +58,28 @@
       accept=".txt,text/plain"
       onchange={onCookiePicked}
     />
-    <p class="hint">
-      I cookie servono per i contenuti con verifica dell'età o riservati agli
-      abbonati. Esportali dal browser in formato Netscape.
-    </p>
+    <p class="hint">{t("integrations.yt.hint")}</p>
   {/if}
 </Panel>
 
 <Panel title="Discogs">
   {#if cfg}
     <div class="state">
-      <span class="k">Token</span>
+      <span class="k">{t("integrations.discogs.token")}</span>
       <span class="v">
         {cfg.discogsTokenConfigured || cfg.discogsConfigured
-          ? "configurato"
-          : "non configurato"}
+          ? t("integrations.discogs.set")
+          : t("integrations.discogs.unset")}
       </span>
     </div>
     {#if cfg.discogsLockedByEnv}
-      <Banner tone="info">
-        Il token arriva da una variabile d'ambiente: modificalo sul sistema.
-      </Banner>
+      <Banner tone="info">{t("integrations.discogs.lockedByEnv")}</Banner>
     {:else}
-      <Field label="Token personale">
+      <Field label={t("integrations.discogs.field")}>
         <TextInput
           type="password"
           bind:value={admin.discogsToken}
-          placeholder="Incolla il token Discogs"
+          placeholder={t("integrations.discogs.placeholder")}
           disabled={locked || cfg.discogsWritable === false}
         />
       </Field>
@@ -92,7 +88,7 @@
           disabled={locked || !admin.discogsToken.trim() || cfg.discogsWritable === false}
           onclick={() => void admin.saveDiscogsToken()}
         >
-          Salva token
+          {t("integrations.discogs.save")}
         </Button>
         {#if cfg.discogsTokenConfigured || cfg.discogsConfigured}
           <Button
@@ -100,22 +96,17 @@
             disabled={locked || cfg.discogsWritable === false}
             onclick={() => void admin.clearDiscogsToken()}
           >
-            Rimuovi
+            {t("common.remove")}
           </Button>
         {/if}
       </ActionRow>
     {/if}
-    <p class="hint">
-      Con il token attivo lo Studio può cercare edizioni, etichette e numeri di
-      catalogo su Discogs.
-    </p>
+    <p class="hint">{t("integrations.discogs.hint")}</p>
   {/if}
 </Panel>
 
 {#if !admin.canManage}
-  <Banner tone="info">
-    Le credenziali si modificano dal computer dell'hub con l'account Default.
-  </Banner>
+  <Banner tone="info">{t("integrations.machineOnly")}</Banner>
 {/if}
 
 <style>

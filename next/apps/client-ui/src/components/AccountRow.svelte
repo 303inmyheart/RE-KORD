@@ -4,6 +4,8 @@
   let {
     name,
     selected = false,
+    current = false,
+    currentLabel = "",
     busy = false,
     level = null as number | null,
     levelTitle = "",
@@ -12,11 +14,20 @@
     removeLabel,
     removeDisabled = false,
     removeTitle = undefined as string | undefined,
+    renameLabel = "",
+    renameSaveLabel = "",
+    renameCancelLabel = "",
+    renamePlaceholder = "",
     onselect,
     onremove,
+    onrename,
   }: {
     name: string;
     selected?: boolean;
+    /** The account this client is bound to right now. */
+    current?: boolean;
+    /** Badge text for the current account ("In uso"). */
+    currentLabel?: string;
     busy?: boolean;
     level?: number | null;
     levelTitle?: string;
@@ -25,40 +36,114 @@
     removeLabel: string;
     removeDisabled?: boolean;
     removeTitle?: string;
+    renameLabel?: string;
+    renameSaveLabel?: string;
+    renameCancelLabel?: string;
+    renamePlaceholder?: string;
     onselect: () => void;
     onremove: () => void;
+    /** Enables inline rename; resolves when the hub answered. */
+    onrename?: (name: string) => Promise<void> | void;
   } = $props();
 
   const initial = $derived((name.trim()[0] || "?").toUpperCase());
+
+  let editing = $state(false);
+  let draft = $state("");
+  let inputEl: HTMLInputElement | null = $state(null);
+
+  function startRename() {
+    draft = name;
+    editing = true;
+    queueMicrotask(() => {
+      inputEl?.focus();
+      inputEl?.select();
+    });
+  }
+
+  async function saveRename() {
+    const next = draft.trim();
+    if (!next || next === name) {
+      editing = false;
+      return;
+    }
+    await onrename?.(next);
+    editing = false;
+  }
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void saveRename();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      editing = false;
+    }
+  }
 </script>
 
-<div class="account-row" class:is-selected={selected} role="listitem">
-  <button
-    type="button"
-    class="account-row__main"
-    disabled={busy || selected}
-    onclick={onselect}
-  >
-    <span class="account-row__avatar" aria-hidden="true">{initial}</span>
-    <span class="account-row__text">
-      <span class="account-row__name">{name}</span>
-      {#if level != null}
-        <span class="account-row__level-pill" title={levelTitle || undefined}>
-          {levelLabel}
+<div class="account-row" class:is-selected={selected} class:is-current={current} role="listitem">
+  {#if editing}
+    <div class="account-row__edit">
+      <span class="account-row__avatar" aria-hidden="true">{initial}</span>
+      <input
+        bind:this={inputEl}
+        class="account-row__input"
+        bind:value={draft}
+        placeholder={renamePlaceholder}
+        aria-label={renameLabel}
+        maxlength="64"
+        disabled={busy}
+        onkeydown={onKey}
+      />
+    </div>
+    <div class="account-row__actions">
+      <Button disabled={busy || !draft.trim()} onclick={() => void saveRename()}>
+        {renameSaveLabel}
+      </Button>
+      <Button variant="ghost" disabled={busy} onclick={() => (editing = false)}>
+        {renameCancelLabel}
+      </Button>
+    </div>
+  {:else}
+    <button
+      type="button"
+      class="account-row__main"
+      disabled={busy || selected}
+      aria-current={current ? "true" : undefined}
+      onclick={onselect}
+    >
+      <span class="account-row__avatar" aria-hidden="true">{initial}</span>
+      <span class="account-row__text">
+        <span class="account-row__name">{name}</span>
+        <span class="account-row__badges">
+          {#if current && currentLabel}
+            <span class="account-row__current">{currentLabel}</span>
+          {/if}
+          {#if level != null}
+            <span class="account-row__level-pill" title={levelTitle || undefined}>
+              {levelLabel}
+            </span>
+          {:else if defaultBadge}
+            <span class="account-row__badge">{defaultBadge}</span>
+          {/if}
         </span>
-      {:else if defaultBadge}
-        <span class="account-row__badge">{defaultBadge}</span>
+      </span>
+    </button>
+    <div class="account-row__actions">
+      {#if onrename && renameLabel}
+        <Button variant="ghost" disabled={busy} onclick={startRename}>{renameLabel}</Button>
       {/if}
-    </span>
-  </button>
-  <Button
-    variant="ghost"
-    disabled={busy || removeDisabled}
-    title={removeTitle}
-    onclick={onremove}
-  >
-    {removeLabel}
-  </Button>
+      <Button
+        variant="ghost"
+        disabled={busy || removeDisabled}
+        title={removeTitle}
+        onclick={onremove}
+      >
+        {removeLabel}
+      </Button>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -71,6 +156,62 @@
     border: 1px solid var(--rk-line);
     border-radius: var(--rk-radius-lg);
     background: color-mix(in srgb, var(--rk-surface-2) 78%, transparent);
+  }
+
+  .account-row__actions {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .account-row__badges {
+    display: inline-flex;
+    gap: 0.35rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .account-row__current {
+    font-size: var(--rk-fs-3xs);
+    font-weight: 750;
+    letter-spacing: 0.04em;
+    line-height: 1;
+    padding: 0.32em 0.62em;
+    border-radius: var(--rk-radius-round);
+    background: var(--rk-accent);
+    color: var(--rk-on-accent, #fff);
+    white-space: nowrap;
+  }
+
+  .account-row__edit {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 2.25rem minmax(0, 1fr);
+    gap: 0.75rem;
+    align-items: center;
+  }
+
+  .account-row__input {
+    min-width: 0;
+    width: 100%;
+    font: inherit;
+    font-weight: 700;
+    color: var(--rk-ink);
+    background: var(--rk-surface-3);
+    border: 1px solid var(--rk-line);
+    border-radius: var(--rk-radius);
+    padding: 0.45rem 0.6rem;
+  }
+
+  .account-row__input:focus-visible {
+    outline: 2px solid var(--rk-accent);
+    outline-offset: 1px;
+  }
+
+  .account-row.is-current {
+    border-color: color-mix(in srgb, var(--rk-accent) 55%, var(--rk-line) 45%);
   }
 
   .account-row.is-selected {

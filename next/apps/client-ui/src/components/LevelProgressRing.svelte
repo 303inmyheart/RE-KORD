@@ -1,11 +1,12 @@
 <script lang="ts">
+  import { t } from "../lib/i18n.svelte";
   let {
     level = 1,
     pct = 0,
     loading = false,
     active = false,
     title = "",
-    ariaLabel = "Livello",
+    ariaLabel,
     onclick,
   }: {
     level?: number;
@@ -27,7 +28,7 @@
   class:active
   style="--level-ring-pct:{loading ? 0 : clamped}; --level-ring-tier:{tier}"
   {title}
-  aria-label={ariaLabel}
+  aria-label={ariaLabel ?? t("levelRing.aria")}
   aria-current={active ? "page" : undefined}
   {onclick}
 >

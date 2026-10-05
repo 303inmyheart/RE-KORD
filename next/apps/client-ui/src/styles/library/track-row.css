@@ -13,10 +13,18 @@
   box-shadow: none;
   list-style: none;
   margin: 0;
+  /* Each row is its own layout/paint island: a hover, a heart toggle or the
+     active highlight never invalidates the rest of the list. Popovers live
+     inside the row, so an open menu lifts the paint clip (.is-menu-open). */
+  contain: content;
   transition:
     background 0.16s ease,
-    border-color 0.16s ease,
-    box-shadow 0.18s ease;
+    border-color 0.16s ease;
+}
+
+.track-row.is-menu-open {
+  contain: layout style;
+  z-index: 3;
 }
 
 .track-row__art-wrap {
@@ -77,34 +85,77 @@
   pointer-events: auto;
 }
 
+/* No per-row filter / drop-shadow: the dark overlay under the glyph (::after)
+   already gives it contrast, at a fraction of the paint cost. */
 .track-row__art-play svg,
 .track-row__art-play .ui-ic,
 .track-row__art-studio svg,
 .track-row__art-studio .ui-ic {
   width: 1.15rem;
   height: 1.15rem;
-  filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.45));
 }
 
 .track-row:hover {
-  background: color-mix(in srgb, var(--rk-surface-3) 58%, transparent);
+  background: color-mix(in srgb, var(--rk-surface-3) 58%, var(--rk-surface-2));
   border-color: color-mix(in srgb, var(--rk-accent) 30%, var(--rk-line) 70%);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--rk-accent) 14%, transparent),
-    0 10px 34px color-mix(in srgb, var(--rk-bg) 62%, transparent);
 }
 
 .track-row.is-active {
   border-color: color-mix(in srgb, var(--rk-accent) 48%, var(--rk-line) 52%);
   background: linear-gradient(
     100deg,
-    color-mix(in srgb, var(--rk-accent) 16%, transparent),
-    color-mix(in srgb, var(--rk-surface-2) 62%, transparent)
+    color-mix(in srgb, var(--rk-accent) 16%, var(--rk-surface-2)),
+    var(--rk-surface-2) 62%
   );
-  box-shadow:
-    inset 3px 0 0 var(--rk-accent),
-    0 0 0 1px color-mix(in srgb, var(--rk-accent) 22%, transparent),
-    0 12px 36px color-mix(in srgb, var(--rk-bg) 55%, transparent);
+  box-shadow: inset 3px 0 0 var(--rk-accent);
+}
+
+/* Album context: the track number takes the cover's place. */
+.track-row__num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: var(--rk-fs-3);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--rk-muted);
+}
+
+.track-row__disc {
+  color: color-mix(in srgb, var(--rk-muted) 70%, transparent);
+  font-weight: 550;
+}
+
+.track-row.is-numbered {
+  grid-template-columns: 2.25rem minmax(0, 1fr) auto;
+}
+
+.track-row.is-numbered .track-row__art-wrap {
+  width: 2.25rem;
+  height: 2.75rem;
+}
+
+/* Numbered rows: no dark veil over a cover — the number simply gives way to
+   the play glyph (or the equaliser on the active row). */
+.track-row.is-numbered .track-row__art-wrap::after {
+  display: none;
+}
+
+.track-row.is-numbered .track-row__art-play,
+.track-row.is-numbered .track-row__art-studio {
+  color: var(--rk-ink);
+}
+
+.track-row.is-numbered .track-row__art-studio {
+  color: var(--rk-accent);
+}
+
+.track-row.is-numbered:hover .track-row__num,
+.track-row.is-numbered.is-active .track-row__num,
+.track-row.is-numbered:focus-within .track-row__num {
+  visibility: hidden;
 }
 
 .track-row__main {
@@ -139,25 +190,25 @@
   max-width: 100%;
 }
 
+/* Stats: UI font with tabular digits (never mono), one quiet line. */
 .track-row__stats {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
-  gap: var(--rk-space-2xs);
+  gap: var(--rk-space-xs);
   min-width: 0;
   flex: 1 1 auto;
   color: var(--rk-muted);
-  font-size: var(--rk-fs-xs);
+  font-size: var(--rk-fs-2);
   font-variant-numeric: tabular-nums;
 }
 
 .track-row__duration,
 .track-row__plays {
   flex: 0 0 auto;
-  font-family: var(--rk-mono);
-  font-size: var(--rk-fs-xs);
-  font-weight: 500;
+  font-size: var(--rk-fs-2);
+  font-weight: 550;
   white-space: nowrap;
 }
 
@@ -166,8 +217,16 @@
 }
 
 .track-row__plays {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
   color: color-mix(in srgb, var(--rk-ink) 46%, var(--rk-muted) 54%);
-  opacity: 1;
+}
+
+.track-row__plays-ic {
+  width: 0.75rem;
+  height: 0.75rem;
+  color: var(--rk-muted);
 }
 
 .track-row__meta {
@@ -229,7 +288,7 @@
 .track-row__ic:hover,
 .track-row__in-coda:hover {
   color: var(--rk-ink);
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--rk-ink) 7%, transparent);
 }
 
 .track-row__ic-glyph {
@@ -291,38 +350,22 @@
   }
 }
 
-.track-row__ic--fav {
-  opacity: 0.45;
-}
-
 .track-row__ic--fav.is-on,
 .track-row__ic--fav:hover {
-  opacity: 1;
   color: var(--rk-favorite);
-}
-
-.track-row__ic--fav.is-on {
-  text-shadow: 0 0 10px color-mix(in srgb, var(--rk-favorite) 35%, transparent);
 }
 
 .track-row__ic--playlist.is-on,
 .track-row__ic--exclude.is-on {
   color: var(--rk-accent-2);
-  opacity: 1;
-}
-
-.track-row__ic--exclude {
-  opacity: 0.45;
 }
 
 .track-row__ic--exclude:hover:not(.is-on) {
-  opacity: 1;
   color: var(--rk-ink);
 }
 
 .track-row__ic--exclude:disabled {
   cursor: not-allowed;
-  opacity: 1;
   color: var(--rk-accent-2);
 }
 
@@ -334,7 +377,6 @@
   letter-spacing: 0.02em;
   text-transform: lowercase;
   color: var(--rk-accent-2);
-  opacity: 0.95;
 }
 
 .track-row__in-coda__label--act {
@@ -400,7 +442,7 @@
 }
 
 .track-row__playlist-popover-item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--rk-ink) 7%, transparent);
 }
 
 .track-row__playlist-popover-item.is-on {
@@ -482,11 +524,11 @@
 }
 
 .track-row__overflow-item:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--rk-ink) 7%, transparent);
 }
 
 .track-row__overflow-item:disabled {
-  opacity: 0.42;
+  color: var(--rk-muted);
   cursor: not-allowed;
 }
 
@@ -495,14 +537,15 @@
   font-weight: 600;
 }
 
+/* Lyrics glyph: only when the track has lyrics; synced ones in the accent. */
 .track-row__lyrics-inline {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 0.78rem;
-  height: 0.78rem;
+  flex-shrink: 0;
+  width: 0.875rem;
+  height: 0.875rem;
   vertical-align: middle;
-  transform: translateY(0.03rem);
 }
 
 .track-row__lyrics-inline svg {
@@ -511,50 +554,84 @@
 }
 
 .track-row__lyrics-inline.is-lrc {
-  color: inherit;
-  opacity: 1;
+  color: var(--rk-accent-2);
 }
 
 .track-row__lyrics-inline.is-plain {
-  color: inherit;
-  opacity: 0.55;
+  color: var(--rk-muted-strong);
 }
 
-.track-row__lyrics-inline.is-off {
-  color: inherit;
-  opacity: 0.12;
-  filter: grayscale(0.45);
+/* Rows switch layout on the width of their list, not of the viewport: the list
+   is the size container (no JS measuring). Inline actions from 651px up
+   (CONTAINER_WIDTHS.trackRowInlineActions), overflow menu below. */
+:where(ul, ol):has(> .track-row) {
+  container: track-list / inline-size;
+}
+
+.track-row__tools--wide {
+  display: none;
+}
+
+.track-row__tools--compact {
+  display: contents;
 }
 
 /* Desktop: titolo + stats su una riga; lyrics in meta, non in stats */
-.track-row:not(:has(.track-row__actions--compact-tools)):not(
-    .track-row--compact-tools
-  )
-  .track-row__title-row {
-  flex-wrap: nowrap;
-  justify-content: flex-start;
-}
+@container track-list (min-width: 651px) {
+  .track-row__tools--wide {
+    display: contents;
+  }
 
-.track-row:not(:has(.track-row__actions--compact-tools)):not(
-    .track-row--compact-tools
-  )
-  .track-row__stats {
-  flex: 0 0 auto;
-  flex-wrap: nowrap;
-}
+  .track-row__tools--compact {
+    display: none;
+  }
 
-.track-row:not(:has(.track-row__actions--compact-tools)):not(
-    .track-row--compact-tools
-  )
-  .track-row__title-row
-  .track-row__title {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: none;
+  .track-row .track-row__title-row {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+  }
+
+  .track-row .track-row__stats {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
+
+  .track-row .track-row__title-row
+    .track-row__title {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: none;
+  }
 }
 
 .track-row__lyrics-inline.track-row__lyrics-inline--stats {
   display: none;
+}
+
+.track-row__meta .track-row__lyrics-inline--meta {
+  margin-left: var(--rk-space-xs);
+}
+
+/* Desktop with a mouse: row actions appear on hover / keyboard focus, so a
+   long list reads as titles, not as a wall of icons. State that matters stays
+   visible (a red heart, a blocked track). Visibility via opacity only — no
+   layout shift. */
+@media (hover: hover) and (pointer: fine) {
+  .track-row__tools--wide > *,
+  .track-row__grip {
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  .track-row:hover .track-row__tools--wide > *,
+  .track-row:focus-within .track-row__tools--wide > *,
+  .track-row.is-menu-open .track-row__tools--wide > *,
+  .track-row:hover .track-row__grip,
+  .track-row:focus-within .track-row__grip,
+  .track-row__tools--wide > .track-row__ic--fav.is-on,
+  .track-row__tools--wide > .track-row__ic--exclude.is-on {
+    opacity: 1;
+  }
 }
 
 .track-row__stats .lib-meta-chip {
@@ -562,98 +639,94 @@
   align-self: center;
 }
 
-/* Compact (≤650px / ResizeObserver < 651): art 44px, hide meta, lyrics in stats */
-.track-row:has(.track-row__actions--compact-tools),
-.track-row.track-row--compact-tools {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-rows: auto;
-  align-items: center;
-  column-gap: var(--rk-space-sm);
-  row-gap: 0;
+/* Touch: always the kebab menu, whatever the width — hover-reveal does not
+   exist under a finger and a row of 40px targets eats the title. */
+@media (hover: none), (pointer: coarse) {
+  .track-row .track-row__tools--wide {
+    display: none;
+  }
+
+  .track-row .track-row__tools--compact {
+    display: contents;
+  }
 }
 
-.track-row:has(.track-row__actions--compact-tools) .track-row__art-wrap,
-.track-row.track-row--compact-tools .track-row__art-wrap {
-  grid-column: 1;
-  grid-row: 1;
-  width: 44px;
-  height: 44px;
-  flex-shrink: 0;
-  align-self: center;
-}
+/* Compact (list < 651px): art 44px, hide meta, lyrics in stats */
+@container track-list (max-width: 650.98px) {
+  .track-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto;
+    align-items: center;
+    column-gap: var(--rk-space-sm);
+    row-gap: 0;
+  }
 
-/* The compact wrap is 44px while CoverArt's own `md` is 48px: without this the
-   cover would be cropped by the wrap instead of shrinking with it. */
-.track-row:has(.track-row__actions--compact-tools)
-  .track-row__art-wrap
-  .rk-cover,
-.track-row.track-row--compact-tools .track-row__art-wrap .rk-cover {
-  width: 100% !important;
-  height: 100% !important;
-}
+  .track-row .track-row__art-wrap {
+    grid-column: 1;
+    grid-row: 1;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    align-self: center;
+  }
 
-.track-row:has(.track-row__actions--compact-tools) .track-row__main,
-.track-row.track-row--compact-tools .track-row__main {
-  grid-column: 2;
-  grid-row: 1;
-  min-width: 0;
-  text-align: left;
-  justify-items: start;
-  align-self: center;
-  flex: unset;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--rk-space-3xs);
-}
+  /* The compact wrap is 44px while CoverArt's own `md` is 48px: without this the
+     cover would be cropped by the wrap instead of shrinking with it. */
+  .track-row .track-row__art-wrap .rk-cover {
+    width: 100% !important;
+    height: 100% !important;
+  }
 
-.track-row:has(.track-row__actions--compact-tools) .track-row__title-row,
-.track-row.track-row--compact-tools .track-row__title-row {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--rk-space-3xs);
-  width: 100%;
-}
+  .track-row .track-row__main {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    text-align: left;
+    justify-items: start;
+    align-self: center;
+    flex: unset;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--rk-space-3xs);
+  }
 
-.track-row:has(.track-row__actions--compact-tools) .track-row__stats,
-.track-row.track-row--compact-tools .track-row__stats {
-  width: 100%;
-}
+  .track-row .track-row__title-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--rk-space-3xs);
+    width: 100%;
+  }
 
-.track-row:has(.track-row__actions--compact-tools)
-  .track-row__lyrics-inline.track-row__lyrics-inline--stats,
-.track-row.track-row--compact-tools
-  .track-row__lyrics-inline.track-row__lyrics-inline--stats {
-  display: inline-flex;
-}
+  .track-row .track-row__stats {
+    width: 100%;
+  }
 
-.track-row:has(.track-row__actions--compact-tools)
-  .track-row__lyrics-inline.track-row__lyrics-inline--meta,
-.track-row:has(.track-row__actions--compact-tools) .track-row__meta-text,
-.track-row:has(.track-row__actions--compact-tools) .track-row__meta-sep,
-.track-row:has(.track-row__actions--compact-tools) .track-row__meta,
-.track-row.track-row--compact-tools
-  .track-row__lyrics-inline.track-row__lyrics-inline--meta,
-.track-row.track-row--compact-tools .track-row__meta-text,
-.track-row.track-row--compact-tools .track-row__meta-sep,
-.track-row.track-row--compact-tools .track-row__meta {
-  display: none;
-}
+  .track-row .track-row__lyrics-inline.track-row__lyrics-inline--stats {
+    display: inline-flex;
+  }
 
-.track-row:has(.track-row__actions--compact-tools) .track-row__actions,
-.track-row.track-row--compact-tools .track-row__actions {
-  grid-column: 3;
-  grid-row: 1;
-  justify-self: end;
-  align-self: center;
-  display: flex;
-  flex-wrap: nowrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: var(--rk-space-3xs);
-  min-height: 0;
-  flex: unset;
-  width: auto;
-  min-width: 0;
+  .track-row .track-row__lyrics-inline.track-row__lyrics-inline--meta,
+  .track-row .track-row__meta-text,
+  .track-row .track-row__meta-sep,
+  .track-row .track-row__meta {
+    display: none;
+  }
+
+  .track-row .track-row__actions {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+    align-self: center;
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: var(--rk-space-3xs);
+    min-height: 0;
+    flex: unset;
+    width: auto;
+    min-width: 0;
+  }
 }

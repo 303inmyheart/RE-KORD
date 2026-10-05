@@ -235,3 +235,140 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* —— Scopri web: album/EP e singoli affiancati, a tutta larghezza —— */
+.studio-catalog-web-cols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--rk-space-lg);
+  width: 100%;
+  align-items: start;
+}
+
+@media (max-width: 899.98px) {
+  .studio-catalog-web-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.studio-catalog-web-col {
+  min-width: 0;
+}
+
+.studio-catalog-web-col__count {
+  margin-left: var(--rk-space-xs);
+  opacity: 0.65;
+  font-weight: 650;
+}
+
+.studio-catalog-web-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));
+  gap: var(--rk-space-sm);
+}
+
+.studio-catalog-web-tile {
+  display: flex;
+  align-items: center;
+  gap: var(--rk-space-sm);
+  min-width: 0;
+  padding: var(--rk-space-xs);
+  padding-right: var(--rk-space-sm);
+  border: 1px solid var(--rk-line);
+  border-radius: var(--rk-radius-lg);
+  background: color-mix(in srgb, var(--rk-surface-3) 65%, transparent);
+}
+
+.studio-catalog-web-tile:hover {
+  border-color: var(--rk-line-strong);
+}
+
+.studio-catalog-web-tile__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--rk-space-md);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.studio-catalog-web-tile__art {
+  position: relative;
+  flex-shrink: 0;
+  width: 3.5rem;
+  height: 3.5rem;
+  display: grid;
+  place-items: center;
+  border-radius: var(--rk-radius);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--rk-surface-2) 80%, transparent);
+  color: var(--rk-muted);
+  --ui-ic-size: 1.4rem;
+}
+
+.studio-catalog-web-tile__art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.studio-catalog-web-tile__play {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.studio-catalog-web-tile__main:hover .studio-catalog-web-tile__play,
+.studio-catalog-web-tile__main:focus-visible .studio-catalog-web-tile__play {
+  opacity: 1;
+}
+
+.studio-catalog-web-tile__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.studio-catalog-web-tile__title {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-catalog-web-tile__meta {
+  font-size: var(--rk-fs-sm);
+  color: var(--rk-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-catalog-web-tile__dl {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rk-space-2xs);
+  --ui-ic-size: 1rem;
+}
+
+@media (max-width: 479.98px) {
+  .studio-catalog-web-tile__dl span {
+    display: none;
+  }
+}

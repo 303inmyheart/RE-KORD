@@ -20,7 +20,14 @@ globalThis.localStorage = {
   },
 };
 
-const { prefsWithoutTracks } = await import("./userPrefs.ts");
+const {
+  prefsWithoutTracks,
+  normalizeVisualizerMode,
+  loadUserPrefs,
+  patchUserPrefs,
+  subscribeUserPrefsPatch,
+  ALL_VISUALIZER_MODES,
+} = await import("./userPrefs.ts");
 
 /** Solo i campi che la funzione guarda: il resto delle preferenze non c'entra. */
 function prefs(over = {}) {
@@ -99,4 +106,71 @@ test("un album intero: tutti i suoi brani in un colpo", () => {
   assert.deepEqual(patch.recentRelPaths, ["Other/Album/01.mp3"]);
   assert.deepEqual(patch.playCounts, {});
   assert.deepEqual(patch.trackMoods, {});
+});
+
+test("DiscoWall salvato resta DiscoWall (non torna a barre)", () => {
+  assert.equal(normalizeVisualizerMode("discowall"), "discowall");
+  assert.ok(ALL_VISUALIZER_MODES.includes("discowall"));
+  assert.equal(normalizeVisualizerMode("wave"), "osc");
+  assert.equal(normalizeVisualizerMode("smooth"), "oscSoft");
+  assert.equal(normalizeVisualizerMode("nebula"), "bars");
+  assert.equal(normalizeVisualizerMode("plectr"), "bars");
+  assert.equal(normalizeVisualizerMode("boh"), "bars");
+  patchUserPrefs({ visualizerMode: "discowall" });
+  assert.equal(loadUserPrefs().visualizerMode, "discowall");
+});
+
+test("chi ascolta le patch riceve solo i campi cambiati", () => {
+  const seen = [];
+  const off = subscribeUserPrefsPatch((patch) => seen.push(Object.keys(patch)));
+  patchUserPrefs({ playCounts: { [KEPT]: 2 } });
+  off();
+  patchUserPrefs({ playCounts: { [KEPT]: 3 } });
+  assert.deepEqual(seen, [["playCounts"]]);
+});
+
+test("cache: leggere due volte non riparsa, e le raccolte condivise sono di sola lettura", async () => {
+  const { getPlayCountsMap } = await import("./userPrefs.ts");
+  patchUserPrefs({ playCounts: { [KEPT]: 4 } });
+  const a = getPlayCountsMap();
+  const b = getPlayCountsMap();
+  assert.equal(a, b);
+  assert.throws(() => {
+    "use strict";
+    a[KEPT] = 99;
+  });
+  assert.equal(loadUserPrefs().playCounts[KEPT], 4);
+});
+
+test("un account nuovo parte vuoto: niente copiato da default", async () => {
+  const { adoptPrefsForAccount } = await import("./userPrefs.ts");
+  patchUserPrefs({ playCounts: { [KEPT]: 7 } }, "default");
+  adoptPrefsForAccount("fresh-account");
+  assert.deepEqual(loadUserPrefs("fresh-account").playCounts, {});
+  assert.deepEqual(loadUserPrefs("fresh-account").recentRelPaths, []);
+});
+
+test("un'altra scheda riscrive le preferenze: la cache si svuota", async () => {
+  const { invalidateUserPrefsCache } = await import("./userPrefs.ts");
+  patchUserPrefs({ playCounts: { [KEPT]: 1 } }, "tab-acc");
+  store.set("rekord.next.userPrefs.tab-acc", JSON.stringify({ playCounts: { [KEPT]: 9 } }));
+  assert.equal(loadUserPrefs("tab-acc").playCounts[KEPT], 1);
+  invalidateUserPrefsCache("tab-acc");
+  assert.equal(loadUserPrefs("tab-acc").playCounts[KEPT], 9);
+});
+
+test("locale: it / en / de are kept, anything else falls back to Italian", async () => {
+  const { normalizeLocale, localeFromTag, browserLocale } = await import("./userPrefs.ts");
+  assert.equal(normalizeLocale("de"), "de");
+  assert.equal(normalizeLocale("en"), "en");
+  assert.equal(normalizeLocale("fr"), "it");
+  assert.equal(normalizeLocale(undefined), "it");
+  assert.equal(localeFromTag("de-AT"), "de");
+  assert.equal(localeFromTag("EN_us"), "en");
+  assert.equal(localeFromTag("fr-FR"), null);
+  // First supported browser language wins; Italian when none matches.
+  assert.equal(browserLocale(["fr-FR", "de-CH", "en"]), "de");
+  assert.equal(browserLocale(["en-GB", "de"]), "en");
+  assert.equal(browserLocale(["fr", "es"]), "it");
+  assert.equal(browserLocale([]), "it");
 });

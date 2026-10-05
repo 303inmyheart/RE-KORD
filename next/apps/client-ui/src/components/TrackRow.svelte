@@ -11,31 +11,34 @@
       if (dismissActivePopover === dismiss) dismissActivePopover = null;
     };
   }
+
 </script>
 
 <script lang="ts">
   import { CoverArt, type SelectOption } from "@rekord/ui";
-  import { albumCoverUrl, type Track } from "../lib/api";
-  import { CONTAINER_WIDTHS } from "../lib/breakpoints";
+  import { coverUrlFor, type Track } from "../lib/api";
   import { formatTime, player } from "../lib/player";
+  import { t, tp } from "../lib/i18n.svelte";
   import { session } from "../lib/session.svelte";
-  import {
-    lyricsKind,
-    resolveTrackMoods,
-    trackHasFileMeta,
-  } from "../lib/trackMoods";
-  import { loadUserPrefs } from "../lib/userPrefs";
+  import { lyricsKind, trackHasFileMeta, type TrackMoodId } from "../lib/trackMoods";
+  import { trackRowStats } from "../lib/trackRowStats.svelte";
   import GraphicEq from "./icons/GraphicEq.svelte";
   import UiIcon from "./icons/UiIcon.svelte";
   import MetaBadgeCluster from "./MetaBadgeCluster.svelte";
   import TrackLyricsIcon from "./TrackLyricsIcon.svelte";
 
-  const INLINE_ACTIONS_MIN_PX = CONTAINER_WIDTHS.trackRowInlineActions;
-
   let {
     track,
     index = 0,
-    revision = 0,
+    revision: _revision = 0,
+    plays: playsProp,
+    moods: moodsProp,
+    inQueue: inQueueProp,
+    excluded: excludedProp,
+    albumLocked: albumLockedProp,
+    number = null,
+    disc = null,
+    coverSrc,
     favorited = false,
     active = false,
     playlistOptions = [],
@@ -57,7 +60,20 @@
   }: {
     track: Track;
     index?: number;
+    /** @deprecated Rows read shared, revision-keyed stats (lib/trackRowStats). Ignored. */
     revision?: number;
+    /** Play count (computed once per list by TrackList). Falls back to trackRowStats. */
+    plays?: number;
+    moods?: TrackMoodId[];
+    inQueue?: boolean;
+    excluded?: boolean;
+    albumLocked?: boolean;
+    /** Album context: show this track number instead of the cover. */
+    number?: number | null;
+    /** Multi-disc album: disc number, shown as "2·03". */
+    disc?: number | null;
+    /** Cover URL, or null when the hub says there is none. Default: album cover. */
+    coverSrc?: string | null;
     favorited?: boolean;
     active?: boolean;
     playlistOptions?: SelectOption[];
@@ -84,35 +100,25 @@
   let playlistAnchorEl: HTMLDivElement | null = $state(null);
   let menuOpen = $state(false);
   let playlistOpen = $state(false);
-  /** Come old useElementMinWidth: default false finché non misuriamo (≥651 → wide). */
-  let wide = $state(false);
   let prevActive = false;
 
-  const inQueue = $derived.by(() => {
-    revision;
-    return player.isInQueue(track.id);
-  });
-  const excluded = $derived.by(() => {
-    revision;
-    return player.isTrackExcluded(track);
-  });
-  const albumLocked = $derived.by(() => {
-    revision;
-    return track.album_id != null && player.isAlbumExcluded(track.album_id);
-  });
-  const plays = $derived.by(() => {
-    revision;
-    return player.playCount(track);
-  });
-  const moods = $derived.by(() => {
-    revision;
-    return resolveTrackMoods(track.id, track.rel_path, loadUserPrefs().trackMoods);
-  });
-  /** Come old: EQ se riga attiva; animazione solo in play. */
+  // Props from the list win; a row rendered on its own reads the same shared,
+  // revision-keyed snapshot (never re-parses prefs per row).
+  const inQueue = $derived(inQueueProp ?? trackRowStats.inQueue(track.id));
+  const excluded = $derived(excludedProp ?? trackRowStats.excluded(track));
+  const albumLocked = $derived(albumLockedProp ?? trackRowStats.albumLocked(track));
+  const plays = $derived(playsProp ?? trackRowStats.plays(track));
+  const moods = $derived(moodsProp ?? trackRowStats.moods(track));
+  /** Riga attiva: EQ in posa statica (mai animato nelle righe: costo WebKitGTK). */
   const showStudio = $derived(active);
   const trackLyricsKind = $derived(lyricsKind(track.lyrics));
-  /** Come old: icona lyrics anche in stato off (ghost); nascosta solo se kind=hidden. */
-  const showLyricsIcon = true;
+  const missingMeta = $derived(!trackHasFileMeta(track));
+  const coverUrl = $derived(
+    coverSrc !== undefined
+      ? coverSrc
+      : coverUrlFor(track, 128),
+  );
+  const numbered = $derived(number != null && number > 0);
 
   /** Opzioni playlist: prop esplicita, altrimenti catalogo sessione (come React). */
   const resolvedPlaylistOptions = $derived(
@@ -134,23 +140,12 @@
     else void session.addToPlaylist(playlistId, track.id);
   }
 
-  /** Come React useLayoutEffect+ResizeObserver: osserva quando il nodo esiste. */
-  $effect(() => {
-    const el = rowEl;
-    if (!el) return;
-    const sync = () => {
-      const next = el.getBoundingClientRect().width >= INLINE_ACTIONS_MIN_PX;
-      wide = next;
-      if (next) {
-        menuOpen = false;
-        playlistOpen = false;
-      }
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(el);
-    return () => ro.disconnect();
-  });
+  /*
+   * Inline actions vs overflow menu is decided by CSS container queries on the
+   * list (`track-row.css`, container `track-list`, 651px): both sets are in the
+   * DOM and the hidden one is `display: none`, so it is out of the tab order and
+   * the accessibility tree. No per-row width measuring.
+   */
 
   $effect(() => {
     if (!autoFocusActive || !active || !rowEl) {
@@ -231,22 +226,24 @@
   bind:this={rowEl}
   class="track-row"
   class:is-active={active}
-  class:track-row--compact-tools={!wide}
+  class:is-numbered={numbered}
+  class:is-menu-open={menuOpen || playlistOpen}
   data-reorder-index={reorderIndex ?? undefined}
 >
   <div class="track-row__art-wrap">
-    <CoverArt
-      title={track.title}
-      seed={`${track.artist_name}/${track.album_name}`}
-      src={track.album_id != null ? albumCoverUrl(track.album_id, 128) : ""}
-      size="md"
-    />
+    {#if numbered}
+      <span class="track-row__num" aria-label={t("ui.trackRow.trackNo", { n: number ?? 0 })}>
+        {#if disc != null}<span class="track-row__disc">{disc}·</span>{/if}{number}
+      </span>
+    {:else}
+      <CoverArt kind="track" title={track.title} src={coverUrl} size="md" />
+    {/if}
     {#if showStudio}
       <button
         type="button"
         class="track-row__art-studio"
-        title="Apri Studio Ascolta"
-        aria-label="Apri Studio Ascolta"
+        title={t("player.openListen")}
+        aria-label={t("player.openListen")}
         onclick={openStudio}
       >
         <GraphicEq animated={session.playing} />
@@ -255,8 +252,8 @@
       <button
         type="button"
         class="track-row__art-play"
-        title="Riproduci"
-        aria-label="Riproduci"
+        title={t("trackRow.play")}
+        aria-label={t("trackRow.play")}
         onclick={onplay}
       >
         <UiIcon name="play" />
@@ -269,31 +266,33 @@
       <span class="track-row__title">{track.title}</span>
       <span class="track-row__stats">
         <span class="track-row__duration">{formatTime(track.duration_ms / 1000)}</span>
-        <span class="track-row__plays">({plays})</span>
-        <MetaBadgeCluster missingMeta={!trackHasFileMeta(track)} {moods} variant="inline" />
+        {#if plays > 0}
+          <span class="track-row__plays" title={tp("ui.trackRow.plays", plays)}>
+            <svg class="track-row__plays-ic" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M8 5.5v13l10.5-6.5z" />
+            </svg>{plays}
+          </span>
+        {/if}
+        <MetaBadgeCluster {missingMeta} {moods} variant="inline" />
         <TrackLyricsIcon kind={trackLyricsKind} class="track-row__lyrics-inline--stats" />
       </span>
     </span>
     <span class="track-row__meta">
-      <span class="track-row__meta-text">{track.artist_name} · {track.album_name}</span>
-      {#if showLyricsIcon}
-        <span class="track-row__meta-sep" aria-hidden="true">{" "}·{" "}</span>
-        <TrackLyricsIcon kind={trackLyricsKind} class="track-row__lyrics-inline--meta" />
-      {/if}
+      <span class="track-row__meta-text">
+        {numbered ? track.artist_name : `${track.artist_name} · ${track.album_name}`}
+      </span>
+      <TrackLyricsIcon kind={trackLyricsKind} class="track-row__lyrics-inline--meta" />
     </span>
   </button>
 
-  <div
-    class="track-row__actions"
-    class:track-row__actions--compact-tools={!wide}
-  >
+  <div class="track-row__actions">
     {#if reorderIndex != null}
       <button
         type="button"
         class="track-row__ic track-row__grip"
         data-reorder-handle
-        title="Trascina per riordinare (o frecce su e giù)"
-        aria-label="Trascina per riordinare il brano, oppure usa le frecce su e giù"
+        title={t("trackRow.reorderTitle")}
+        aria-label={t("trackRow.reorderAria")}
         onkeydown={(e) => {
           if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
           e.preventDefault();
@@ -306,25 +305,25 @@
       </button>
     {/if}
 
-    {#if wide}
+    <div class="track-row__tools track-row__tools--wide">
       {#if showQueueActions}
         {#if inQueue}
           <button
             type="button"
             class="track-row__in-coda"
-            title="Rimuovi dalla coda"
-            aria-label="Rimuovi dalla coda"
+            title={t("trackRow.removeQueue")}
+            aria-label={t("trackRow.removeQueue")}
             onclick={removeFromQueue}
           >
-            <span class="track-row__in-coda__label track-row__in-coda__label--idle">in coda</span>
-            <span class="track-row__in-coda__label track-row__in-coda__label--act">rimuovi</span>
+            <span class="track-row__in-coda__label track-row__in-coda__label--idle">{t("trackRow.inQueueIdle")}</span>
+            <span class="track-row__in-coda__label track-row__in-coda__label--act">{t("trackRow.inQueueAct")}</span>
           </button>
         {:else}
           <button
             type="button"
             class="track-row__ic track-row__ic--queue"
-            title="Riproduci come prossimo"
-            aria-label="Riproduci come prossimo"
+            title={t("trackRow.addQueue")}
+            aria-label={t("trackRow.addQueue")}
             onclick={addToQueue}
           >
             <span class="track-row__ic-glyph track-row__ic-glyph--svg" aria-hidden="true">
@@ -338,9 +337,9 @@
         type="button"
         class="track-row__ic track-row__ic--fav"
         class:is-on={favorited}
-        title="Preferito"
+        title={t("player.favorite")}
         aria-pressed={favorited}
-        aria-label="Preferito"
+        aria-label={t("player.favorite")}
         onclick={ontoggleFavorite}
       >
         <span class="track-row__ic-glyph track-row__ic-glyph--svg" aria-hidden="true">
@@ -354,8 +353,8 @@
             type="button"
             class="track-row__ic track-row__ic--playlist"
             class:is-on={playlistOpen}
-            title="Playlist"
-            aria-label="Scegli le playlist in cui aggiungere o da cui rimuovere il brano"
+            title={t("trackRow.playlistTitle")}
+            aria-label={t("trackRow.playlistAria")}
             aria-expanded={playlistOpen}
             onclick={() => {
               playlistOpen = !playlistOpen;
@@ -367,10 +366,10 @@
             </span>
           </button>
           {#if playlistOpen}
-            <div class="track-row__playlist-popover rk-scroll" role="dialog" aria-label="Playlist">
+            <div class="track-row__playlist-popover rk-scroll" role="dialog" aria-label={t("trackRow.playlistTitle")}>
               {#if resolvedPlaylistOptions.length}
                 <ul class="track-row__playlist-popover-list">
-                  {#each resolvedPlaylistOptions as opt}
+                  {#each resolvedPlaylistOptions as opt (opt.value)}
                     <li>
                       <button
                         type="button"
@@ -385,7 +384,7 @@
                 </ul>
               {:else}
                 <p class="track-row__playlist-popover-empty">
-                  Non hai playlist. Creane una dalla sezione Playlist.
+                  {t("trackRow.playlistPickerEmpty")}
                 </p>
               {/if}
             </div>
@@ -397,8 +396,8 @@
         <button
           type="button"
           class="track-row__ic track-row__ic--meta"
-          title="Modifica metadati brano"
-          aria-label="Modifica metadati brano"
+          title={t("trackRow.editMeta")}
+          aria-label={t("trackRow.editMeta")}
           onclick={() => onedit?.()}
         >
           <span class="track-row__ic-glyph track-row__ic-glyph--svg" aria-hidden="true">
@@ -414,15 +413,15 @@
           class:is-on={excluded || albumLocked}
           disabled={albumLocked}
           title={albumLocked
-            ? "Album bloccato dallo shuffle: sblocca l’album per modificare i singoli brani"
+            ? t("trackRow.excludeLockedByAlbumTitle")
             : excluded
-              ? "Sblocca da shuffle"
-              : "Blocca da shuffle"}
+              ? t("trackRow.unblockShuffle")
+              : t("trackRow.blockShuffle")}
           aria-label={albumLocked
-            ? "Blocco shuffle impostato sull’album"
+            ? t("trackRow.excludeLockedByAlbumAria")
             : excluded
-              ? "Sblocca da shuffle"
-              : "Blocca da shuffle"}
+              ? t("trackRow.unblockShuffle")
+              : t("trackRow.blockShuffle")}
           onclick={() => ontoggleExclude?.()}
         >
           <span class="track-row__ic-glyph track-row__ic-glyph--svg" aria-hidden="true">
@@ -431,16 +430,14 @@
         </button>
       {/if}
 
-      {#if extraActions}
-        {@render extraActions()}
-      {/if}
-    {:else}
+    </div>
+    <div class="track-row__tools track-row__tools--compact">
       <div class="track-row__overflow" bind:this={overflowEl}>
         <button
           type="button"
           class="track-row__ic track-row__ic--overflow"
-          title="Altre azioni sul brano"
-          aria-label="Apri il menu delle altre azioni sul brano"
+          title={t("player.moreActions")}
+          aria-label={t("trackRow.overflowAria")}
           aria-expanded={menuOpen}
           aria-haspopup="menu"
           onclick={() => {
@@ -460,14 +457,14 @@
                 role="menuitem"
                 class="track-row__overflow-item"
                 class:is-on={favorited}
-                title="Preferito"
-                aria-label="Preferito"
+                title={t("player.favorite")}
+                aria-label={t("player.favorite")}
                 onclick={() => run(ontoggleFavorite)}
               >
                 <span class="track-row__overflow-item-glyph track-row__ic-glyph--svg" aria-hidden="true">
                   <UiIcon name="favorite" />
                 </span>
-                <span class="track-row__overflow-item-label">Preferito</span>
+                <span class="track-row__overflow-item-label">{t("player.favorite")}</span>
               </button>
             </li>
             {#if showQueueActions}
@@ -477,14 +474,14 @@
                   role="menuitem"
                   class="track-row__overflow-item"
                   class:is-on={inQueue}
-                  title={inQueue ? "Rimuovi dalla coda" : "Riproduci come prossimo"}
+                  title={inQueue ? t("trackRow.removeQueue") : t("trackRow.addQueue")}
                   onclick={() => run(inQueue ? removeFromQueue : addToQueue)}
                 >
                   <span class="track-row__overflow-item-glyph track-row__ic-glyph--svg" aria-hidden="true">
                     <UiIcon name={inQueue ? "close" : "add"} />
                   </span>
                   <span class="track-row__overflow-item-label">
-                    {inQueue ? "Rimuovi dalla coda" : "Riproduci come prossimo"}
+                    {inQueue ? t("trackRow.removeQueue") : t("trackRow.addQueue")}
                   </span>
                 </button>
               </li>
@@ -496,7 +493,7 @@
                   role="menuitem"
                   class="track-row__overflow-item"
                   class:is-on={playlistOpen}
-                  title="Playlist"
+                  title={t("trackRow.playlistTitle")}
                   onclick={() => {
                     menuOpen = false;
                     playlistOpen = true;
@@ -505,7 +502,7 @@
                   <span class="track-row__overflow-item-glyph track-row__ic-glyph--svg" aria-hidden="true">
                     <UiIcon name="queueMusic" />
                   </span>
-                  <span class="track-row__overflow-item-label">Playlist</span>
+                  <span class="track-row__overflow-item-label">{t("trackRow.playlistTitle")}</span>
                 </button>
               </li>
             {/if}
@@ -515,13 +512,13 @@
                   type="button"
                   role="menuitem"
                   class="track-row__overflow-item"
-                  title="Modifica metadati brano"
+                  title={t("trackRow.editMeta")}
                   onclick={() => run(onedit)}
                 >
                   <span class="track-row__overflow-item-glyph track-row__ic-glyph--svg" aria-hidden="true">
                     <UiIcon name="edit" />
                   </span>
-                  <span class="track-row__overflow-item-label">Modifica</span>
+                  <span class="track-row__overflow-item-label">{t("trackRow.overflowEdit")}</span>
                 </button>
               </li>
             {/if}
@@ -534,17 +531,17 @@
                   class:is-on={excluded || albumLocked}
                   disabled={albumLocked}
                   title={albumLocked
-                    ? "Album bloccato dallo shuffle: sblocca l’album per modificare i singoli brani"
+                    ? t("trackRow.excludeLockedByAlbumTitle")
                     : excluded
-                      ? "Sblocca da shuffle"
-                      : "Blocca da shuffle"}
+                      ? t("trackRow.unblockShuffle")
+                      : t("trackRow.blockShuffle")}
                   onclick={() => run(ontoggleExclude)}
                 >
                   <span class="track-row__overflow-item-glyph track-row__ic-glyph--svg" aria-hidden="true">
                     <UiIcon name="exclude" />
                   </span>
                   <span class="track-row__overflow-item-label">
-                    {excluded ? "Sblocca da shuffle" : "Blocca da shuffle"}
+                    {excluded ? t("trackRow.unblockShuffle") : t("trackRow.blockShuffle")}
                   </span>
                 </button>
               </li>
@@ -555,23 +552,23 @@
                   type="button"
                   role="menuitem"
                   class="track-row__overflow-item"
-                  title="Rimuovi"
+                  title={t("trackRow.remove")}
                   onclick={() => run(onremove)}
                 >
                   <span class="track-row__overflow-item-glyph track-row__ic-glyph--svg" aria-hidden="true">
                     <UiIcon name="close" />
                   </span>
-                  <span class="track-row__overflow-item-label">Rimuovi</span>
+                  <span class="track-row__overflow-item-label">{t("trackRow.remove")}</span>
                 </button>
               </li>
             {/if}
           </ul>
         {/if}
         {#if playlistOpen && showPlaylistAction}
-          <div class="track-row__playlist-popover rk-scroll" role="dialog" aria-label="Playlist">
+          <div class="track-row__playlist-popover rk-scroll" role="dialog" aria-label={t("trackRow.playlistTitle")}>
             {#if resolvedPlaylistOptions.length}
               <ul class="track-row__playlist-popover-list">
-                {#each resolvedPlaylistOptions as opt}
+                {#each resolvedPlaylistOptions as opt (opt.value)}
                   <li>
                     <button
                       type="button"
@@ -586,16 +583,16 @@
               </ul>
             {:else}
               <p class="track-row__playlist-popover-empty">
-                Non hai playlist. Creane una dalla sezione Playlist.
+                {t("trackRow.playlistPickerEmpty")}
               </p>
             {/if}
           </div>
         {/if}
       </div>
+    </div>
 
-      {#if extraActions}
-        {@render extraActions()}
-      {/if}
+    {#if extraActions}
+      {@render extraActions()}
     {/if}
   </div>
 </li>

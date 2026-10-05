@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Banner, BrandLogo, Button, TextInput } from "@rekord/ui";
+  import { Banner, BrandLogo, Button, Segmented, TextInput } from "@rekord/ui";
   import type { Account } from "../lib/account";
-  import { probeHub, type ProbeFailure } from "../lib/connect.svelte";
+  import { connectGate, probeHub, type ProbeFailure } from "../lib/connect.svelte";
   import {
     DEFAULT_HUB_PORT,
     formatHubLabel,
@@ -12,6 +12,7 @@
     parseHubAddress,
   } from "../lib/hubAddress";
   import { i18n, t, type AppLocale } from "../lib/i18n.svelte";
+  import { normalizeLocale } from "../lib/userPrefs";
   import { qrScannerAvailable, scanQrCode } from "../lib/qrScan";
 
   let {
@@ -156,21 +157,29 @@
 </script>
 
 <div class="connect">
-  <div class="connect__lang" role="group" aria-label={t("settings.language")}>
-    <div class="segmented segmented--joined">
-      <button
-        type="button"
-        class:is-on={i18n.locale === "en"}
-        aria-pressed={i18n.locale === "en"}
-        onclick={() => setLocale("en")}>EN</button
-      >
-      <button
-        type="button"
-        class:is-on={i18n.locale === "it"}
-        aria-pressed={i18n.locale === "it"}
-        onclick={() => setLocale("it")}>IT</button
-      >
-    </div>
+  <div class="connect__lang">
+    <span class="connect__lang-label" id="connect-lang-label">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6" />
+        <path
+          d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3Z"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+        />
+      </svg>
+      {t("settings.language")}
+    </span>
+    <Segmented
+      ariaLabel={t("settings.language")}
+      value={i18n.locale}
+      onchange={(v) => setLocale(normalizeLocale(v))}
+      options={[
+        { value: "it", label: "Italiano" },
+        { value: "en", label: "English" },
+        { value: "de", label: "Deutsch" },
+      ]}
+    />
   </div>
 
   <main class="connect__shell">
@@ -195,30 +204,20 @@
             <span class="connect__label" id="connect-mode-label">
               {t("connect.mode")}
             </span>
-            <div
-              class="segmented segmented--joined connect__seg"
-              role="group"
-              aria-labelledby="connect-mode-label"
-            >
-              <button
-                type="button"
-                class:is-on={mode === "local"}
-                aria-pressed={mode === "local"}
-                onclick={() => {
-                  mode = "local";
-                  error = "";
-                }}>{t("connect.modeLocal")}</button
-              >
-              <button
-                type="button"
-                class:is-on={mode === "public"}
-                aria-pressed={mode === "public"}
-                onclick={() => {
-                  mode = "public";
-                  error = "";
-                }}>{t("connect.modePublic")}</button
-              >
-            </div>
+            <Segmented
+              block
+              class="connect__seg"
+              ariaLabel={t("connect.mode")}
+              value={mode}
+              onchange={(v) => {
+                mode = v === "public" ? "public" : "local";
+                error = "";
+              }}
+              options={[
+                { value: "local", label: t("connect.modeLocal") },
+                { value: "public", label: t("connect.modePublic") },
+              ]}
+            />
           </div>
 
           {#if mode === "local"}
@@ -251,7 +250,7 @@
               <span class="connect__label">{t("connect.publicUrl")}</span>
               <TextInput
                 bind:value={publicUrl}
-                placeholder="https://nome.trycloudflare.com"
+                placeholder={t("connect.publicUrlPh")}
                 autocomplete="off"
                 spellcheck={false}
                 inputmode="url"
@@ -265,9 +264,12 @@
       {:else}
         <div class="connect__accounts">
           {#each accounts as account (account.id)}
+            {@const isCurrent = dismissible && account.id === connectGate.currentAccountId}
             <button
               type="button"
               class="connect__account"
+              class:is-current={isCurrent}
+              aria-current={isCurrent ? "true" : undefined}
               class:is-opening={openingId === account.id}
               disabled={Boolean(openingId)}
               onclick={() => enter(account.id)}
@@ -275,8 +277,15 @@
               <span class="connect__avatar" aria-hidden="true">{initial(account.name)}</span>
               <span class="connect__account-text">
                 <span class="connect__account-name">{account.name}</span>
-                {#if account.id === defaultAccountId}
-                  <span class="connect__badge">{t("connect.defaultAccount")}</span>
+                {#if isCurrent || account.id === defaultAccountId}
+                  <span class="connect__badges">
+                    {#if isCurrent}
+                      <span class="connect__badge connect__badge--current">{t("ui.connect.currentAccount")}</span>
+                    {/if}
+                    {#if account.id === defaultAccountId}
+                      <span class="connect__badge">{t("connect.defaultAccount")}</span>
+                    {/if}
+                  </span>
                 {/if}
               </span>
               <span class="connect__chevron" aria-hidden="true">›</span>
@@ -311,17 +320,20 @@
             </Button>
           {/if}
           {#if dismissible && ondismiss}
-            <Button class="connect__cta" variant="ghost" onclick={ondismiss}>
+            <!-- Uscire senza cambiare nulla: un'azione di contorno, non un pari
+                 di «Connetti». -->
+            <Button class="connect__quiet" variant="link" onclick={ondismiss}>
               {t("connect.cancel")}
             </Button>
           {/if}
         {:else}
           <Button
-            class="connect__cta"
-            variant="ghost"
+            class="connect__quiet"
+            variant="link"
             disabled={Boolean(openingId)}
             onclick={backToAddress}
           >
+            <span aria-hidden="true">‹</span>
             {t("connect.changeHub")}
           </Button>
         {/if}
@@ -346,7 +358,9 @@
 
   .connect__lang {
     display: flex;
+    align-items: center;
     justify-content: flex-end;
+    gap: var(--rk-space-md);
     padding: calc(env(safe-area-inset-top, 0px) + var(--rk-space-xl))
       calc(env(safe-area-inset-right, 0px) + var(--rk-space-xl)) 0
       calc(env(safe-area-inset-left, 0px) + var(--rk-space-xl));
@@ -423,15 +437,9 @@
     color: var(--rk-muted-strong);
   }
 
-  .connect__seg {
-    flex-wrap: nowrap;
-  }
-
-  .connect__seg button {
-    flex: 1 1 0;
-    min-width: 0;
-    /* Primo avvio col dito su un telefono: i due modi sono bersagli, non etichette. */
-    min-height: var(--rk-tap-min);
+  /* Primo avvio col dito su un telefono: i due modi sono bersagli, non etichette. */
+  .connect__body :global(.connect__seg .rk-seg__opt) {
+    min-height: calc(var(--rk-tap-min) - 6px);
   }
 
   .connect__hostrow {
@@ -517,12 +525,26 @@
     letter-spacing: -0.015em;
   }
 
+  .connect__badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+
+  .connect__account.is-current {
+    border-color: color-mix(in srgb, var(--rk-accent-2) 50%, var(--rk-line));
+  }
+
+  .connect__badge--current {
+    border-color: color-mix(in srgb, var(--rk-accent-2) 40%, var(--rk-line));
+    background: var(--rk-accent2-soft);
+    color: color-mix(in srgb, var(--rk-accent-2) 80%, var(--rk-ink));
+  }
+
   .connect__badge {
     justify-self: start;
-    font-size: var(--rk-fs-3xs);
-    font-weight: 750;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    font-size: var(--rk-fs-1);
+    font-weight: 650;
     line-height: 1;
     padding: 0.32em 0.62em;
     border-radius: var(--rk-radius-round);
@@ -553,6 +575,26 @@
   .connect__actions :global(.connect__cta) {
     width: 100%;
     min-height: var(--rk-tap-min);
+  }
+
+  .connect__actions :global(.connect__quiet) {
+    justify-self: center;
+    font-size: var(--rk-fs-3);
+    color: var(--rk-muted-strong);
+  }
+
+  .connect__lang-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: var(--rk-fs-2);
+    font-weight: 600;
+    color: var(--rk-muted);
+  }
+
+  .connect__lang-label svg {
+    width: 1rem;
+    height: 1rem;
   }
 
   @media (max-width: 559.98px) {

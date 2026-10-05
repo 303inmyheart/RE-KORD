@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ActionRow, Banner, Button, Panel } from "@rekord/ui";
-  import { api } from "../api";
   import { admin } from "../lib/admin.svelte";
+  import { t } from "../lib/i18n.svelte";
 
   let fileInput = $state<HTMLInputElement | null>(null);
 
@@ -15,20 +15,23 @@
     const input = event.currentTarget as HTMLInputElement;
     const file = input.files?.[0];
     input.value = "";
-    if (file) void admin.restoreBackup(file);
+    if (!file) return;
+    if (!window.confirm(t("backup.restoreConfirm", { name: file.name }))) return;
+    void admin.restoreBackup(file);
   }
 </script>
 
-<Panel title="Backup">
-  <p class="hint">
-    Il backup contiene impostazioni, account, preferiti, playlist e i metadati
-    della libreria. I file audio non sono inclusi: restano nella cartella musica.
-  </p>
+<Panel title={t("backup.title")}>
+  <p class="hint">{t("backup.hint")}</p>
+  <div class="secret" role="note">
+    <p class="secret-title">{t("backup.secret.title")}</p>
+    <p>{t("backup.secret.body")}</p>
+  </div>
   <ActionRow>
-    <Button variant="secondary" onclick={() => window.open(api.backupUrl(), "_blank")}>
-      Scarica backup
+    <Button variant="secondary" disabled={locked} onclick={() => void admin.downloadBackup()}>
+      {t("backup.download")}
     </Button>
-    <Button disabled={locked} onclick={pickFile}>Ripristina da file ZIP…</Button>
+    <Button disabled={locked} onclick={pickFile}>{t("backup.restore")}</Button>
   </ActionRow>
   <input
     bind:this={fileInput}
@@ -38,27 +41,18 @@
     onchange={onPicked}
   />
   {#if !admin.canManage}
-    <Banner tone="info">
-      Il ripristino si esegue dal computer dell'hub con l'account Default.
-    </Banner>
+    <Banner tone="info">{t("backup.machineOnly")}</Banner>
   {/if}
 </Panel>
 
-<Panel title="Ripristino da versione precedente">
-  <p class="hint">
-    I backup della versione React (v2) sono riconosciuti automaticamente: vengono
-    importati account, preferiti, playlist e metadati, poi la libreria viene
-    reindicizzata. Serve che la cartella musica esista già sul disco.
-  </p>
+<Panel title={t("backup.legacy.title")}>
+  <p class="hint">{t("backup.legacy.hint")}</p>
   <ActionRow>
-    <Button
-      variant="ghost"
-      disabled={locked}
-      onclick={() => void admin.syncLegacyMeta()}
-    >
-      Importa metadati da .kord
+    <Button variant="ghost" disabled={locked} onclick={() => void admin.syncLegacyMeta()}>
+      {t("backup.legacy.sync")}
     </Button>
   </ActionRow>
+  <p class="hint after">{t("legacy.hint")}</p>
 </Panel>
 
 <style>
@@ -67,6 +61,30 @@
     color: var(--rk-muted);
     font-size: var(--rk-fs-sm);
     line-height: var(--rk-lh);
+  }
+
+  .hint.after {
+    margin: 0.7rem 0 0;
+  }
+
+  .secret {
+    margin: 0 0 0.9rem;
+    padding: 0.65rem 0.85rem;
+    border: 1px solid color-mix(in srgb, #fbbf24 45%, transparent);
+    border-left-width: 3px;
+    border-radius: var(--rk-radius);
+    background: color-mix(in srgb, #fbbf24 9%, transparent);
+    font-size: var(--rk-fs-sm);
+    line-height: var(--rk-lh);
+  }
+
+  .secret p {
+    margin: 0;
+  }
+
+  .secret-title {
+    font-weight: 700;
+    margin-bottom: 0.25rem !important;
   }
 
   .hidden-file {

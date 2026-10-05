@@ -1,41 +1,47 @@
 <script lang="ts">
   import { Button, EmptyState, Panel } from "@rekord/ui";
   import { admin, humanTime } from "../lib/admin.svelte";
+  import { formatPercent, hubMsg, t } from "../lib/i18n.svelte";
+  import type { JobEntry } from "../api";
 
   const jobs = $derived(admin.jobs);
   const finished = $derived(jobs.filter((j) => j.status !== "running").length);
 
-  const statusLabel: Record<string, string> = {
-    running: "in corso",
-    done: "completato",
-    failed: "errore",
-    canceled: "annullato",
+  const KNOWN_STATUS = ["running", "done", "failed", "canceled"];
+  const statusLabel = (status: string) =>
+    KNOWN_STATUS.includes(status) ? t(`jobs.status.${status}`) : status;
+
+  const jobTitle = (job: JobEntry) => hubMsg("job", job.titleCode, job.params, job.label);
+  const jobDetail = (job: JobEntry) => {
+    if (job.message) return hubMsg("job", job.detailCode, job.params, job.message);
+    if (job.error) return hubMsg("job", job.errorCode, job.params, job.error);
+    return "—";
   };
 </script>
 
-<Panel title="Operazioni in corso">
+<Panel title={t("jobs.title")}>
   {#snippet actions()}
     <Button variant="secondary" disabled={admin.busy} onclick={() => void admin.loadSection("jobs")}>
-      Aggiorna
+      {t("common.refresh")}
     </Button>
     <Button
       variant="ghost"
       disabled={admin.busy || finished === 0}
       onclick={() => void admin.clearJobs()}
     >
-      Pulisci storico
+      {t("jobs.clear")}
     </Button>
   {/snippet}
 
   {#if jobs.length === 0}
-    <EmptyState message="Nessuna operazione registrata" />
+    <EmptyState message={t("jobs.empty")} />
   {:else}
     <ul class="jobs">
       {#each jobs as job (job.id)}
         <li class="job" data-status={job.status}>
           <div class="head">
-            <span class="label">{job.label}</span>
-            <span class="status">{statusLabel[job.status] ?? job.status}</span>
+            <span class="label">{jobTitle(job)}</span>
+            <span class="status">{statusLabel(job.status)}</span>
           </div>
           {#if job.status === "running"}
             <div
@@ -44,12 +50,14 @@
               aria-valuemin="0"
               aria-valuemax="100"
               aria-valuenow={Math.round((job.progress ?? 0) * 100)}
+              aria-valuetext={formatPercent(job.progress ?? 0)}
+              aria-label={t("jobs.progressAria", { label: jobTitle(job) })}
             >
               <div class="fill" style="width: {Math.round((job.progress ?? 0) * 100)}%"></div>
             </div>
           {/if}
           <div class="meta">
-            <span>{job.message ?? job.error ?? "—"}</span>
+            <span>{jobDetail(job)}</span>
             <span class="when">
               {humanTime(job.finishedAt ?? job.createdAt)}
             </span>
@@ -60,7 +68,7 @@
               disabled={admin.busy}
               onclick={() => void admin.cancelJob(job.id)}
             >
-              Annulla
+              {t("common.cancel")}
             </Button>
           {/if}
         </li>

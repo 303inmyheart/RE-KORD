@@ -1,9 +1,20 @@
 <script lang="ts">
   import { Modal } from "@rekord/ui";
   import { api, type CatalogWebItem, type CatalogWebTrack } from "../../lib/api";
+  import { t } from "../../lib/i18n.svelte";
   import { player } from "../../lib/player";
   import { session } from "../../lib/session.svelte";
   import UiIcon from "../icons/UiIcon.svelte";
+  import { structuredError } from "../../lib/api/studio";
+  import { studioCodeText, studioErrorCode, studioErrorText } from "../../lib/studio/errors";
+
+  /** A failed audition: known causes get their message, anything else stays generic. */
+  function previewFailure(e: unknown): string {
+    if (e instanceof DOMException) return studioErrorText(e);
+    const code = studioErrorCode(e);
+    if (code) return studioErrorText(e);
+    return t("studio.preview.unavailable");
+  }
 
   let {
     item,
@@ -115,7 +126,7 @@
       playingUrl = null;
       // A superseded play() aborts on purpose; only real failures are shown.
       if (e instanceof DOMException && e.name === "AbortError") return;
-      previewErr = e instanceof Error ? e.message : String(e);
+      previewErr = previewFailure(e);
     }
   }
 
@@ -127,7 +138,7 @@
     clearTicker();
     playingUrl = null;
     busyUrl = null;
-    previewErr = "Anteprima non disponibile per questo brano.";
+    previewErr = t("studio.preview.unavailable");
   }
 
   async function loadTracks(target: CatalogWebItem) {
@@ -140,10 +151,15 @@
       if (loadedFor !== target.url) return;
       tracks = res.tracks;
       listTitle = res.title ?? null;
-      listErr = res.tracks.length ? null : (res.error ?? "Nessun brano trovato.");
+      const err = structuredError(res.error);
+      listErr = res.tracks.length
+        ? null
+        : err
+          ? studioCodeText(err.code, err.message)
+          : t("studio.preview.noTracks");
     } catch (e) {
       if (loadedFor !== target.url) return;
-      listErr = e instanceof Error ? e.message : String(e);
+      listErr = studioErrorText(e);
     } finally {
       if (loadedFor === target.url) listBusy = false;
     }
@@ -176,7 +192,7 @@
 
 <Modal
   open={Boolean(item)}
-  eyebrow="Anteprima"
+  eyebrow={t("studio.preview.eyebrow")}
   title={item?.title ?? ""}
   lede={item?.subtitle || undefined}
   panelClass="catalog-preview-dialog"
@@ -192,11 +208,11 @@
   {/snippet}
 
   <p class="subtle sm">
-    Ascolta i primi {PREVIEW_MAX_SEC} secondi di un brano prima di scaricare.
+    {t("studio.preview.lead", { n: PREVIEW_MAX_SEC })}
   </p>
 
   {#if listBusy}
-    <p class="panel-empty">Carico i brani…</p>
+    <p class="panel-empty">{t("studio.preview.loadingTracks")}</p>
   {:else if tracks.length}
     <div class="catalog-preview__tracks">
       {#each tracks as track (track.id)}
@@ -216,9 +232,9 @@
           <span class="catalog-preview__track-title">{track.title}</span>
           <span class="catalog-preview__track-state">
             {#if isBusy}
-              Preparo…
+              {t("studio.preview.preparing")}
             {:else if isPlaying}
-              {Math.max(0, Math.ceil(PREVIEW_MAX_SEC - elapsed))}s
+              {t("studio.preview.secondsLeft", { n: Math.max(0, Math.ceil(PREVIEW_MAX_SEC - elapsed)) })}
             {/if}
           </span>
           {#if isPlaying}
@@ -261,7 +277,7 @@
         onclose();
       }}
     >
-      Chiudi
+      {t("ui.close")}
     </button>
     {#if item}
       <button
@@ -273,7 +289,7 @@
         }}
       >
         <UiIcon name="download" />
-        Scarica
+        {t("studio.catalog.download")}
       </button>
     {/if}
   {/snippet}

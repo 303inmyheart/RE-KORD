@@ -1,5 +1,9 @@
+/* Self-hosted brand fonts (no network at runtime). */
+@import "./fonts.css";
 /* Named themes override Midnight :root (glass opacity stack not included). */
 @import "./themes.css";
+/* Global primitives: focus ring, links, eyebrow, pills, skeleton pulse. */
+@import "./base.css";
 
 /* RE-KORD Midnight tokens — parity with 5.x :root */
 :root {
@@ -26,8 +30,17 @@
   --rk-danger-soft: rgba(248, 113, 113, 0.12);
   /* Hearts and favourite counters: same red as danger, different meaning. */
   --rk-favorite: var(--rk-danger);
-  --rk-ok: #2e7d32;
-  --rk-ok-soft: rgba(46, 125, 50, 0.14);
+  /* Solid fill behind white text on a destructive primary button. Darker than
+     --rk-danger (which is tuned as a text colour on dark surfaces). */
+  --rk-danger-solid: #dc2626;
+  --rk-on-danger: #ffffff;
+  /* Status colours. Text-on-surface tuned; `-soft` for chips and banners. */
+  --rk-success: #34d399;
+  --rk-success-soft: color-mix(in srgb, var(--rk-success) 14%, transparent);
+  --rk-warning: #f59e0b;
+  --rk-warning-soft: color-mix(in srgb, var(--rk-warning) 14%, transparent);
+  --rk-ok: var(--rk-success);
+  --rk-ok-soft: var(--rk-success-soft);
   --rk-glow: rgba(255, 143, 92, 0.08);
   --rk-page-glow-1: rgba(255, 143, 92, 0.16);
   --rk-page-glow-2: rgba(100, 212, 255, 0.14);
@@ -44,38 +57,66 @@
   --rk-radius-sm: 4px;
   --rk-radius: 6px;
   --rk-radius-lg: 8px;
-  --rk-radius-xl: 10px;
+  --rk-radius-xl: 12px;
   --rk-radius-2xl: 16px;
   /* Anything meant to be a capsule: chips, dots, scrollbar thumbs, rings. */
   --rk-radius-round: 999px;
+  /* Radius roles — pick the role, not the number:
+     cards and panels lg, buttons and fields md, chips/pills round,
+     the floating dock, sheets and dialogs xl. */
+  --rk-radius-card: var(--rk-radius-lg);
+  --rk-radius-control: var(--rk-radius);
+  --rk-radius-chip: var(--rk-radius-round);
+  --rk-radius-sheet: var(--rk-radius-xl);
   /* Cover art — modest radius (parity with 5.x --radius-lg on compact covers) */
   --rk-radius-cover: 8px;
   /* Elevation: 1 for resting surfaces, 2 for lifted ones, 3 for overlays. */
   --rk-shadow: 0 1px 0 rgba(0, 0, 0, 0.35), 0 2px 10px rgba(0, 0, 0, 0.22);
   --rk-shadow-2: 0 4px 18px rgba(0, 0, 0, 0.28);
   --rk-shadow-3: 0 14px 30px color-mix(in srgb, var(--rk-bg) 70%, transparent);
-  --rk-font: "Inter", system-ui, -apple-system, sans-serif;
-  --rk-display: "Inter", system-ui, -apple-system, sans-serif;
-  --rk-mono: "JetBrains Mono", ui-monospace, monospace;
-  --rk-badge-font: "Space Grotesk", var(--rk-font);
-  /* Type scale. Every piece of text picks a rung; sizes tied to a graphic (cover
-     initials, wordmark, big counters, fluid hero type) stay local on purpose. */
-  --rk-fs-4xs: 0.6rem;
-  --rk-fs-3xs: 0.68rem;
-  --rk-fs-2xs: 0.72rem;
-  --rk-fs-xs: 0.78rem;
-  --rk-fs-sm: 0.85rem;
-  --rk-fs-md: 0.92rem;
-  --rk-fs-base: 1rem;
-  --rk-fs-lg: 1.1rem;
-  --rk-fs-xl: 1.3rem;
-  --rk-fs-2xl: 1.55rem;
-  --rk-fs-3xl: 1.85rem;
+  --rk-font: "Inter", system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", "SF Pro Text", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --rk-display: var(--rk-font);
+  /* Mono is for file paths and code only. Times and counts stay in the UI font
+     with `font-variant-numeric: tabular-nums` (see `.rk-num`). */
+  --rk-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  /* Badges and cover initials use the UI font: one family across the app. */
+  --rk-badge-font: var(--rk-font);
+  /*
+   * Type scale — seven rungs, nothing below 0.75rem (12px).
+   *   1  0.75rem    captions, eyebrows, badges, tab labels on phones
+   *   2  0.8125rem  secondary text, meta lines, small buttons
+   *   3  0.9375rem  body (the <body> size)
+   *   4  1.0625rem  lead / list titles / sub-headings
+   *   5  1.25rem    section and page titles
+   *   6  1.5rem     hero titles, metric values
+   *   7  2rem       display (splash, album hero on desktop)
+   * Sizes tied to a graphic (cover initials, wordmark, fluid hero clamp) stay
+   * local on purpose.
+   */
+  --rk-fs-1: 0.75rem;
+  --rk-fs-2: 0.8125rem;
+  --rk-fs-3: 0.9375rem;
+  --rk-fs-4: 1.0625rem;
+  --rk-fs-5: 1.25rem;
+  --rk-fs-6: 1.5rem;
+  --rk-fs-7: 2rem;
+  /* Older names, kept so existing rules land on a rung instead of in between. */
+  --rk-fs-4xs: var(--rk-fs-1);
+  --rk-fs-3xs: var(--rk-fs-1);
+  --rk-fs-2xs: var(--rk-fs-1);
+  --rk-fs-xs: var(--rk-fs-2);
+  --rk-fs-sm: var(--rk-fs-2);
+  --rk-fs-md: var(--rk-fs-3);
+  --rk-fs-base: var(--rk-fs-4);
+  --rk-fs-lg: var(--rk-fs-4);
+  --rk-fs-xl: var(--rk-fs-5);
+  --rk-fs-2xl: var(--rk-fs-6);
+  --rk-fs-3xl: var(--rk-fs-7);
   /* Heading roles, so the hierarchy is stated once: the page toolbar owns the
      largest title, the topbar and sub-sections sit one rung below it. */
-  --rk-fs-title: var(--rk-fs-xl);
-  --rk-fs-subtitle: var(--rk-fs-lg);
-  --rk-fs-eyebrow: var(--rk-fs-3xs);
+  --rk-fs-title: var(--rk-fs-5);
+  --rk-fs-subtitle: var(--rk-fs-4);
+  --rk-fs-eyebrow: var(--rk-fs-1);
   --rk-lh-tight: 1.2;
   --rk-lh-snug: 1.3;
   --rk-lh: 1.45;
@@ -140,6 +181,18 @@
   /* Fullscreen Listen viz clears the fixed player dock (parity with 5.x) */
   --viz-expanded-bottom-clear: calc(var(--rk-dock-h) + 0.4rem);
   color-scheme: dark;
+}
+
+/* Status colours follow the used colour scheme, so a *custom* light theme
+   (which only sets `color-scheme: light` and its own surfaces) gets the dark
+   variants too. Named light themes also set them explicitly (themes.css). */
+@supports (color: light-dark(#000, #fff)) {
+  :root {
+    --rk-success: light-dark(#15803d, #34d399);
+    --rk-warning: light-dark(#b45309, #f59e0b);
+    --rk-danger: light-dark(#c53030, #f87171);
+    --rk-danger-solid: light-dark(#b91c1c, #dc2626);
+  }
 }
 
 [data-theme="server"] {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, sheetDrag, SHEET_MEDIA_QUERY } from "@rekord/ui";
+  import { Button, modalSurface, sheetDrag, SHEET_MEDIA_QUERY } from "@rekord/ui";
   import { api } from "../lib/api";
   import {
     CUSTOM_THEME_BG_IMAGE_FITS,
@@ -83,7 +83,6 @@
     paletteErr = null;
     bgBusy = false;
     paletteBusy = false;
-    queueMicrotask(() => panelEl?.focus());
   });
 
   function patch(patch: Partial<CustomThemeSettings>) {
@@ -160,14 +159,6 @@
     if (e.target === e.currentTarget) onclose();
   }
 
-  $effect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onclose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
 </script>
 
 {#snippet bgPreview(
@@ -218,6 +209,7 @@
         aria-labelledby="custom-theme-dialog-title"
         tabindex="-1"
         onmousedown={(e) => e.stopPropagation()}
+        use:modalSurface={{ onclose, focusPanelOnly: true }}
         use:sheetDrag={{
           enabled: isSheet,
           gripSelector: "[data-sheet-grip]",

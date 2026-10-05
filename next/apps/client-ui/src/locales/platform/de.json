@@ -1,0 +1,16 @@
+{
+  "platform.update.clientTooOld.title": "Diese App aktualisieren",
+  "platform.update.clientTooOld.body": "Der Hub ({{hub}}) braucht RE-KORD {{min}} oder neuer, diese App ist {{client}}: Einige Funktionen gehen eventuell erst nach einem Update.",
+  "platform.update.hubNewer.title": "Update verfügbar",
+  "platform.update.hubNewer.body": "Dein Hub läuft bereits mit {{hub}}, diese App ist {{client}}.",
+  "platform.update.hubOlder.title": "Hub aktualisieren",
+  "platform.update.hubOlder.body": "Dein Hub läuft mit {{hub}}, älter als diese App ({{client}}): Aktualisiere ihn, um alle Funktionen zu nutzen.",
+  "platform.update.reload.title": "Neue Version",
+  "platform.update.reload.body": "Der Hub wurde auf {{hub}} aktualisiert: Lade neu, um die neue Oberfläche zu verwenden.",
+  "platform.update.download": "Download",
+  "platform.update.howTo": "So aktualisierst du",
+  "platform.update.reload": "Neu laden",
+  "platform.update.dismiss": "Ausblenden",
+  "platform.download.saved": "Gespeichert unter {{path}}",
+  "platform.download.failed": "Die Datei konnte nicht gespeichert werden: {{error}}"
+}

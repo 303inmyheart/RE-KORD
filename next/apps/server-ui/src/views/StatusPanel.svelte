@@ -1,6 +1,8 @@
 <script lang="ts">
   import { ActionRow, Button, Panel, StatList, type StatItem } from "@rekord/ui";
   import { admin, humanBytes, humanTime } from "../lib/admin.svelte";
+  import { formatNumber, t } from "../lib/i18n.svelte";
+  import ScanReportCard from "./ScanReportCard.svelte";
 
   let {
     items = [],
@@ -15,9 +17,9 @@
   const diag = $derived(admin.diagnostics);
 </script>
 
-<Panel title="Stato">
+<Panel title={t("nav.status")}>
   {#snippet actions()}
-    <Button variant="secondary" disabled={busy} onclick={onrefresh}>Aggiorna</Button>
+    <Button variant="secondary" disabled={busy} onclick={onrefresh}>{t("common.refresh")}</Button>
   {/snippet}
 
   <StatList {items} />
@@ -25,39 +27,43 @@
   {#if diag}
     <div class="grid">
       <div class="cell">
-        <span class="k">Cartella musica</span>
-        <span class="v">{diag.musicRoot ?? "non impostata"}</span>
+        <span class="k">{t("status.musicRoot")}</span>
+        <span class="v">{diag.musicRoot ?? t("status.musicRootUnset")}</span>
       </div>
       <div class="cell">
-        <span class="k">Dati hub</span>
+        <span class="k">{t("status.dataDir")}</span>
         <span class="v">{diag.dataDir}</span>
       </div>
       <div class="cell">
-        <span class="k">Database</span>
+        <span class="k">{t("status.database")}</span>
         <span class="v">{humanBytes(diag.db.sizeBytes)}</span>
       </div>
       <div class="cell">
-        <span class="k">Osservazione cartella</span>
+        <span class="k">{t("status.watcher")}</span>
         <span class="v">
           {diag.watcher.running
-            ? `attiva${diag.watcher.pending ? " (aggiornamento in coda)" : ""}`
+            ? diag.watcher.pending
+              ? t("status.watcherActivePending")
+              : t("status.watcherActive")
             : !diag.watcher.enabled
-              ? "disattivata"
+              ? t("status.watcherOff")
               : diag.musicRoot
-                ? "attivata, in avvio"
-                : "in attesa della cartella musica"}
+                ? t("status.watcherStarting")
+                : t("status.watcherWaiting")}
         </span>
       </div>
       <div class="cell">
-        <span class="k">Download attivi</span>
-        <span class="v">{diag.activeDownloads}</span>
+        <span class="k">{t("status.downloads")}</span>
+        <span class="v">{formatNumber(diag.activeDownloads)}</span>
       </div>
       <div class="cell">
-        <span class="k">Ultimo evento cartella</span>
+        <span class="k">{t("status.lastFolderEvent")}</span>
         <span class="v">{humanTime(diag.watcher.lastEventAt)}</span>
       </div>
     </div>
   {/if}
+
+  <ScanReportCard warningsOnly />
 
   <ActionRow>
     <Button
@@ -65,11 +71,11 @@
       disabled={busy || !admin.canManage}
       onclick={() => void admin.runScan("incremental")}
     >
-      Aggiorna libreria
+      {t("status.updateLibrary")}
     </Button>
-    <Button variant="ghost" onclick={() => void admin.show("jobs")}>Vedi job</Button>
+    <Button variant="ghost" onclick={() => void admin.show("jobs")}>{t("status.seeJobs")}</Button>
     <Button variant="ghost" onclick={() => void admin.show("diagnostics")}>
-      Diagnostica
+      {t("nav.diagnostics")}
     </Button>
   </ActionRow>
 </Panel>

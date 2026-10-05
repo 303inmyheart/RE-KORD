@@ -1,6 +1,6 @@
 {
   "name": "@rekord/ui",
-  "version": "5.1.0",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "svelte": "./src/index.ts",
@@ -14,18 +14,26 @@
     "./styles/tokens.css": "./src/styles/tokens.css",
     "./styles/themes.css": "./src/styles/themes.css",
     "./styles/controls.css": "./src/styles/controls.css",
-    "./styles/sheet.css": "./src/styles/sheet.css"
+    "./styles/sheet.css": "./src/styles/sheet.css",
+    "./styles/base.css": "./src/styles/base.css",
+    "./styles/fonts.css": "./src/styles/fonts.css"
   },
   "peerDependencies": {
     "svelte": "^5.0.0"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@types/qrcode": "^1.5.5",
     "svelte": "^5.19.0",
+    "svelte-check": "^4",
     "typescript": "^5.7.3"
+  },
+  "scripts": {
+    "check": "svelte-check --workspace src --threshold error"
   }
 }

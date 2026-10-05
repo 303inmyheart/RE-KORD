@@ -1,13 +1,12 @@
 <script lang="ts">
   import { CoverArt } from "@rekord/ui";
   import {
-    albumCoverUrl,
     api,
     artistCoverUrl,
     type CatalogArtistEntry,
-    type CatalogWebDiscover,
     type CatalogWebItem,
     type LibrarySelectionV1,
+    coverUrlFor,
   } from "../../lib/api";
   import {
     catalogArtistNeedsAttention,
@@ -16,6 +15,9 @@
     selectionHasAlbum,
     selectionHasArtist,
   } from "../../lib/catalogHelpers";
+  import { catalogDiscover, type DiscoverResult } from "../../lib/api/studio";
+  import { i18n, t, tp } from "../../lib/i18n.svelte";
+  import { studioCodeText, studioErrorText } from "../../lib/studio/errors";
   import { session } from "../../lib/session.svelte";
   import UiIcon from "../icons/UiIcon.svelte";
   import StudioCatalogPreviewDialog from "./StudioCatalogPreviewDialog.svelte";
@@ -37,7 +39,9 @@
   let catalogMsg = $state<string | null>(null);
   let catalogLoaded = $state(false);
 
-  let webDiscover = $state<CatalogWebDiscover | null>(null);
+  let webDiscover = $state<DiscoverResult | null>(null);
+  /** Locale the web list was fetched for: switching language refetches. */
+  let webLocale = "";
   let webBusy = $state(false);
   let webErr = $state<string | null>(null);
   let previewItem = $state<CatalogWebItem | null>(null);
@@ -72,7 +76,7 @@
       mySelection = sel;
       catalogLoaded = true;
     } catch (e) {
-      catalogErr = e instanceof Error ? e.message : String(e);
+      catalogErr = studioErrorText(e);
       catalogArtistsData = [];
       mySelection = null;
     } finally {
@@ -91,14 +95,14 @@
         cat.artists[0] ??
         null;
     } catch (e) {
-      catalogErr = e instanceof Error ? e.message : String(e);
+      catalogErr = studioErrorText(e);
     } finally {
       catalogBusy = false;
     }
   }
 
   async function afterCatalogPatch() {
-    catalogMsg = "Selezione aggiornata.";
+    catalogMsg = t("studio.catalog.updated");
     try {
       if (catalogArtistDetail) {
         const [cat, sel] = await Promise.all([
@@ -123,7 +127,7 @@
       mySelection = await api.patchMyLibrarySelection({ addArtists: [artistId] });
       await afterCatalogPatch();
     } catch (e) {
-      catalogErr = e instanceof Error ? e.message : String(e);
+      catalogErr = studioErrorText(e);
     } finally {
       catalogBusy = false;
     }
@@ -139,7 +143,7 @@
       });
       await afterCatalogPatch();
     } catch (e) {
-      catalogErr = e instanceof Error ? e.message : String(e);
+      catalogErr = studioErrorText(e);
     } finally {
       catalogBusy = false;
     }
@@ -152,7 +156,7 @@
       mySelection = await api.patchMyLibrarySelection({ addAlbums: [folderKey] });
       await afterCatalogPatch();
     } catch (e) {
-      catalogErr = e instanceof Error ? e.message : String(e);
+      catalogErr = studioErrorText(e);
     } finally {
       catalogBusy = false;
     }
@@ -165,53 +169,127 @@
       mySelection = await api.patchMyLibrarySelection({ removeAlbums: [folderKey] });
       await afterCatalogPatch();
     } catch (e) {
-      catalogErr = e instanceof Error ? e.message : String(e);
+      catalogErr = studioErrorText(e);
     } finally {
       catalogBusy = false;
     }
   }
 
+  const SINGLE_RE = /^(single|singolo|video)\b/i;
+
+  /** Singles that the hub left in the albums feed (subtitle "Singolo • …"). */
+  function splitSingles(r: DiscoverResult): DiscoverResult {
+    const albums: DiscoverResult["albums"] = [];
+    const songs = r.songs.slice();
+    const seen = new Set(songs.map((s) => s.url));
+    for (const it of r.albums) {
+      const kind = (it.kind ?? "").toLowerCase();
+      const single = kind === "single" || kind === "song" || (!kind && SINGLE_RE.test(it.subtitle.trim()));
+      if (single) {
+        if (!seen.has(it.url)) songs.push(it);
+        seen.add(it.url);
+      } else {
+        albums.push(it);
+      }
+    }
+    return { ...r, albums, songs };
+  }
+
   async function loadWebDiscover(force = false) {
     webBusy = true;
     webErr = null;
+    webLocale = i18n.locale;
     try {
-      webDiscover = await api.catalogWebDiscover(force);
+      webDiscover = splitSingles(await catalogDiscover(force, i18n.locale));
     } catch (e) {
-      webErr = e instanceof Error ? e.message : String(e);
-      webDiscover = { artists: [], albums: [], songs: [], error: webErr };
+      webErr = studioErrorText(e);
+      webDiscover = { albums: [], songs: [], error: null, singlesRecovered: false };
     } finally {
       webBusy = false;
     }
   }
 
+  const webHubError = $derived(
+    webDiscover?.error ? studioCodeText(webDiscover.error.code, webDiscover.error.message) : null,
+  );
+
   $effect(() => {
     if (catalogMode === "local") void loadCatalogPane();
-    else if (!webDiscover) void loadWebDiscover();
+    else if (!webDiscover || webLocale !== i18n.locale) void loadWebDiscover();
   });
 </script>
 
-<div class="studio-pane studio-catalog-pane" role="region" aria-label="Scopri">
+{#snippet webColumn(title: string, items: CatalogWebItem[], mode: "single" | "playlist")}
+  <section class="studio-panel studio-catalog-web-col" aria-label={title}>
+    <h4 class="studio-panel-title">
+      {title}
+      <span class="studio-catalog-web-col__count">{items.length}</span>
+    </h4>
+    {#if webBusy && !webDiscover}
+      <p class="panel-empty">{t("studio.catalog.loading")}</p>
+    {:else if items.length}
+      <ul class="studio-catalog-web-list">
+        {#each items as item, i (`${item.url}:${i}`)}
+          <li class="studio-catalog-web-tile">
+            <button
+              type="button"
+              class="studio-catalog-web-tile__main"
+              title={t("studio.catalog.previewTitle")}
+              onclick={() => (previewItem = item)}
+            >
+              <span class="studio-catalog-web-tile__art">
+                {#if item.thumbnailUrl}
+                  <img src={item.thumbnailUrl} alt="" width="56" height="56" loading="lazy" />
+                {:else}
+                  <UiIcon name="album" />
+                {/if}
+                <span class="studio-catalog-web-tile__play" aria-hidden="true"><UiIcon name="play" /></span>
+              </span>
+              <span class="studio-catalog-web-tile__text">
+                <span class="studio-catalog-web-tile__title">{item.title}</span>
+                <span class="studio-catalog-web-tile__meta">{item.subtitle}</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              class="ghost-btn ghost-btn--sm studio-catalog-web-tile__dl"
+              title={t("studio.catalog.download")}
+              onclick={() => onSendToDownload(item, mode)}
+            >
+              <UiIcon name="download" />
+              <span>{t("studio.catalog.download")}</span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {:else}
+      <p class="panel-empty">{webBusy ? t("studio.catalog.loading") : t("studio.catalog.webEmpty")}</p>
+    {/if}
+  </section>
+{/snippet}
+
+<div class="studio-pane studio-catalog-pane" role="region" aria-label={t("studio.catalog.regionAria")}>
   <div class="studio-catalog-browse">
     <div class="studio-catalog-head">
       <p class="subtle sm studio-catalog-browse-lead">
         {catalogMode === "web"
-          ? "Esplora cataloghi online e invia uscite al Download."
-          : "Aggiungi artisti o singoli album dalla libreria globale alla tua selezione."}
+          ? t("studio.catalog.leadWeb")
+          : t("studio.catalog.leadLocal")}
       </p>
       <div
         class="tools-dl-studio-switch studio-catalog-head__mode-switch"
         role="group"
-        aria-label="Modalità Scopri"
+        aria-label={t("studio.catalog.modeAria")}
       >
         <span class="tools-dl-studio-switch__label" class:is-active={catalogMode === "local"}>
-          Locale
+          {t("studio.catalog.modeLocal")}
         </span>
         <button
           type="button"
           role="switch"
           class="tools-dl-studio-switch__track"
           aria-checked={catalogMode === "web"}
-          aria-label="Modalità Scopri"
+          aria-label={t("studio.catalog.modeAria")}
           onclick={() => {
             catalogMode = catalogMode === "local" ? "web" : "local";
             if (catalogMode === "web") catalogArtistDetail = null;
@@ -220,7 +298,7 @@
           <span class="tools-dl-studio-switch__thumb" aria-hidden="true"></span>
         </button>
         <span class="tools-dl-studio-switch__label" class:is-active={catalogMode === "web"}>
-          Web
+          {t("studio.catalog.modeWeb")}
         </span>
       </div>
     </div>
@@ -234,122 +312,18 @@
             disabled={webBusy}
             onclick={() => void loadWebDiscover(true)}
           >
-            {webBusy ? "Aggiorno…" : "Aggiorna novità"}
+            {webBusy ? t("studio.catalog.refreshing") : t("studio.catalog.refreshNew")}
           </button>
         </div>
       </div>
       {#if webErr}
-        <p class="subtle sm warnline">{webErr}</p>
+        <p class="subtle sm warnline" role="alert">{webErr}</p>
+      {:else if webHubError}
+        <p class="subtle sm warnline" role="note">{t("studio.catalog.webPartial", { error: webHubError })}</p>
       {/if}
-      <div class="library-overview-cols">
-        <div class="studio-panel">
-          <h4 class="studio-panel-title">
-            Album ed EP
-            <span style="opacity:0.65;font-weight:650;margin-left:0.35rem"
-              >{webDiscover?.albums?.length ?? 0}</span
-            >
-          </h4>
-          {#if webBusy && !webDiscover}
-            <p class="panel-empty">Caricamento…</p>
-          {:else if webDiscover?.albums?.length}
-            {#each webDiscover.albums as item}
-              <div class="studio-catalog-list-tile">
-                <button
-                  type="button"
-                  class="studio-catalog-list-tile__main"
-                  title="Ascolta un'anteprima"
-                  onclick={() => (previewItem = item)}
-                >
-                  {#if item.thumbnailUrl}
-                    <img
-                      class="studio-catalog-web-thumb"
-                      src={item.thumbnailUrl}
-                      alt=""
-                      width="48"
-                      height="48"
-                    />
-                  {/if}
-                  <div>
-                    <div class="library-list-tile__title">{item.title}</div>
-                    <div class="library-list-tile__meta">{item.subtitle}</div>
-                  </div>
-                </button>
-                <div class="studio-catalog-list-tile__actions">
-                  <button
-                    type="button"
-                    class="ghost-btn"
-                    onclick={() => (previewItem = item)}
-                  >
-                    <UiIcon name="play" />
-                    Anteprima
-                  </button>
-                  <button
-                    type="button"
-                    class="primary-btn"
-                    onclick={() => onSendToDownload(item, "playlist")}
-                  >
-                    Scarica
-                  </button>
-                </div>
-              </div>
-            {/each}
-          {:else}
-            <p class="panel-empty">Nessun risultato web.</p>
-          {/if}
-        </div>
-        <div class="studio-panel">
-          <h4 class="studio-panel-title">
-            Singoli
-            <span style="opacity:0.65;font-weight:650;margin-left:0.35rem"
-              >{webDiscover?.songs?.length ?? 0}</span
-            >
-          </h4>
-          {#if webDiscover?.songs?.length}
-            {#each webDiscover.songs as item}
-              <div class="studio-catalog-list-tile">
-                <button
-                  type="button"
-                  class="studio-catalog-list-tile__main"
-                  title="Ascolta un'anteprima"
-                  onclick={() => (previewItem = item)}
-                >
-                  {#if item.thumbnailUrl}
-                    <img
-                      class="studio-catalog-web-thumb"
-                      src={item.thumbnailUrl}
-                      alt=""
-                      width="48"
-                      height="48"
-                    />
-                  {/if}
-                  <div>
-                    <div class="library-list-tile__title">{item.title}</div>
-                    <div class="library-list-tile__meta">{item.subtitle}</div>
-                  </div>
-                </button>
-                <div class="studio-catalog-list-tile__actions">
-                  <button
-                    type="button"
-                    class="ghost-btn"
-                    onclick={() => (previewItem = item)}
-                  >
-                    <UiIcon name="play" />
-                    Anteprima
-                  </button>
-                  <button
-                    type="button"
-                    class="primary-btn"
-                    onclick={() => onSendToDownload(item, "single")}
-                  >
-                    Scarica
-                  </button>
-                </div>
-              </div>
-            {/each}
-          {:else}
-            <p class="panel-empty">Nessun risultato web.</p>
-          {/if}
-        </div>
+      <div class="studio-catalog-web-cols">
+        {@render webColumn(t("studio.catalog.albumsEps"), webDiscover?.albums ?? [], "playlist")}
+        {@render webColumn(t("studio.catalog.singles"), webDiscover?.songs ?? [], "single")}
       </div>
     {:else}
       <div class="studio-catalog-toolbar">
@@ -360,14 +334,14 @@
             disabled={catalogBusy}
             onclick={() => void loadCatalogPane(true)}
           >
-            {catalogBusy ? "Aggiorno…" : "Aggiorna elenco"}
+            {catalogBusy ? t("studio.catalog.refreshing") : t("studio.catalog.refreshList")}
           </button>
           {#if !catalogArtistDetail}
             <input
               type="search"
               class="ghost-input ghost-input--search studio-catalog-toolbar__search"
-              placeholder="Cerca artisti…"
-              aria-label="Cerca artisti"
+              placeholder={t("studio.catalog.searchPh")}
+              aria-label={t("studio.catalog.searchAria")}
               bind:value={catalogQuery}
             />
           {/if}
@@ -375,12 +349,12 @@
         {#if !catalogArtistDetail}
           <label class="studio-catalog-toolbar__check">
             <input type="checkbox" bind:checked={catalogOnlyAttention} />
-            <span>Mostra solo artisti non nella mia selezione / da aggiornare</span>
+            <span>{t("studio.catalog.filterAttention")}</span>
           </label>
         {/if}
         {#if selectionIncludeAll}
           <p class="subtle sm">
-            Selezione = tutta la libreria (includeAll). Aggiungi/Rimuovi sono disabilitati.
+            {t("studio.catalog.includeAll")}
             <button
               type="button"
               class="ghost-btn"
@@ -391,13 +365,13 @@
                   mySelection = await api.patchMyLibrarySelection({ includeAll: false });
                   await afterCatalogPatch();
                 } catch (e) {
-                  catalogErr = e instanceof Error ? e.message : String(e);
+                  catalogErr = studioErrorText(e);
                 } finally {
                   catalogBusy = false;
                 }
               }}
             >
-              Usa selezione manuale
+              {t("studio.catalog.useManual")}
             </button>
           </p>
         {/if}
@@ -409,19 +383,19 @@
             <button
               type="button"
               class="page-toolbar-back-ic"
-              aria-label="Artisti"
+              aria-label={t("studio.catalog.backArtists")}
               onclick={() => (catalogArtistDetail = null)}
             >
               <UiIcon name="chevronLeft" class="page-toolbar-back-ic__ic" />
             </button>
             <div class="page-toolbar__textcol">
-              <p class="rk-eyebrow">Album</p>
+              <p class="rk-eyebrow">{t("studio.catalog.albumEyebrow")}</p>
               <h2>{catalogArtistDetail.name}</h2>
             </div>
           </div>
         </div>
         <div class="library-overview-cols">
-          {#each catalogArtistDetail.rel_albums as al}
+          {#each catalogArtistDetail.rel_albums as al, i (`${al.folder_key}:${i}`)}
             {@const inIndex = indexHasAlbum(session.allAlbums, al.folder_key)}
             {@const sel = selectionHasAlbum(mySelection, al.folder_key, catalogArtistDetail.id)}
             <div
@@ -433,7 +407,7 @@
                 <CoverArt
                   title={al.name}
                   seed={`${al.artist}/${al.name}`}
-                  src={al.has_cover ? albumCoverUrl(al.id, 128) : ""}
+                  src={coverUrlFor(al, 128)}
                   size="tile"
                 />
                 <div>
@@ -441,7 +415,7 @@
                     <UiIcon name="album" class="library-list-tile__kind-ic" />
                     <div class="library-list-tile__title">{al.name}</div>
                   </div>
-                  <div class="library-list-tile__meta">{al.track_count} brani</div>
+                  <div class="library-list-tile__meta">{tp("library.tracksCount", al.track_count)}</div>
                 </div>
               </div>
               <div class="studio-catalog-list-tile__actions">
@@ -452,7 +426,7 @@
                     disabled={catalogBusy || selectionIncludeAll}
                     onclick={() => void removeAlbumCatalog(al.folder_key)}
                   >
-                    Rimuovi dalla libreria
+                    {t("studio.catalog.removeLibrary")}
                   </button>
                 {:else}
                   <button
@@ -461,18 +435,18 @@
                     disabled={catalogBusy || selectionIncludeAll}
                     onclick={() => void addAlbumCatalog(al.folder_key)}
                   >
-                    Aggiungi alla libreria
+                    {t("studio.catalog.addLibrary")}
                   </button>
                 {/if}
               </div>
             </div>
           {:else}
-            <p class="studio-catalog-filter-empty">Nessun album nel catalogo per questo artista.</p>
+            <p class="studio-catalog-filter-empty">{t("studio.catalog.noAlbums")}</p>
           {/each}
         </div>
       {:else}
         <div class="library-overview-cols">
-          {#each catalogArtists as artist}
+          {#each catalogArtists as artist (artist.id)}
             {@const inIndex = indexHasArtist(session.artists, artist.id)}
             {@const sel = selectionHasArtist(mySelection, artist.id)}
             {@const coverId = artist.db_id}
@@ -498,7 +472,7 @@
                     <div class="library-list-tile__title">{artist.name}</div>
                   </div>
                   <div class="library-list-tile__meta">
-                    {artist.album_count} album · {artist.track_count} brani
+                    {tp("library.albumsCount", artist.album_count)} · {tp("library.tracksCount", artist.track_count)}
                   </div>
                 </div>
               </button>
@@ -510,7 +484,7 @@
                     disabled={catalogBusy || selectionIncludeAll}
                     onclick={() => void removeArtistCatalog(artist.id)}
                   >
-                    Rimuovi dalla libreria
+                    {t("studio.catalog.removeLibrary")}
                   </button>
                 {:else}
                   <button
@@ -519,7 +493,7 @@
                     disabled={catalogBusy || selectionIncludeAll}
                     onclick={() => void addArtistCatalog(artist.id)}
                   >
-                    Aggiungi alla libreria
+                    {t("studio.catalog.addLibrary")}
                   </button>
                 {/if}
               </div>
@@ -527,10 +501,10 @@
           {:else}
             <p class="studio-catalog-filter-empty">
               {catalogBusy
-                ? "Caricamento catalogo…"
+                ? t("studio.catalog.loadingCatalog")
                 : catalogArtistsData.length
-                  ? "Nessun artista corrisponde alla ricerca o al filtro."
-                  : "Nessun artista nel catalogo globale. Esegui uno scan della libreria."}
+                  ? t("studio.catalog.filterEmpty")
+                  : t("studio.catalog.empty")}
             </p>
           {/each}
         </div>

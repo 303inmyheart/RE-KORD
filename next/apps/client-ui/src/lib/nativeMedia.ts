@@ -64,6 +64,10 @@ function flush(): void {
   lastSent = json;
   try {
     target.update(json);
+    // Il guscio consegna i comandi della notifica solo quando questo flag c'e':
+    // vuol dire che il lettore e' montato e ascolta `rekord:media-action`
+    // (vedi RekordMediaBridge in MainActivity/RekordMedia.kt).
+    (window as unknown as { __rekordNativeMediaReady?: boolean }).__rekordNativeMediaReady = true;
   } catch {
     /* */
   }

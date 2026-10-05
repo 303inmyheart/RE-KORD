@@ -295,15 +295,28 @@
 
 .listen-stage__title {
   margin: 0;
+  min-width: 0;
+  max-width: 100%;
   font-size: clamp(1.45rem, 2.6vw, 2.25rem);
   font-weight: 800;
   line-height: var(--rk-lh-tight);
   letter-spacing: -0.04em;
+  /* Long words (URLs, joined titles) must wrap instead of widening the page. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   line-clamp: 2;
   overflow: hidden;
+}
+
+/* Nothing playing: a quiet hint, not a headline. */
+.listen-stage__title.listen-stage__title--idle {
+  font-size: var(--rk-fs-xl, 1.25rem);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--rk-muted-strong, var(--rk-muted));
 }
 
 .listen-stage__sub {
@@ -444,7 +457,8 @@
 
   .listen-page .listen-stage__title {
     grid-area: title;
-    font-size: clamp(1.35rem, 5vw, 1.75rem);
+    min-width: 0;
+    font-size: clamp(1.2rem, 5vw, 1.75rem);
     /* Una riga in più: la colonna è stretta, e il titolo è la cosa che si legge. */
     -webkit-line-clamp: 3;
     line-clamp: 3;
@@ -794,4 +808,14 @@
 .listen-queue-panel__list.list-stack,
 .listen-recent-panel__list.list-stack {
   gap: var(--rk-space-lg);
+}
+
+.listen-page .listen-stage__title.listen-stage__title--idle {
+  font-size: var(--rk-fs-lg, 1.0625rem);
+}
+
+.listen-stage__text,
+.listen-stage__text-lead,
+.listen-stage__meta {
+  min-width: 0;
 }

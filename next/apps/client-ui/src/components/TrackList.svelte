@@ -1,9 +1,12 @@
 <script lang="ts">
-  import { type SelectOption } from "@rekord/ui";
+  import { EmptyState, type SelectOption } from "@rekord/ui";
   import type { Track } from "../lib/api";
   import { dragReorder } from "../lib/dragReorder";
+  import { t } from "../lib/i18n.svelte";
   import { player } from "../lib/player";
   import { session } from "../lib/session.svelte";
+  import { prefsRevision } from "../lib/prefsRevision.svelte";
+  import { trackRowStats } from "../lib/trackRowStats.svelte";
   import { virtualList, type VirtualWindow } from "../lib/virtualList";
   import TrackRow from "./TrackRow.svelte";
 
@@ -14,7 +17,10 @@
     favoriteIds = new Set<number>(),
     playlistOptions = [],
     activeTrackId = null as number | null,
-    emptyMessage = "Nessun brano",
+    emptyMessage,
+    empty,
+    numbered = false,
+    coverFor,
     showQueueActions = true,
     showPlaylistAction = true,
     showExclude = true,
@@ -30,6 +36,12 @@
     playlistOptions?: SelectOption[];
     activeTrackId?: number | null;
     emptyMessage?: string;
+    /** Rich empty state (icon, title, CTA); wins over `emptyMessage`. */
+    empty?: import("svelte").Snippet;
+    /** Album context: rows show the track number instead of the cover. */
+    numbered?: boolean;
+    /** Cover URL per track; return null when the hub has none (no request). */
+    coverFor?: (track: Track) => string | null;
     showQueueActions?: boolean;
     showPlaylistAction?: boolean;
     showExclude?: boolean;
@@ -54,13 +66,37 @@
   let dragging = $state(false);
 
   const virtualized = $derived(tracks.length >= VIRTUAL_FROM);
+  /** Album context with more than one disc: rows show "disc·track". */
+  const multiDisc = $derived(numbered && tracks.some((t) => (t.disc_number ?? 1) > 1));
+
+  /*
+   * Per-row numbers come from one snapshot shared by the whole list, re-read
+   * only when play counts / moods / exclusions change (prefsRevision) — not on
+   * every player tick, and never one prefs parse per row.
+   */
+  const counts = $derived(prefsRevision.playCountsMap);
+  const moodsMap = $derived(prefsRevision.trackMoodsMap);
+
+  function rowStats(track: Track) {
+    return {
+      plays: trackRowStats.playsIn(counts, track),
+      moods: trackRowStats.moodsFrom(moodsMap, track),
+      inQueue: trackRowStats.inQueue(track.id),
+      excluded: trackRowStats.excluded(track),
+      albumLocked: trackRowStats.albumLocked(track),
+    };
+  }
   const windowTracks = $derived(
     virtualized ? tracks.slice(win.start, win.end) : tracks,
   );
 </script>
 
 {#if tracks.length === 0}
-  <p class="panel-empty">{emptyMessage}</p>
+  {#if empty}
+    {@render empty()}
+  {:else}
+    <EmptyState variant="inline" message={emptyMessage ?? t("trackList.empty")} />
+  {/if}
 {:else}
   <ul
     class="list"
@@ -80,9 +116,18 @@
   >
     {#each windowTracks as track, offset (track.id + "-" + (virtualized ? win.start + offset : offset))}
       {@const i = virtualized ? win.start + offset : offset}
+      {@const stats = rowStats(track)}
       <TrackRow
         {track}
         index={i}
+        plays={stats.plays}
+        moods={stats.moods}
+        inQueue={stats.inQueue}
+        excluded={stats.excluded}
+        albumLocked={stats.albumLocked}
+        number={numbered ? track.track_number : null}
+        disc={multiDisc ? (track.disc_number ?? 1) : null}
+        coverSrc={coverFor ? coverFor(track) : undefined}
         reorderIndex={onreorder ? i : null}
         onreorderStep={
           onreorder
@@ -91,9 +136,8 @@
             : undefined
         }
         autoFocusActive={!virtualized}
-        revision={session.tick}
         favorited={favoriteIds.has(track.id)}
-        active={activeTrackId === track.id || player.current?.id === track.id}
+        active={activeTrackId === track.id || session.current?.id === track.id}
         {playlistOptions}
         {showQueueActions}
         {showPlaylistAction}
@@ -123,5 +167,7 @@
     flex-direction: column;
     /* Parità React: .list-stack { gap: var(--space-4) } = 0.875rem */
     gap: var(--rk-space-lg);
+    /* Rows pick inline actions vs overflow menu from this width (track-row.css). */
+    container: track-list / inline-size;
   }
 </style>

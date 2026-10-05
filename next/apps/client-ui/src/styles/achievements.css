@@ -34,9 +34,25 @@
   padding: 1.25rem 1.35rem 1.4rem;
 }
 
-.achievements-hero__level {
-  color: var(--rk-accent);
+.achievements-hero__pills {
+  display: flex;
+  align-items: center;
+  gap: var(--rk-space-sm);
+  flex-wrap: wrap;
+}
+
+/* Level pill (legacy): the one uppercase eyebrow-like label of the hero. */
+.achievements-hero__level-pill {
+  font-size: var(--rk-fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
+  padding: 0.22em 0.75em;
+  border-radius: var(--rk-radius-round, 999px);
+  border: 1px solid color-mix(in srgb, var(--rk-accent) 38%, var(--rk-line) 62%);
+  background: color-mix(in srgb, var(--rk-accent) 10%, var(--rk-surface-3) 90%);
+  color: var(--rk-accent);
+  font-variant-numeric: tabular-nums;
 }
 
 .achievements-hero__stat-streak strong::before {
@@ -49,13 +65,22 @@
 
 .achievements-hero__rank {
   margin: 0;
-  font-size: clamp(2.1rem, 5.5vw, 3.2rem);
+  font-size: clamp(1.75rem, 5.5vw, 3.2rem);
   font-weight: 800;
-  letter-spacing: 0.04em;
-  line-height: 1;
+  letter-spacing: 0.02em;
+  line-height: 1.05;
   color: var(--rk-ink);
+  /* Titles are a few words ("KEEPER OF RE-KORD"): wrap between words, never mid-word. */
   text-wrap: balance;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
+
+@media (max-width: 479.98px) {
+  .achievements-hero__rank {
+    font-size: clamp(1.5rem, 8vw, 2rem);
+  }
 }
 
 .achievements-hero__xp {
@@ -197,15 +222,14 @@
   transition:
     border-color 0.2s ease,
     background 0.2s ease,
-    box-shadow 0.2s ease,
-    filter 0.2s ease;
+    box-shadow 0.2s ease;
 }
 
+/* Locked: quieter surface and a dashed outline, but solid text colours (no
+   opacity / filter: those collapsed contrast to ~25% in custom themes). */
 .achievements-badge--locked {
-  border: 1px dashed color-mix(in srgb, var(--rk-line) 88%, transparent);
-  background: color-mix(in srgb, var(--rk-bg) 55%, var(--rk-surface-3) 45%);
-  filter: saturate(0.2) brightness(0.92);
-  opacity: 0.82;
+  border: 1px dashed var(--rk-line-strong, var(--rk-line));
+  background: color-mix(in srgb, var(--rk-surface-2) 70%, var(--rk-bg) 30%);
 }
 
 .achievements-badge--locked .achievements-badge__icon {
@@ -215,17 +239,16 @@
 
 .achievements-badge--locked .achievements-badge__ic {
   color: var(--rk-muted);
-  opacity: 0.55;
 }
 
 .achievements-badge--locked h3 {
-  color: color-mix(in srgb, var(--rk-muted) 82%, var(--rk-ink) 18%);
+  color: color-mix(in srgb, var(--rk-ink) 78%, var(--rk-muted) 22%);
   font-weight: 600;
 }
 
 .achievements-badge--locked p,
 .achievements-badge--locked .achievements-badge__xp {
-  color: color-mix(in srgb, var(--rk-muted) 92%, transparent);
+  color: var(--rk-muted);
 }
 
 .achievements-badge--unlocked {
@@ -288,7 +311,7 @@
 .achievements-badge__xp {
   display: inline-block;
   margin-top: 0.2rem;
-  font-size: var(--rk-fs-2xs);
+  font-size: var(--rk-fs-xs);
   font-weight: 600;
 }
 
@@ -308,7 +331,7 @@
 }
 
 .achievements-badge__state--locked {
-  color: color-mix(in srgb, var(--rk-muted) 75%, transparent);
+  color: var(--rk-muted);
   border: 1px dashed color-mix(in srgb, var(--rk-line) 85%, transparent);
   background: color-mix(in srgb, var(--rk-bg) 50%, var(--rk-surface-3));
 }

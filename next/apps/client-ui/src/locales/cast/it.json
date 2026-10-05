@@ -1,0 +1,14 @@
+{
+  "cast.device": "dispositivo",
+  "cast.start": "Trasmetti a un dispositivo (Chromecast / Google Home)",
+  "cast.stopOn": "Interrompi la trasmissione su {{name}}",
+  "cast.connecting": "Connessione al dispositivo…",
+  "cast.connected": "Trasmissione avviata",
+  "cast.connectedTo": "In trasmissione su {{name}}",
+  "cast.castingTo": "In trasmissione su {{name}}",
+  "cast.connectFailed": "Connessione Cast non riuscita: {{error}}",
+  "cast.noLanUrl": "Il dispositivo Cast non può raggiungere l'hub: apri il client dall'indirizzo di rete locale (non localhost) o attiva l'accesso remoto.",
+  "cast.loadFailed": "Impossibile trasmettere «{{title}}»: {{error}}",
+  "cast.sessionFailed": "il dispositivo non ha accettato la connessione (codice {{code}})",
+  "cast.timeout": "il dispositivo Cast non ha risposto"
+}

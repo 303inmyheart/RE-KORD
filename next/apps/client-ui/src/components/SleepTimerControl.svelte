@@ -1,38 +1,25 @@
 <script lang="ts">
   import { Button, IconButton } from "@rekord/ui";
+  import { t } from "../lib/i18n.svelte";
   import { player } from "../lib/player";
-  import { session } from "../lib/session.svelte";
+  import { sleepCountdown } from "../lib/sleepCountdown.svelte";
 
   let open = $state(false);
-  let now = $state(Date.now());
   let custom = $state("45");
 
-  $effect(() => {
-    if (!session.sleepTimerEndsAt) return;
-    now = Date.now();
-    const id = window.setInterval(() => {
-      now = Date.now();
-    }, 1000);
-    return () => window.clearInterval(id);
-  });
+  const countdown = sleepCountdown();
+  const active = $derived(countdown.active);
 
-  const remaining = $derived(
-    session.sleepTimerEndsAt
-      ? Math.max(0, session.sleepTimerEndsAt - now)
-      : 0,
-  );
-  const active = $derived(Boolean(session.sleepTimerEndsAt && remaining > 0));
-  const label = $derived.by(() => {
-    if (!active) return "Timer";
-    const m = Math.floor(remaining / 60000);
-    const s = Math.floor((remaining % 60000) / 1000);
-    return `${m}:${s.toString().padStart(2, "0")}`;
-  });
+  function start(minutes: number) {
+    player.setSleepTimer(minutes);
+    countdown.refresh();
+    open = false;
+  }
 </script>
 
 <div class="wrap">
   <IconButton
-    label="Sleep timer"
+    label={t("listen.sleepTimer")}
     active={active}
     onclick={() => (open = !open)}
   >
@@ -40,11 +27,15 @@
   </IconButton>
   {#if open}
     <div class="pop">
-      <strong>{active ? `Resta ${label}` : "Sleep timer"}</strong>
+      <strong>
+        {active
+          ? t("core.sleep.remaining", { time: countdown.label })
+          : t("listen.sleepTimer")}
+      </strong>
       <div class="row">
         {#each [15, 30, 60] as m}
-          <Button variant="ghost" onclick={() => { player.setSleepTimer(m); open = false; }}>
-            {m}m
+          <Button variant="ghost" onclick={() => start(m)}>
+            {t("core.sleep.minutesShort", { count: m })}
           </Button>
         {/each}
       </div>
@@ -54,23 +45,20 @@
           min="1"
           max="600"
           bind:value={custom}
-          aria-label="Minuti personalizzati"
+          aria-label={t("core.sleep.customMinutes")}
         />
         <Button
           onclick={() => {
             const n = Number(custom);
-            if (n > 0) {
-              player.setSleepTimer(n);
-              open = false;
-            }
+            if (n > 0) start(n);
           }}
         >
-          Avvia
+          {t("listen.sleepTimerStart")}
         </Button>
       </div>
       {#if active}
         <Button variant="ghost" onclick={() => { player.setSleepTimer(null); open = false; }}>
-          Annulla
+          {t("listen.sleepTimerCancel")}
         </Button>
       {/if}
     </div>

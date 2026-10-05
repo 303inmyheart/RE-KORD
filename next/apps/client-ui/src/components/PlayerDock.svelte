@@ -1,7 +1,11 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { CoverArt, IconButton } from "@rekord/ui";
-  import { albumCoverUrl, type Track } from "../lib/api";
+  import { coverUrlFor, type Track } from "../lib/api";
   import { watchDown } from "../lib/breakpoints";
+  import { castController } from "../lib/cast/castController.svelte";
+  import CastButton from "./cast/CastButton.svelte";
+  import CastIcon from "./cast/CastIcon.svelte";
   import { t } from "../lib/i18n.svelte";
   import type { RepeatMode } from "../lib/player";
   import { playerSwipe } from "../lib/playerSwipe";
@@ -56,7 +60,21 @@
     onopenStudio?: () => void;
   } = $props();
 
-  let barEl: HTMLElement | undefined = $state();
+  /**
+   * While casting the player itself mirrors the receiver (play state, position)
+   * and routes transport to it (`player.setRemoteOutput`), so the dock needs no
+   * special casing beyond the Cast button and the device badge.
+   */
+  const casting = $derived(castController.connected);
+  const castDeviceName = $derived(castController.status.deviceName ?? t("cast.device"));
+
+  onMount(() => {
+    // The Cast SDK is fetched lazily: keep it off the startup path.
+    const id = window.setTimeout(() => castController.init(), 1500);
+    return () => window.clearTimeout(id);
+  });
+
+  let dockEl: HTMLElement | undefined = $state();
   let menuWrapEl: HTMLDivElement | null = $state(null);
   let isMobileLayout = $state(false);
   let menuOpen = $state(false);
@@ -121,19 +139,21 @@
     menuOpen = false;
   });
 
+  /* --rk-dock-h = the whole footer (floating card + the gap under it), so the
+     page can clear it with one variable. */
   $effect(() => {
-    const bar = barEl;
-    if (!bar) return;
+    const dock = dockEl;
+    if (!dock) return;
 
     const root = document.documentElement;
     const apply = () => {
-      const h = Math.max(0, Math.ceil(bar.getBoundingClientRect().height));
+      const h = Math.max(0, Math.ceil(dock.getBoundingClientRect().height));
       root.style.setProperty("--rk-dock-h", `${h}px`);
     };
 
     apply();
     const ro = new ResizeObserver(apply);
-    ro.observe(bar);
+    ro.observe(dock);
 
     return () => {
       ro.disconnect();
@@ -142,8 +162,8 @@
   });
 </script>
 
-<footer class="dock player-dock">
-  <div class="bar player-bar" bind:this={barEl}>
+<footer class="dock player-dock" bind:this={dockEl}>
+  <div class="bar player-bar">
     <div
       class="row top"
       class:open-listen={!isMobileLayout}
@@ -167,9 +187,9 @@
           title={t("player.openListen")}
         >
           <CoverArt
+            kind="track"
             title={current?.title ?? ""}
-            seed={current ? `${current.artist_name}/${current.album_name}` : ""}
-            src={current?.album_id != null ? albumCoverUrl(current.album_id, 128) : ""}
+            src={coverUrlFor(current, 128)}
             size={isMobileLayout ? "md" : "dock"}
           />
         </button>
@@ -179,13 +199,30 @@
               <strong>{current.title}</strong>
             </button>
             <div class="byline">
-              <button type="button" class="crumb" onclick={onopenArtist}>
+              <button
+                type="button"
+                class="crumb crumb--artist"
+                title={current.artist_name}
+                onclick={onopenArtist}
+              >
                 {current.artist_name}
               </button>
-              <span class="sep">·</span>
-              <button type="button" class="crumb" onclick={onopenAlbum}>
+              <span class="sep" aria-hidden="true">·</span>
+              <button
+                type="button"
+                class="crumb crumb--album"
+                title={current.album_name}
+                onclick={onopenAlbum}
+              >
                 {current.album_name}
               </button>
+              {#if casting}
+                <span class="sep">·</span>
+                <span class="cast-badge" title={t("cast.castingTo", { name: castDeviceName })}>
+                  <CastIcon connected />
+                  <span class="cast-badge__name">{castDeviceName}</span>
+                </span>
+              {/if}
             </div>
           {:else}
             <strong>{t("player.idleTitle")}</strong>
@@ -303,6 +340,26 @@
                     <span class="dock-menu__label">{t("player.radio")}</span>
                   </button>
                 </li>
+                {#if castController.available}
+                  <li role="presentation">
+                    <button
+                      type="button"
+                      role="menuitemcheckbox"
+                      class="dock-menu__item"
+                      class:is-on={casting}
+                      aria-checked={casting}
+                      onclick={() =>
+                        runFromMenu(() =>
+                          casting ? void castController.disconnect() : void castController.connect(),
+                        )}
+                    >
+                      <span class="dock-menu__glyph"><CastIcon connected={casting} /></span>
+                      <span class="dock-menu__label">
+                        {casting ? t("cast.stopOn", { name: castDeviceName }) : t("cast.start")}
+                      </span>
+                    </button>
+                  </li>
+                {/if}
                 <li role="presentation">
                   <button
                     type="button"
@@ -341,6 +398,7 @@
         </div>
 
         <div class="rail-end">
+          <CastButton />
           <SleepTimerControl />
           <IconButton label={t("player.radio")} onclick={onradio}>
             <UiIcon name="radio" />
@@ -431,19 +489,40 @@
 
   .meta strong,
   .title-hit strong {
-    font-weight: 650;
+    font-weight: 700;
+    font-size: var(--rk-fs-3);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     display: block;
   }
 
+  .cast-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
+    color: var(--rk-accent-2);
+  }
+
+  .cast-badge :global(.cast-ic) {
+    width: 0.95rem;
+    height: 0.95rem;
+  }
+
+  .cast-badge__name {
+    max-width: 12rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .byline {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.2rem 0.45rem;
-    font-size: var(--rk-fs-sm);
+    gap: 0.15rem 0.35rem;
+    font-size: var(--rk-fs-2);
     font-weight: 600;
     color: color-mix(in srgb, var(--rk-ink) 72%, var(--rk-muted) 28%);
   }
@@ -467,7 +546,7 @@
   .crumb:hover {
     color: var(--rk-accent-2);
     text-decoration: underline;
-    text-underline-offset: 0.12em;
+    text-underline-offset: 0.18em;
   }
 
   .sep {
@@ -571,7 +650,33 @@
     color: var(--rk-accent-2);
   }
 
+  /* Desktop: a floating card above the page, like 5.x — margin all round,
+     xl radius, its own border and shadow. The footer around it lets clicks
+     through so the strip beside the card stays part of the page. */
   @media (min-width: 1000px) {
+    .dock {
+      padding: 0 var(--rk-space-xl) calc(var(--rk-space-lg) + env(safe-area-inset-bottom, 0px));
+      pointer-events: none;
+    }
+
+    .bar {
+      pointer-events: auto;
+      max-width: 72rem;
+      margin-inline: auto;
+      border: 1px solid var(--rk-line-strong);
+      border-radius: var(--rk-radius-sheet);
+      padding: var(--rk-space-md) var(--rk-space-xl) var(--rk-space-xs);
+      box-shadow:
+        0 14px 36px color-mix(in srgb, black 42%, transparent),
+        0 0 0 1px color-mix(in srgb, var(--rk-bg) 40%, transparent);
+    }
+
+    /* WebKitGTK repaints the strip under a fixed element on every scrolled
+       frame: a short shadow costs a fraction of the wide one. */
+    :global(:root[data-rk-lowfx]) .bar {
+      box-shadow: 0 4px 14px color-mix(in srgb, black 38%, transparent);
+    }
+
     .rail-end {
       display: inline-flex;
       grid-column: 3;
@@ -630,19 +735,29 @@
       white-space: nowrap;
     }
 
-    /* L'artista tiene la sua misura fino a metà riga, l'album cede il resto:
-       accorciarli in proporzione ridurrebbe l'artista a due lettere. */
-    .byline .crumb:first-child {
-      flex: 0 1 auto;
-      max-width: 50%;
+    /* L'album cede per primo (si accorcia 6 volte più in fretta), l'artista
+       tiene almeno un terzo della riga: «Bring Me the Horizon · Album - Lo…»
+       invece di «Bring Me the … · Album - Lo-…». */
+    .byline {
+      gap: 0 0.3rem;
     }
 
-    .byline .crumb:last-child {
-      flex: 1 1 auto;
+    .crumb--artist {
+      flex: 0 1 auto;
+    }
+
+    .crumb--album {
+      flex: 0 6 auto;
+      min-width: 3rem;
     }
 
     .sep {
       flex: 0 0 auto;
+    }
+
+    .cast-badge {
+      flex: 0 1 auto;
+      min-width: 0;
     }
   }
 </style>

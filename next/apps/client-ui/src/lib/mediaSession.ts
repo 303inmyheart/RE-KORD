@@ -12,7 +12,7 @@
  * possible listeners.
  */
 
-import { albumCoverUrl } from "./api";
+import { coverUrlFor, type CoverSize } from "./api";
 import {
   pushNativeMetadata,
   pushNativePlaybackState,
@@ -26,7 +26,25 @@ export type MediaSessionTrack = {
   artist: string;
   album: string;
   albumId: number | null;
+  /** `false` when the hub says the album has no artwork (no request then). */
+  hasCover?: boolean | null;
+  /** Cache-busting version of the artwork, when the hub sends one. */
+  coverVersion?: string | number | null;
 };
+
+/** Artwork URL of a track's album, or null when there is none to ask for. */
+function trackCover(track: MediaSessionTrack | null, size: CoverSize): string | null {
+  if (!track || track.albumId == null) return null;
+  return coverUrlFor(
+    {
+      rel_path: "",
+      album_id: track.albumId,
+      has_cover: track.hasCover ?? undefined,
+      cover_version: track.coverVersion ?? null,
+    },
+    size,
+  );
+}
 
 export type MediaSessionBridge = {
   play: () => void;
@@ -63,19 +81,32 @@ function absolute(url: string): string {
   return new URL(url, location.origin).href;
 }
 
-export function buildMediaSessionArtwork(albumId: number | null): MediaImage[] {
+export function buildMediaSessionArtwork(
+  albumId: number | null,
+  cover?: { hasCover?: boolean | null; coverVersion?: string | number | null },
+): MediaImage[] {
   if (albumId == null) return [];
-  return ARTWORK_VARIANTS.map((variant) => ({
-    src: absolute(albumCoverUrl(albumId, variant.size)),
-    sizes: variant.sizes,
-    type: "image/jpeg",
-  }));
+  const images: MediaImage[] = [];
+  for (const variant of ARTWORK_VARIANTS) {
+    const url = trackCover(
+      { title: "", artist: "", album: "", albumId, ...cover },
+      variant.size,
+    );
+    if (!url) return [];
+    images.push({ src: absolute(url), sizes: variant.sizes, type: "image/jpeg" });
+  }
+  return images;
 }
 
 function metadataKey(track: MediaSessionTrack): string {
-  return [track.title, track.artist, track.album, track.albumId ?? "-"].join(
-    "\u0000",
-  );
+  return [
+    track.title,
+    track.artist,
+    track.album,
+    track.albumId ?? "-",
+    track.hasCover === false ? "0" : "1",
+    track.coverVersion ?? "",
+  ].join("\u0000");
 }
 
 let lastMetadataKey: string | null = null;
@@ -84,12 +115,8 @@ export function setMediaSessionMetadata(track: MediaSessionTrack | null): void {
   // La miniatura da 256 e' quella che l'hub tiene in cache ed e' la taglia che
   // la notifica Android mostra: chiedere l'originale vorrebbe dire scaricare
   // qualche mega per un riquadro.
-  pushNativeMetadata(
-    track,
-    track && track.albumId != null
-      ? absolute(albumCoverUrl(track.albumId, 256))
-      : "",
-  );
+  const shade = trackCover(track, 256);
+  pushNativeMetadata(track, shade ? absolute(shade) : "");
   if (!canUseMediaSession()) return;
   if (!track) {
     lastMetadataKey = null;
@@ -99,7 +126,7 @@ export function setMediaSessionMetadata(track: MediaSessionTrack | null): void {
   const key = metadataKey(track);
   if (key === lastMetadataKey) return;
   lastMetadataKey = key;
-  const artwork = buildMediaSessionArtwork(track.albumId);
+  const artwork = buildMediaSessionArtwork(track.albumId, track);
   navigator.mediaSession.metadata = new MediaMetadata({
     title: track.title,
     artist: track.artist,

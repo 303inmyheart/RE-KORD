@@ -1,54 +1,57 @@
 <script lang="ts">
   import { Button, EmptyState, Panel } from "@rekord/ui";
-  import { admin, humanBytes, humanDuration, humanTime } from "../lib/admin.svelte";
+  import { admin, humanBytes, humanDuration, humanTime, layoutLabel } from "../lib/admin.svelte";
+  import { formatNumber, t } from "../lib/i18n.svelte";
 
   const diag = $derived(admin.diagnostics);
 
   function binaryLine(b?: { available: boolean; path?: string | null; version?: string | null }) {
     if (!b) return "—";
-    if (!b.available) return "non trovato";
-    return b.version || b.path || "disponibile";
+    if (!b.available) return t("common.notFound");
+    return b.version || b.path || t("common.available");
   }
 </script>
 
-<Panel title="Diagnostica">
+<Panel title={t("nav.diagnostics")}>
   {#snippet actions()}
     <Button
       variant="secondary"
       disabled={admin.busy}
       onclick={() => void admin.loadSection("diagnostics")}
     >
-      Aggiorna
+      {t("common.refresh")}
     </Button>
   {/snippet}
 
   {#if diag}
     <div class="grid">
       <div class="cell">
-        <span class="k">Versione hub</span><span class="v">{diag.version}</span>
+        <span class="k">{t("diag.version")}</span><span class="v">{diag.version}</span>
       </div>
       <div class="cell">
-        <span class="k">Attivo da</span>
+        <span class="k">{t("stats.uptime")}</span>
         <span class="v">{humanDuration(diag.uptimeSecs)}</span>
       </div>
       <div class="cell">
-        <span class="k">Database</span>
+        <span class="k">{t("status.database")}</span>
         <span class="v">{humanBytes(diag.db.sizeBytes)}</span>
       </div>
       <div class="cell">
-        <span class="k">Ultimo scan</span>
+        <span class="k">{t("stats.lastScan")}</span>
         <span class="v">{humanTime(diag.db.lastScanAt)}</span>
       </div>
       <div class="cell">
-        <span class="k">Spazio disco</span>
+        <span class="k">{t("diag.disk")}</span>
         <span class="v">
-          {humanBytes(diag.disk?.availableBytes)} liberi su
-          {humanBytes(diag.disk?.totalBytes)}
+          {t("diag.diskFree", {
+            free: humanBytes(diag.disk?.availableBytes),
+            total: humanBytes(diag.disk?.totalBytes),
+          })}
         </span>
       </div>
       <div class="cell">
-        <span class="k">Struttura libreria</span>
-        <span class="v">{diag.layout?.preferredLayout ?? "—"}</span>
+        <span class="k">{t("diag.layout")}</span>
+        <span class="v">{layoutLabel(diag.layout?.preferredLayout)}</span>
       </div>
       <div class="cell">
         <span class="k">yt-dlp</span><span class="v">{binaryLine(diag.binaries.ytdlp)}</span>
@@ -62,30 +65,35 @@
       <div class="cell">
         <span class="k">cloudflared</span>
         <span class="v">
-          {diag.binaries.cloudflared.available ? "disponibile" : "non trovato"}
+          {diag.binaries.cloudflared.available ? t("common.available") : t("common.notFound")}
         </span>
       </div>
     </div>
   {:else}
-    <EmptyState message="Diagnostica non disponibile" />
+    <EmptyState message={t("diag.unavailable")} />
   {/if}
 </Panel>
 
-<Panel title="Ultimi errori">
+<Panel title={t("diag.errors.title")}>
   {#snippet actions()}
     <Button
       variant="ghost"
       disabled={admin.busy || (diag?.errors.count ?? 0) === 0}
       onclick={() => void admin.clearErrors()}
     >
-      Azzera
+      {t("diag.errors.clear")}
     </Button>
   {/snippet}
 
   {#if !diag || diag.errors.recent.length === 0}
-    <EmptyState message="Nessun errore registrato" />
+    <EmptyState message={t("diag.errors.empty")} />
   {:else}
-    <p class="count">{diag.errors.count} in totale, ultimi {diag.errors.recent.length}:</p>
+    <p class="count">
+      {t("diag.errors.count", {
+        total: formatNumber(diag.errors.count),
+        shown: formatNumber(diag.errors.recent.length),
+      })}
+    </p>
     <ul class="errors">
       {#each diag.errors.recent as e}
         <li>

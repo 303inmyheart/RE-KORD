@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ActionRow, Button, EmptyState, Field, Panel, TextInput } from "@rekord/ui";
-  import { api } from "../api";
   import { admin } from "../lib/admin.svelte";
+  import { t } from "../lib/i18n.svelte";
 
   let renaming = $state<string | null>(null);
   let renameValue = $state("");
@@ -18,21 +18,26 @@
     renaming = null;
     if (name) await admin.renameAccount(id, name);
   }
+
+  function confirmDelete(id: string, name: string) {
+    if (!window.confirm(t("accounts.deleteConfirm", { name }))) return;
+    void admin.deleteAccount(id);
+  }
 </script>
 
-<Panel title="Account locali">
+<Panel title={t("accounts.title")}>
   {#snippet actions()}
     <Button
       variant="secondary"
       disabled={admin.busy}
       onclick={() => void admin.loadSection("accounts")}
     >
-      Aggiorna
+      {t("common.refresh")}
     </Button>
   {/snippet}
 
   {#if accounts.length === 0}
-    <EmptyState message="Nessun account" />
+    <EmptyState message={t("accounts.empty")} />
   {:else}
     <ul class="accounts">
       {#each accounts as acc (acc.id)}
@@ -40,43 +45,45 @@
           {#if renaming === acc.id}
             <TextInput
               bind:value={renameValue}
+              aria-label={t("accounts.renameAria", { name: acc.name })}
               onkeydown={(e) => {
                 if ((e as KeyboardEvent).key === "Enter") void commitRename(acc.id);
                 if ((e as KeyboardEvent).key === "Escape") renaming = null;
               }}
             />
             <Button disabled={admin.busy} onclick={() => void commitRename(acc.id)}>
-              Salva
+              {t("common.save")}
             </Button>
-            <Button variant="ghost" onclick={() => (renaming = null)}>Annulla</Button>
+            <Button variant="ghost" onclick={() => (renaming = null)}>{t("common.cancel")}</Button>
           {:else}
             <span class="name">
               {acc.name}
               {#if acc.id === admin.defaultAccountId}
-                <span class="tag">predefinito</span>
+                <span class="tag">{t("accounts.default")}</span>
               {/if}
             </span>
             <span class="id">{acc.id}</span>
             <Button
               variant="ghost"
-              onclick={() => window.open(api.accountExportUrl(acc.id), "_blank")}
+              disabled={admin.busy}
+              onclick={() => void admin.exportAccount(acc.id)}
             >
-              Esporta
+              {t("accounts.export")}
             </Button>
             <Button
               variant="ghost"
               disabled={admin.busy}
               onclick={() => startRename(acc.id, acc.name)}
             >
-              Rinomina
+              {t("accounts.rename")}
             </Button>
             {#if acc.id !== admin.defaultAccountId}
               <Button
                 variant="ghost"
                 disabled={admin.busy}
-                onclick={() => void admin.deleteAccount(acc.id)}
+                onclick={() => confirmDelete(acc.id, acc.name)}
               >
-                Elimina
+                {t("accounts.delete")}
               </Button>
             {/if}
           {/if}
@@ -86,22 +93,19 @@
   {/if}
 </Panel>
 
-<Panel title="Nuovo account">
-  <Field label="Nome">
-    <TextInput bind:value={admin.newAccountName} placeholder="Es. Salotto" />
+<Panel title={t("accounts.new.title")}>
+  <Field label={t("accounts.new.name")}>
+    <TextInput bind:value={admin.newAccountName} placeholder={t("accounts.new.placeholder")} />
   </Field>
   <ActionRow>
     <Button
       disabled={admin.busy || !admin.newAccountName.trim()}
       onclick={() => void admin.createAccount()}
     >
-      Crea account
+      {t("accounts.new.create")}
     </Button>
   </ActionRow>
-  <p class="hint">
-    Ogni account ha preferiti, playlist, statistiche e tema propri. La libreria
-    sul disco è condivisa.
-  </p>
+  <p class="hint">{t("accounts.new.hint")}</p>
 </Panel>
 
 <style>
