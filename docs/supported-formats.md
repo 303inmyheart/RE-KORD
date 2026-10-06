@@ -37,13 +37,11 @@ duration and resume all work.
   the headless or source build, install it from your distribution if `bin/ffmpeg` is
   missing. `GET /api/v1/health` reports `"transcode": true` when ffmpeg is usable.
 
-On Linux the desktop apps decode audio through GStreamer. The AppImage bundles the needed
-plugins; the `.deb` packages depend on `gstreamer1.0-plugins-base`,
-`gstreamer1.0-plugins-good`, `gstreamer1.0-plugins-bad` and `gstreamer1.0-libav` (the last
-one is needed for AAC/M4A). From `plugins-bad` the app uses the `inter` plugin: with it all
-playback goes through one shared output stream (like a browser) instead of one stream per
-track, so pausing and changing track don't make the sound server and the desktop shell
-react. Without it playback still works, one stream per track.
+On Linux the desktop apps decode audio through GStreamer. The AppImage bundles only the
+plugins playback needs (MP3, AAC/M4A/ALAC, FLAC, Ogg Vorbis, Opus, WAV, WebM/Matroska and the
+audio output) and caches GStreamer's plugin registry in `~/.cache/re-kord/`, so it starts
+without rescanning; the `.deb` packages depend on `gstreamer1.0-plugins-base`,
+`gstreamer1.0-plugins-good` and `gstreamer1.0-libav` (the last one is needed for AAC/M4A).
 
 ### Cast
 

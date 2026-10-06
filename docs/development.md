@@ -29,7 +29,7 @@ For the **desktop shell** you also need the
 ```bash
 sudo apt install build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev \
   libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libssl-dev libsoup-3.0-dev \
-  patchelf file gstreamer1.0-plugins-bad
+  patchelf file
 ```
 
 For **Android**: Android SDK and NDK, and JDK 17 or newer. See [Android](#android).

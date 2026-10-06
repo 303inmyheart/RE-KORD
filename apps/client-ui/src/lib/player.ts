@@ -14,7 +14,6 @@ import {
   type LevelRamp,
 } from "./audioLevels";
 import { platformCaps } from "./platformCaps";
-import { sharedOutputKeepAlive } from "./audioKeepAlive";
 import { touchListeningActivity } from "./achievements";
 import { t } from "./i18n.svelte";
 import {
@@ -471,8 +470,6 @@ class PlayerController {
   private favoriteToggle: (() => void) | null = null;
   /** Remote playback target (Cast); null = local decks. */
   private remote: RemoteOutput | null = null;
-  /** Keeps the shared output stream warm (Linux shell with the WebKit mixer). */
-  private keepAlive = sharedOutputKeepAlive();
 
   constructor() {
     const prefs = loadUserPrefs();
@@ -969,7 +966,6 @@ class PlayerController {
   }
 
   private emit() {
-    this.keepAlive?.sync(this.playing && !this.remote);
     this.schedulePersistQueue();
     for (const fn of this.listeners) fn();
     for (const fn of this.playStateListeners) fn();
@@ -980,7 +976,6 @@ class PlayerController {
   }
 
   private emitPlayState() {
-    this.keepAlive?.sync(this.playing && !this.remote);
     for (const fn of this.playStateListeners) fn();
   }
 
@@ -2421,7 +2416,6 @@ class PlayerController {
       return;
     }
     this.ensureFadeControl();
-    this.keepAlive?.wake();
     try {
       // No graph (the usual case): nothing to wait for, play stays in the gesture.
       const resume = this.resumeGraphForPlay();
@@ -3009,9 +3003,6 @@ class PlayerController {
     }
 
     this.ensureFadeControl();
-    // Next / Prev / a pick from a list: usually inside the click, so the
-    // shared output can start (or stay) warm before the decks swap.
-    if (autoplay) this.keepAlive?.wake();
     const outIx = this.active;
     const inIx: DeckIx = outIx === 0 ? 1 : 0;
     const outEl = outIx === 0 ? this.deck0 : this.deck1;

@@ -192,9 +192,39 @@ stage_headless_tools() {
   cp -a "$ROOT/release/bin/$TOOLS_PLATFORM/." "$dest/bin/"
 }
 
+# GStreamer plugins the AppImage bundles (bundleMediaFramework copies every plugin
+# of GSTREAMER_PLUGINS_DIR). Only what WebKit needs to play the library: the full
+# set (250+) made GStreamer scan for seconds at the first launch of each version
+# and weighed on the package. Formats: MP3 (mpg123), AAC/ALAC (libav), FLAC, Ogg
+# Vorbis, Opus, WAV, WavPack, WebM/Matroska; Web Audio needs app, interleave,
+# rawparse and gio. Checked with all of them by playing each format in WebKitGTK.
+GST_PLUGINS_KEEP=(
+  coreelements typefindfunctions playback app gio autodetect pulseaudio pipewire alsa
+  audioconvert audioresample volume audiofx rawparse interleave pbtypes videoconvertscale
+  audioparsers id3demux apetag icydemux mpg123 libav flac isomp4 ogg vorbis opus
+  wavparse wavpack matroska
+)
+
+curate_gstreamer_plugins() {
+  local src dir p
+  src="/usr/lib/$(uname -m)-linux-gnu/gstreamer-1.0"
+  [[ -d "$src" ]] || src=/usr/lib/gstreamer-1.0
+  dir="$TARGET_DIR/gst-plugins-bundle"
+  rm -rf "$dir" && mkdir -p "$dir"
+  for p in "${GST_PLUGINS_KEEP[@]}"; do
+    if [[ -f "$src/libgst$p.so" ]]; then
+      cp -L "$src/libgst$p.so" "$dir/"
+    else
+      echo "warning: GStreamer plugin '$p' not found in $src" >&2
+    fi
+  done
+  export GSTREAMER_PLUGINS_DIR="$dir"
+}
+
 linux_client() {
   step "Linux desktop client (deb + AppImage)"
   touch "$MARKER"
+  curate_gstreamer_plugins
   tauri build --bundles deb,appimage
   copy_bundles "$TARGET_DIR/release/bundle" "RE-KORD-Client-$VERSION-linux-x64" AppImage deb
 }
@@ -204,6 +234,7 @@ linux_server() {
   touch "$MARKER"
   local flavor
   mapfile -t flavor < <(server_flavor_args)
+  curate_gstreamer_plugins
   tauri build --bundles deb,appimage "${flavor[@]}"
   copy_bundles "$TARGET_DIR/release/bundle" "RE-KORD-Server-$VERSION-linux-x64" AppImage deb
 

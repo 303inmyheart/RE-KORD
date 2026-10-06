@@ -11,22 +11,15 @@ mod downloads;
 #[cfg(all(desktop, feature = "hub"))]
 mod embedded_hub;
 #[cfg(target_os = "linux")]
-mod linux_audio;
+mod linux_env;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // First, before WebKit or any thread starts: one shared audio output
-    // stream instead of one per <audio> element (see linux_audio.rs).
+    // First, before GTK, WebKit or any thread starts (see linux_env.rs).
     #[cfg(target_os = "linux")]
-    let shared_audio_output = linux_audio::enable_shared_output();
+    linux_env::apply();
 
     let builder = tauri::Builder::default();
-    #[cfg(target_os = "linux")]
-    let builder = if shared_audio_output {
-        builder.append_invoke_initialization_script(linux_audio::page_flag_script())
-    } else {
-        builder
-    };
 
     // Must be registered first: the second process has to exit before
     // initializing the rest (and, with the embedded hub, before trying the port).

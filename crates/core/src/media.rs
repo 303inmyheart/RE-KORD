@@ -394,6 +394,8 @@ fn spliced_parts(start: u64, len: u64, splice: &Splice) -> Vec<Part> {
     parts
 }
 
+// The error is an axum `Response` handed straight back to the client.
+#[allow(clippy::result_large_err)]
 async fn file_range(
     path: &Path,
     start: u64,

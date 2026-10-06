@@ -13,11 +13,15 @@
    *
    * Cost: `transform` only, on five tiny bars inside a `contain: strict`
    * box promoted to its own layer, so the page around it is never repainted.
+   * WebKitGTK does not run it on the compositor: every frame repainted and
+   * re-sent the whole window (under Xwayland on a 2× panel: Xwayland 35% of a
+   * core, WebKit 14%, while a track played). There the same motion is
+   * stepped from a timer at 5 fps: one small repaint every 200 ms.
    * Rows and dashboard cards stay static: dozens of animated icons were what
    * kept WebKitGTK busy (perf report: 34% CPU with an icon in every row).
    */
   import { onMount } from "svelte";
-  import { canAnimateLiveIndicators } from "../../lib/platformCaps";
+  import { canAnimateLiveIndicators, platformCaps } from "../../lib/platformCaps";
 
   let {
     animated = false,
@@ -56,17 +60,47 @@
 
   const moving = $derived(animated && live && allowed && !hidden);
   const posed = $derived(animated && !moving);
+
+  /** WebKitGTK: the pulse sampled at 5 fps from a timer (see above). */
+  const STEP_MS = 200;
+  const stepped = platformCaps.webkitGtk;
+  let scales = $state<number[] | null>(null);
+
+  /** Legacy curve: min → 1 → min over `dur`, ease-in-out, after `delay`. */
+  function pulseAt(bar: (typeof BARS)[number], t: number): number {
+    if (t < bar.delay) return 1;
+    const phase = ((t - bar.delay) % bar.dur) / bar.dur;
+    const half = phase < 0.5 ? phase * 2 : (1 - phase) * 2;
+    const eased = half * half * (3 - 2 * half);
+    return bar.min + (1 - bar.min) * eased;
+  }
+
+  $effect(() => {
+    if (!stepped || !moving) {
+      scales = null;
+      return;
+    }
+    const t0 = performance.now();
+    const tick = () => {
+      const t = (performance.now() - t0) / 1000;
+      scales = BARS.map((bar) => Math.round(pulseAt(bar, t) * 20) / 20);
+    };
+    tick();
+    const id = window.setInterval(tick, STEP_MS);
+    return () => window.clearInterval(id);
+  });
 </script>
 
-<span class="geq {className}" class:pulse={moving} class:posed aria-hidden="true">
+<span class="geq {className}" class:pulse={moving && !stepped} class:posed aria-hidden="true">
   {#each BARS as bar, i (i)}
     <span
       class="bar"
       style:height={`${(bar.h / 24) * 100}%`}
       style:--geq-min={bar.min}
       style:--geq-pose={bar.pose}
-      style:animation-duration={moving ? `${bar.dur}s` : undefined}
-      style:animation-delay={moving ? `${bar.delay}s` : undefined}
+      style:animation-duration={moving && !stepped ? `${bar.dur}s` : undefined}
+      style:animation-delay={moving && !stepped ? `${bar.delay}s` : undefined}
+      style:transform={scales ? `scaleY(${scales[i]})` : undefined}
     ></span>
   {/each}
 </span>

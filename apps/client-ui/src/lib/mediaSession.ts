@@ -13,6 +13,8 @@
  */
 
 import { coverUrlFor, type CoverSize } from "./api";
+import { positionChanged, type SentPosition } from "./mediaPosition";
+import { platformCaps } from "./platformCaps";
 import {
   pushNativeMetadata,
   pushNativePlaybackState,
@@ -81,13 +83,24 @@ function absolute(url: string): string {
   return new URL(url, location.origin).href;
 }
 
+/**
+ * WebKitGTK (the Linux shell) publishes the media session as an MPRIS player:
+ * the desktop shell's media widget loads the artwork itself, and with the
+ * original declared it decoded a multi-megabyte, 3000 px image on the
+ * compositor's thread for a 64 px square. There only the cached 256 px
+ * thumbnail is declared.
+ */
+function artworkVariants(): typeof ARTWORK_VARIANTS {
+  return platformCaps.webkitGtk ? ARTWORK_VARIANTS.filter((v) => v.size === 256) : ARTWORK_VARIANTS;
+}
+
 export function buildMediaSessionArtwork(
   albumId: number | null,
   cover?: { hasCover?: boolean | null; coverVersion?: string | number | null },
 ): MediaImage[] {
   if (albumId == null) return [];
   const images: MediaImage[] = [];
-  for (const variant of ARTWORK_VARIANTS) {
+  for (const variant of artworkVariants()) {
     const url = trackCover(
       { title: "", artist: "", album: "", albumId, ...cover },
       variant.size,
@@ -134,20 +147,32 @@ export function setMediaSessionMetadata(track: MediaSessionTrack | null): void {
     artwork,
   });
   // Warm the size the shade usually shows, so the first paint is not blank.
-  if (typeof Image !== "undefined" && artwork.length > 1) {
+  const shadeArt = artwork.find((a) => a.sizes === "256x256");
+  if (typeof Image !== "undefined" && shadeArt) {
     const warm = new Image();
     warm.decoding = "async";
-    warm.src = artwork[1].src;
+    warm.src = shadeArt.src;
   }
 }
 
+let lastPlaybackState: MediaSessionPlaybackState | null = null;
+
+/**
+ * Every write reaches the OS (MPRIS on Linux: a D-Bus signal the desktop
+ * shell re-renders on), so only real changes are sent.
+ */
 export function setMediaSessionPlaybackState(
   state: MediaSessionPlaybackState,
 ): void {
   pushNativePlaybackState(state);
   if (!canUseMediaSession()) return;
+  if (state === lastPlaybackState) return;
+  lastPlaybackState = state;
+  if (state === "none") lastPosition = null;
   navigator.mediaSession.playbackState = state;
 }
+
+let lastPosition: SentPosition | null = null;
 
 export function setMediaSessionPosition(
   duration: number,
@@ -158,11 +183,20 @@ export function setMediaSessionPosition(
   if (!canUseMediaSession()) return;
   if (!("setPositionState" in navigator.mediaSession)) return;
   if (!Number.isFinite(duration) || duration <= 0) return;
+  const next: SentPosition = {
+    duration,
+    position: Math.max(0, Math.min(position, duration)),
+    rate: playbackRate > 0 ? playbackRate : 1,
+    at: Date.now(),
+    playing: lastPlaybackState === "playing",
+  };
+  if (!positionChanged(lastPosition, next)) return;
+  lastPosition = next;
   try {
     navigator.mediaSession.setPositionState({
-      duration,
-      playbackRate: playbackRate > 0 ? playbackRate : 1,
-      position: Math.max(0, Math.min(position, duration)),
+      duration: next.duration,
+      playbackRate: next.rate,
+      position: next.position,
     });
   } catch {
     /* Safari throws on out-of-range values instead of clamping. */
@@ -170,6 +204,7 @@ export function setMediaSessionPosition(
 }
 
 export function clearMediaSessionPosition(): void {
+  lastPosition = null;
   if (!canUseMediaSession()) return;
   if (!("setPositionState" in navigator.mediaSession)) return;
   try {

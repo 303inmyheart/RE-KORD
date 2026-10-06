@@ -584,6 +584,8 @@ fn data_dir_of(state: &AppState) -> PathBuf {
 }
 
 /// Run a user-state update on the blocking pool and map the outcome.
+// The error is an axum `Response` handed straight back to the client.
+#[allow(clippy::result_large_err)]
 async fn run_update(
     data_dir: PathBuf,
     account: String,
