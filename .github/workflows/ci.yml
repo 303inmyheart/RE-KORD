@@ -129,10 +129,13 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
+      # The runner image ships the Android SDK (ANDROID_HOME) with current
+      # cmdline-tools; setup-android's pinned tools broke `sdkmanager --licenses`.
       - name: NDK + platform
         run: |
-          sdkmanager --install "ndk;${NDK_VERSION}" "platforms;android-36" "build-tools;36.0.0"
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "ndk;${NDK_VERSION}" "platforms;android-36" "build-tools;36.0.0"
           echo "NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
