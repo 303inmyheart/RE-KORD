@@ -1,17 +1,17 @@
 /**
- * Versioni `MAJOR.MINOR.PATCH[-pre][+build]`, quanto basta per confrontare il
- * client con l'hub (`/api/v1/health` → `version`, `minClientVersion`).
+ * `MAJOR.MINOR.PATCH[-pre][+build]` versions, just enough to compare the
+ * client with the hub (`/api/v1/health` → `version`, `minClientVersion`).
  *
- * Volutamente tollerante: un prefisso `v`, parti mancanti (`5.1` = `5.1.0`) e
- * spazi passano; una stringa che non somiglia a una versione torna `null`, e chi
- * chiama la tratta come «non so» invece di mostrare avvisi a caso.
+ * Deliberately lenient: a `v` prefix, missing parts (`5.1` = `5.1.0`) and
+ * spaces pass; a string that doesn't look like a version returns `null`, and the
+ * caller treats it as «don't know» instead of showing random notices.
  */
 
 export type SemVer = {
   major: number;
   minor: number;
   patch: number;
-  /** Identificatori del pre-release (`rc.1` → `["rc", "1"]`), vuoto per una release. */
+  /** Pre-release identifiers (`rc.1` → `["rc", "1"]`), empty for a release. */
   pre: string[];
 };
 
@@ -31,7 +31,7 @@ export function parseSemver(raw: unknown): SemVer | null {
 }
 
 function comparePre(a: string[], b: string[]): number {
-  // Una release batte qualunque suo pre-release: 5.1.0 > 5.1.0-rc.1.
+  // A release beats any of its pre-releases: 5.1.0 > 5.1.0-rc.1.
   if (!a.length && !b.length) return 0;
   if (!a.length) return 1;
   if (!b.length) return -1;
@@ -48,7 +48,7 @@ function comparePre(a: string[], b: string[]): number {
       if (d) return d < 0 ? -1 : 1;
       continue;
     }
-    // Numeri prima delle parole, come da semver.org.
+    // Numbers before words, as per semver.org.
     if (xn) return -1;
     if (yn) return 1;
     if (x !== y) return x < y ? -1 : 1;
@@ -56,7 +56,7 @@ function comparePre(a: string[], b: string[]): number {
   return 0;
 }
 
-/** -1, 0, 1 come `a` rispetto a `b`; `null` se una delle due non e' leggibile. */
+/** -1, 0, 1 for `a` relative to `b`; `null` if either one is unreadable. */
 export function compareSemver(a: unknown, b: unknown): -1 | 0 | 1 | null {
   const x = typeof a === "object" && a !== null ? (a as SemVer) : parseSemver(a);
   const y = typeof b === "object" && b !== null ? (b as SemVer) : parseSemver(b);
@@ -68,14 +68,14 @@ export function compareSemver(a: unknown, b: unknown): -1 | 0 | 1 | null {
   return p === 0 ? 0 : p < 0 ? -1 : 1;
 }
 
-/** Vero se `version` e' almeno `min`. Senza un minimo leggibile non c'e' vincolo. */
+/** True if `version` is at least `min`. Without a readable minimum there is no constraint. */
 export function satisfiesMin(version: unknown, min: unknown): boolean {
   if (parseSemver(min) === null) return true;
   const c = compareSemver(version, min);
   return c === null ? true : c >= 0;
 }
 
-/** Quanto e' grande la distanza: serve a non disturbare per una patch. */
+/** How large the gap is: used to avoid bothering anyone over a patch. */
 export function diffLevel(a: unknown, b: unknown): "major" | "minor" | "patch" | "pre" | null {
   const x = parseSemver(a);
   const y = parseSemver(b);

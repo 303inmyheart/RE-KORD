@@ -196,7 +196,7 @@
     );
   }
 
-  /** Come React `sortedGenreTracks`: brani del genere, ordinati per nome o ascolti. */
+  /** Like React `sortedGenreTracks`: the genre's tracks, sorted by name or plays. */
   const sortedGenreTracks = $derived.by(() => {
     const key = selectedGenreKey;
     if (!key) return [];
@@ -427,7 +427,7 @@
         id: a.id,
         kind: "album" as const,
         title: a.name,
-        /* Come AlbumListTile artista React: niente riga artista (già nel contesto) */
+        /* Like React's artist AlbumListTile: no artist row (already in context) */
         metaLine: year ? `${tracksLabel} · ${year}` : tracksLabel,
         coverSrc: coverUrlFor(a, 256),
         coverSeed: `${session.selectedArtist?.name}/${a.name}`,

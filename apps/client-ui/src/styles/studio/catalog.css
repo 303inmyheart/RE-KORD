@@ -1,4 +1,4 @@
-/* Catalogo (Scopri): elenco locale/web, filtri e anteprima audio. */
+/* Catalog (Discover): local/web list, filters and audio preview. */
 .studio-catalog-browse {
   display: flex;
   flex-direction: column;
@@ -59,7 +59,7 @@
   width: 100%;
 }
 
-/* Studio → Discover: azioni sotto la riga copertina+testo (parity legacy) */
+/* Studio → Discover: actions below the cover+text row (legacy parity) */
 .studio-catalog-list-tile {
   display: flex;
   flex-direction: column;
@@ -123,7 +123,7 @@
   object-fit: cover;
 }
 
-/* —— Anteprima catalogo web —— */
+/* —— Web catalog preview —— */
 
 .rk-modal.catalog-preview-dialog {
   width: min(34rem, 100%);
@@ -236,7 +236,7 @@
   white-space: nowrap;
 }
 
-/* —— Scopri web: album/EP e singoli affiancati, a tutta larghezza —— */
+/* —— Web Discover: albums/EPs and singles side by side, full width —— */
 .studio-catalog-web-cols {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

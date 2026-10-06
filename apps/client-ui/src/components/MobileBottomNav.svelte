@@ -54,7 +54,7 @@
       aria-current={active === "studio" ? "page" : undefined}
       onclick={() => go("studio")}
     >
-      <!-- Posa statica "in ascolto": qui non si anima mai (costo WebKitGTK). -->
+      <!-- Static "listening" pose: never animated here (WebKitGTK cost). -->
       <span class="icon"><GraphicEq animated={session.playing} /></span>
       <span class="label">{t("nav.studio")}</span>
     </button>
@@ -155,7 +155,7 @@
         max(0.25rem, env(safe-area-inset-left, 0px));
     }
 
-    /* Parity 5.x: barra indicatrice in alto, icona tinta, etichetta in grassetto. */
+    /* 5.x parity: indicator bar on top, tinted icon, bold label. */
     .inner > button {
       position: relative;
       display: grid;
@@ -258,7 +258,7 @@
     padding: 0.15rem max(1rem, env(safe-area-inset-right, 0px))
       calc(1rem + env(safe-area-inset-bottom, 0px))
       max(1rem, env(safe-area-inset-left, 0px));
-    /* Il foglio non passa lo scorrimento alla pagina sotto. */
+    /* The sheet does not pass scrolling on to the page below. */
     overscroll-behavior: contain;
     animation: rk-sheet-rise 0.2s ease-out;
     outline: none;

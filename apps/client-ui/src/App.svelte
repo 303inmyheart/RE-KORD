@@ -15,14 +15,14 @@
   import { getServerBaseUrl, setServerBaseUrl } from "./lib/config";
   import { session } from "./lib/session.svelte";
 
-  /** L'app parte una volta sola, anche se si passa dalla procedura di connessione. */
+  /** The app boots only once, even when going through the connection flow. */
   let started = $state(false);
 
   function start() {
     if (started) return;
     started = true;
-    // Il gate puo' aver appena scelto l'hub locale: il campo in Impostazioni deve
-    // mostrare l'indirizzo su cui stiamo davvero parlando.
+    // The gate may have just picked the local hub: the field in Settings must
+    // show the address we are actually talking to.
     session.serverUrl = getServerBaseUrl();
     void session.bootstrap();
   }
@@ -48,9 +48,9 @@
       start();
       return;
     }
-    // Procedura riaperta con l'app in piedi: cambiare account non e' solo scrivere
-    // un id — vanno salvate le preferenze di quello che lascia e ricaricati tema,
-    // esclusioni e selezione della libreria. Se e' lo stesso account basta rileggere.
+    // Flow reopened with the app running: switching account is not just writing
+    // an id — the leaving account's preferences must be saved and theme,
+    // exclusions and library selection reloaded. If it's the same account, a re-read is enough.
     if (accountId !== getSelectedAccountId()) void session.switchAccount(accountId);
     else void session.refreshAll();
   }
@@ -64,8 +64,8 @@
     ondismiss={() => connectGate.close()}
   />
 {:else if connectGate.phase === "probing"}
-  <!-- Sonda all'avvio, di solito qualche millisecondo: prima solo il marchio;
-       barra e suggerimenti compaiono se l'attesa si allunga. -->
+  <!-- Startup probe, usually a few milliseconds: at first only the logo;
+       bar and hints appear if the wait gets longer. -->
   <BootSplash />
 {:else}
   <AppShell />

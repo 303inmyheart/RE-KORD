@@ -100,7 +100,7 @@ export type UserPrefs = {
   recentRelPaths: string[];
   /** @deprecated migrated → recentRelPaths */
   recentTrackIds: number[];
-  /** Mood personali: chiave preferita = rel_path (id numerico solo legacy). */
+  /** Personal moods: preferred key = rel_path (numeric id legacy only). */
   trackMoods: Record<string, string[]>;
   /**
    * Legacy import compat only. Session restore is always on in next;
@@ -172,7 +172,7 @@ export function normalizeGlassOpacity(raw: unknown): number {
 
 function probeGlassBackdropWorks(): boolean {
   if (typeof document === "undefined" || typeof CSS === "undefined") return true;
-  // WebKitGTK (Tauri su Linux) compone in software: il vetro costa troppo.
+  // WebKitGTK (Tauri on Linux) composites in software: glass costs too much.
   if (!platformCaps.backdropFilter) return false;
   const supportsBlur =
     CSS.supports("backdrop-filter", "blur(2px)") ||
@@ -629,7 +629,7 @@ export function playCountFor(
 export type GoneTracks = { relPaths: string[]; trackIds?: number[] };
 
 /**
- * The fields to patch so nothing keeps pointing at deleted tracks: an ascolto
+ * The fields to patch so nothing keeps pointing at deleted tracks: a play
  * count or a mood left behind would come back to life on a track that reuses
  * the same path later on.
  *

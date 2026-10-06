@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
-   * Avviso di compatibilita' client/hub. Vive in una radice Svelte sua, montata
-   * da `main.ts` accanto all'app: cosi' compare sopra qualunque schermata (anche
-   * la procedura di connessione) senza toccare AppShell.
+   * Client/hub compatibility notice. It lives in its own Svelte root, mounted
+   * by `main.ts` next to the app: so it shows above any screen (including
+   * the connection flow) without touching AppShell.
    */
   import { t } from "../lib/i18n.svelte";
   import { compat } from "../lib/platform/compatState.svelte";

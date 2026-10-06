@@ -15,8 +15,8 @@
    * view mode, "Almeno uno / Tutti"). One size everywhere; it never wraps.
    *
    * ```svelte
-   * <Segmented ariaLabel="Ordina" value={sort} onchange={(v) => (sort = v)}
-   *   options={[{ value: "name", label: "Nome" }, { value: "plays", label: "Ascolti" }]}>
+   * <Segmented ariaLabel="Sort" value={sort} onchange={(v) => (sort = v)}
+   *   options={[{ value: "name", label: "Name" }, { value: "plays", label: "Plays" }]}>
    *   {#snippet icon(opt)}<UiIcon name={opt.value === "name" ? "sortAz" : "chart"} />{/snippet}
    * </Segmented>
    * ```

@@ -39,8 +39,8 @@
   const titleId = `${uid}-title`;
   const ledeId = `${uid}-lede`;
 
-  /* Su telefono il dialogo è un foglio dal basso e si può spingere giù per
-     chiuderlo; su schermo grande resta un pannello centrato. */
+  /* On the phone the dialog is a bottom sheet and can be pushed down to
+     close it; on a large screen it stays a centred panel. */
   let isSheet = $state(
     typeof window !== "undefined" && window.matchMedia(SHEET_MEDIA_QUERY).matches,
   );
@@ -241,7 +241,7 @@
     gap: 0.55rem;
   }
 
-  /* Fields già usano margin: annulla lo stacking con il gap del body. */
+  /* Fields already use margin: cancels the stacking with the body's gap. */
   .body :global(.rk-field) {
     margin-bottom: 0;
     gap: 0.28rem;

@@ -434,7 +434,7 @@ pub fn is_youtube_music_browse_url(value: &str) -> bool {
         && (u.path().contains("/browse") || u.path().contains("/channel/"))
 }
 
-/// BrowseId da `music.youtube.com/browse/…` o `/channel/…`.
+/// BrowseId from `music.youtube.com/browse/…` or `/channel/…`.
 pub fn browse_id_from_music_browse_page_url(raw: &str) -> Option<String> {
     let u = url::Url::parse(raw.trim()).ok()?;
     let h = u
@@ -543,7 +543,7 @@ fn build_entries_from_browse_json(json: &Value) -> Vec<ReleaseEntry> {
     entries
 }
 
-/// Elenco album da pagina music.youtube.com/browse/… via Innertube (come legacy).
+/// Album list from a music.youtube.com/browse/… page via Innertube (like legacy).
 pub async fn releases_list_via_innertube_browse(page_url: &str) -> Result<ReleasesList> {
     let browse_id = browse_id_from_music_browse_page_url(page_url)
         .ok_or_else(|| anyhow::anyhow!("Not a YouTube Music browse or channel URL"))?;
@@ -561,7 +561,7 @@ pub async fn releases_list_via_innertube_browse(page_url: &str) -> Result<Releas
     })
 }
 
-/// Preferisce Innertube per browse YTM; yt-dlp per tab /releases.
+/// Prefers Innertube for YTM browse pages; yt-dlp for /releases tabs.
 pub async fn releases_list_for_url(cfg: &AppConfig, url: &str) -> Result<ReleasesList> {
     if is_youtube_music_browse_url(url) {
         return releases_list_via_innertube_browse(url).await;

@@ -20,13 +20,13 @@ function hubProxy(target: string): ProxyOptions {
   };
 }
 
-/** Oltre questa dimensione un file non entra nella cache iniziale del service worker. */
+/** Above this size a file does not go into the service worker's initial cache. */
 const SW_PRECACHE_MAX_BYTES = 2 * 1024 * 1024;
 
 /**
- * Service worker della PWA (solo il client servito dall'hub, mai nei gusci Tauri:
- * vedi src/lib/platform/pwa.ts). Si genera a fine build perche' deve conoscere i
- * nomi con hash dei file prodotti: il template sta in
+ * PWA service worker (only the client served by the hub, never in the Tauri shells:
+ * see src/lib/platform/pwa.ts). It is generated at the end of the build because it must know the
+ * hashed names of the produced files: the template lives in
  * src/lib/platform/serviceWorker.template.js.
  */
 function rekordServiceWorker(): Plugin {
@@ -47,8 +47,8 @@ function rekordServiceWorker(): Plugin {
         })
         .map((item) => `/${item.fileName}`)
         .filter((path) => path !== "/index.html");
-      // I file di public/ non passano dal bundle: quelli che servono al guscio
-      // (icone, logo) si elencano a mano.
+      // Files in public/ don't go through the bundle: those the shell needs
+      // (icons, logo) are listed by hand.
       const publicFiles = [
         "/manifest.webmanifest",
         "/favicon.ico",

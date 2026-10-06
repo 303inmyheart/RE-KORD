@@ -40,13 +40,12 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-        with:
       - name: ffmpeg (transcode / preview tests)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: cargo fmt
         run: cargo fmt --all --check
-      # Il guscio Tauri (rekord-client) ha bisogno di webkit2gtk: lo controlla il
-      # job tauri-linux, qui resta fuori.
+      # The Tauri shell (rekord-client) needs webkit2gtk: the tauri-linux job
+      # checks it, so it is left out here.
       - name: cargo clippy
         run: cargo clippy --workspace --exclude rekord-client --all-targets --locked -- -D warnings
       - name: cargo test

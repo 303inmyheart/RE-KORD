@@ -1,11 +1,11 @@
 const THEME_BG_MIME = /^image\/(jpeg|png|webp|gif)$/i;
 const THEME_BG_EXT = /\.(jpe?g|png|webp|gif)$/i;
 
-/** Allineato a server/customThemeBg.mjs THEME_BG_MAX_BYTES */
+/** Aligned with server/customThemeBg.mjs THEME_BG_MAX_BYTES */
 export const THEME_BG_MAX_BYTES = 32 * 1024 * 1024;
 export const THEME_BG_MAX_MB = THEME_BG_MAX_BYTES / (1024 * 1024);
 
-/** Accetta MIME o estensione (alcuni browser lasciano type vuoto sulle GIF). */
+/** Accepts MIME or extension (some browsers leave type empty on GIFs). */
 export function isAllowedThemeBgFile(file: File): boolean {
   if (THEME_BG_MIME.test(file.type)) return true;
   return THEME_BG_EXT.test(file.name);

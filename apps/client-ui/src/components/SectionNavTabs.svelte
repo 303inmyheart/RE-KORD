@@ -22,7 +22,7 @@
     ariaLabel?: string;
     /** `md` page-level (title size), `nav` under a page title, `sm` inside a panel. */
     size?: "md" | "nav" | "sm";
-    /** Distribuisce i tab a tutta larghezza (es. Studio); Library resta flex-start */
+    /** Spreads the tabs across the full width (e.g. Studio); Library stays flex-start */
     even?: boolean;
     onselect: (id: string) => void;
   } = $props();

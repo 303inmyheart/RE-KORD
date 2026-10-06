@@ -153,7 +153,7 @@ export type Track = {
   curated_fields?: string[] | null;
 };
 
-/** Extra Discogs da `discogs_extra_json` / sidecar (camelCase, parity legacy). */
+/** Discogs extras from `discogs_extra_json` / sidecar (camelCase, legacy parity). */
 export type DiscogsAlbumExtra = {
   masterId?: number | null;
   discogsUri?: string | null;
@@ -181,13 +181,13 @@ export type Album = {
   user_edited?: boolean;
   curated_fields?: string[] | null;
   loose: boolean;
-  /** Sidecar / studio album meta applicata (parity legacy `hasAlbumMeta`). */
+  /** Sidecar / studio album meta applied (legacy parity `hasAlbumMeta`). */
   has_album_meta?: boolean;
   genre?: string | null;
   release_date?: string | null;
   label?: string | null;
   country?: string | null;
-  /** Tracce attese da catalogo/Discogs (come `expectedTrackCount` React). */
+  /** Tracks expected from the catalog/Discogs (like React `expectedTrackCount`). */
   expected_track_count?: number | null;
   discogs_release_id?: string | null;
   discogs_uri?: string | null;
@@ -324,7 +324,7 @@ export type LibrarySelectionPatch = Partial<{
   removeTracks: string[];
 }>;
 
-/** Voce info/curiosità (kord-artistinfo.json / infoItems album). */
+/** Info/curiosità entry (kord-artistinfo.json / album infoItems). */
 export type EntityInfoItem = {
   id: string;
   lang: string;
@@ -720,7 +720,7 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ trackIds }),
     }),
-  /** Info/curiosità per artista (album omesso) o album. Nomi cartella. */
+  /** Info/curiosità for an artist (album omitted) or an album. Folder names. */
   entityInfo: (artist: string, album?: string | null) => {
     const params = new URLSearchParams({ artist });
     if (album) params.set("album", album);
@@ -1370,6 +1370,8 @@ export type RemoteAccessState = {
   provider: string;
   publicUrl: string | null;
   error: string | null;
+  /** Stable code for `error` (cloudflared_not_found, tunnel_start_timeout, …). */
+  errorCode?: string | null;
   startedAt: string | null;
   cloudflaredPath: string | null;
   cloudflareLoggedIn: boolean;

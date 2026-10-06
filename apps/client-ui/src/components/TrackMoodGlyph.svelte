@@ -5,7 +5,7 @@
   let {
     mood = null as TrackMoodId | null,
     class: className = "",
-    /** Usa currentColor del genitore (filtri: spento → acceso via CSS del bottone). */
+    /** Uses the parent's currentColor (filters: off → on via the button's CSS). */
     inheritColor = false,
   }: {
     mood?: TrackMoodId | null;

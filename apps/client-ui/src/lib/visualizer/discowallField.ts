@@ -119,8 +119,8 @@ function noteHash(note: ChartNote, trackSeed: number) {
 }
 
 /**
- * Percorso nota in [0,1]² (yn=0 alto, yn=1 basso).
- * Quadranti: 0 alto-destra, 1 alto-sinistra, 2 basso-destra, 3 basso-sinistra.
+ * Note path in [0,1]² (yn=0 top, yn=1 bottom).
+ * Quadrants: 0 top-right, 1 top-left, 2 bottom-right, 3 bottom-left.
  */
 function noteMotionPath(note: ChartNote, trackSeed: number) {
   const h = noteHash(note, trackSeed);
@@ -185,7 +185,7 @@ export function seededNoise(seed: number, i: number) {
   return (x >>> 0) / 4294967295;
 }
 
-/** Hue che scorre su beat, tempo di brano e nudge sulle note. */
+/** Hue that drifts with the beat, the track's time and a nudge on notes. */
 function hueSlotAt(
   triads: DiscoTriad[],
   beatIndex: number,
@@ -204,7 +204,7 @@ function hueSlotAt(
   return (a + (b - a) * blend + drift) % 360;
 }
 
-/** Fase matematica per pixel (noise + beat + energia locale), senza mappe per zona. */
+/** Per-pixel math phase (noise + beat + local energy), without per-zone maps. */
 export function pixelMathPhase(
   seed: number,
   i: number,
@@ -218,7 +218,7 @@ export function pixelMathPhase(
 
 export type FrameHues = [number, number, number];
 
-/** Tre hue del frame — una volta per frame, non per pixel. */
+/** The frame's three hues — once per frame, not per pixel. */
 export function frameHues(
   triads: DiscoTriad[],
   beatIndex: number,
@@ -233,7 +233,7 @@ export function frameHues(
 }
 
 /**
- * Colore: ciclo matematico tra 3 toni + mix solo dove gli eventi Plectr si sovrappongono.
+ * Colour: math cycle across 3 tones + mixing only where Plectr events overlap.
  */
 export function mathPixelHue(
   hues: FrameHues,
@@ -271,7 +271,7 @@ export function createSceneStyleWeights(): SceneStyleWeights {
   return { bloom: 0.48, pillar: 0.42, constellation: 0.36, pulse: 0 };
 }
 
-/** Scrive i pesi nello stesso oggetto (evita allocazioni per frame). */
+/** Writes the weights into the same object (avoids per-frame allocations). */
 export function writeSceneStyleWeights(
   out: SceneStyleWeights,
   beatIndex: number,
@@ -471,7 +471,7 @@ function samplePlectrField(
   return { field: clamp(field), accent: clamp(accent), colorW };
 }
 
-/** Griglia interna per il campo Plectr (una sample per frame, non per cella visiva). */
+/** Internal grid for the Plectr field (one sample per frame, not per visual cell). */
 export const PLECTR_FIELD_COLS = 28;
 export const PLECTR_FIELD_ROWS = 22;
 
@@ -519,7 +519,7 @@ function lerpGrid(a: number, b: number, t: number) {
   return a + (b - a) * t;
 }
 
-/** Campiona il campo precalcolato (bilineare) in coordinate normalizzate 0–1. */
+/** Samples the precomputed field (bilinear) in normalized 0–1 coordinates. */
 export function samplePlectrFieldGrid(
   grid: PlectrFieldGrid,
   xn: number,

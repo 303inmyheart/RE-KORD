@@ -1,4 +1,4 @@
-/* Pagina Ascolta: palco del brano, sleep timer, pannelli coda/recenti e testi sincronizzati. */
+/* Listen page: track stage, sleep timer, queue/recent panels and synced lyrics. */
 .listen-page {
   display: flex;
   flex-direction: column;
@@ -19,7 +19,7 @@
   min-width: 0;
   border: 1px solid color-mix(in srgb, var(--rk-accent) 16%, var(--rk-line) 84%);
   border-radius: var(--rk-radius);
-  /* Ultimo layer = bg: opaco anche se --rk-surface-2 è rgba (glass OFF). */
+  /* Last layer = bg: opaque even if --rk-surface-2 is rgba (glass OFF). */
   background:
     radial-gradient(
       ellipse 85% 140% at 0% 50%,
@@ -68,7 +68,7 @@
     grid-template-columns: var(--listen-2col);
   }
 
-  /* Un po' più compatta del 196px precedente, allineata al default legacy. */
+  /* A bit more compact than the previous 196px, aligned with the legacy default. */
   .listen-page {
     --listen-art-size: min(168px, 20vw);
   }
@@ -125,8 +125,8 @@
   height: var(--listen-art-size);
 }
 
-/* CoverArt ha misure proprie (.lg/.xl): forziamo il fill del box listen.
-   Selettori plain — :global() è invalido nel CSS globale e droppa le regole. */
+/* CoverArt has its own sizes (.lg/.xl): we force it to fill the listen box.
+   Plain selectors — :global() is invalid in global CSS and drops the rules. */
 .listen-stage__art .rk-cover,
 .listen-stage__art .rk-cover.lg,
 .listen-stage__art .rk-cover.xl {
@@ -417,11 +417,11 @@
   }
 }
 
-/* Telefono e tablet verticale: la copertina si accompagna a occhiello e titolo, il
-   resto passa sotto a tutta larghezza. Prima l'immagine stava su una riga sua con
-   duecento pixel vuoti a fianco, perché il blocco di testo — con dentro la riga
-   dei generi, lunga — non entrava mai accanto e andava sempre a capo. Le righe di
-   dettaglio restano larghe: in una colonna da 190px diventerebbero un muro. */
+/* Phone and portrait tablet: the cover goes alongside eyebrow and title, the
+   rest moves below at full width. Before, the image sat on a row of its own with
+   two hundred empty pixels beside it, because the text block — with the long
+   genre row inside — never fitted next to it and always wrapped. The detail
+   rows stay wide: in a 190px column they would become a wall. */
 @media (max-width: 899.98px) {
   .listen-page .listen-stage__head {
     display: grid;
@@ -430,17 +430,17 @@
       "art lead"
       "art title"
       "meta meta";
-    /* Lo spazio che avanza sotto la copertina va tutto alla riga del titolo: a righe
-       automatiche il browser lo divide fra le due e il titolo si stacca dal suo
-       occhiello, lasciando un buco in mezzo. */
+    /* The space left below the cover all goes to the title row: with automatic
+       rows the browser splits it between the two and the title detaches from its
+       eyebrow, leaving a gap in between. */
     grid-template-rows: auto 1fr auto;
     align-items: start;
     column-gap: var(--rk-space-lg);
     row-gap: var(--rk-space-xs);
   }
 
-  /* I due contenitori del testo sparivano come scatole: sono le loro righe che
-     devono finire nelle aree della griglia. */
+  /* The two text containers disappear as boxes: it is their rows that
+     must land in the grid areas. */
   .listen-page .listen-stage__text,
   .listen-page .listen-stage__text-lead {
     display: contents;
@@ -459,7 +459,7 @@
     grid-area: title;
     min-width: 0;
     font-size: clamp(1.2rem, 5vw, 1.75rem);
-    /* Una riga in più: la colonna è stretta, e il titolo è la cosa che si legge. */
+    /* One more line: the column is narrow, and the title is the thing people read. */
     -webkit-line-clamp: 3;
     line-clamp: 3;
   }
@@ -469,8 +469,8 @@
     grid-area: meta;
   }
 
-  /* Il visualizzatore non è più legato alla copertina: lì fa da spalla al titolo,
-     qui è una fascia sua e ci sta più larga che alta. */
+  /* The visualizer is no longer tied to the cover: there it backs up the title,
+     here it is a strip of its own and fits wider than tall. */
   .listen-stage__viz {
     height: clamp(9rem, 42vw, 13rem);
     max-height: clamp(9rem, 42vw, 13rem);

@@ -3,11 +3,11 @@
     label,
     active = false,
     emphasis = false,
-    /** Sfondo ghost leggero (topbar sync/cerca, come old). */
+    /** Light ghost background (topbar sync/search, like old). */
     surface = false,
-    /** Solo glifo: niente chip/bordo su hover/active. */
+    /** Glyph only: no chip/border on hover/active. */
     bare = false,
-    /** Colore active/hover in modalità bare (`danger` = preferito/exclude). */
+    /** Active/hover colour in bare mode (`danger` = favourite/exclude). */
     tone = "default" as "default" | "danger",
     disabled = false,
     onclick,
@@ -135,8 +135,8 @@
     filter: brightness(1.06);
   }
 
-  /* Col dito il quadrato cresce al target minimo: il glifo resta della sua
-     misura, cambia solo l'area che risponde al tocco. */
+  /* With a finger the square grows to the minimum target: the glyph keeps its
+     size, only the area that responds to touch changes. */
   @media (pointer: coarse) {
     .rk-icon,
     .rk-icon.surface,

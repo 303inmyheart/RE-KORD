@@ -49,6 +49,8 @@ struct RemoteInner {
     status: RemoteStatus,
     public_url: Option<String>,
     error: Option<String>,
+    /// Stable code for `error`, translated by the clients.
+    error_code: Option<&'static str>,
     started_at: Option<String>,
     cloudflared_path: Option<PathBuf>,
     cloudflare_logged_in: bool,
@@ -66,6 +68,7 @@ impl Default for RemoteInner {
             status: RemoteStatus::Stopped,
             public_url: None,
             error: None,
+            error_code: None,
             started_at: None,
             cloudflared_path: None,
             cloudflare_logged_in: false,
@@ -468,6 +471,7 @@ fn snapshot_json(inner: &RemoteInner, lan_urls: Vec<String>, bind: String) -> se
         "provider": PROVIDER,
         "publicUrl": public_url,
         "error": inner.error.clone(),
+        "errorCode": inner.error_code,
         "startedAt": inner.started_at.clone(),
         "cloudflaredPath": inner.cloudflared_path.as_ref().map(|p| p.display().to_string()),
         "cloudflareLoggedIn": inner.cloudflare_logged_in,
@@ -495,17 +499,19 @@ fn kill_child(inner: &mut RemoteInner) {
     }
 }
 
-fn mark_error(inner: &mut RemoteInner, msg: impl Into<String>) {
+fn mark_error(inner: &mut RemoteInner, code: &'static str, msg: impl Into<String>) {
     let msg = msg.into();
     inner.enabled = false;
     inner.status = RemoteStatus::Error;
     inner.public_url = None;
     if msg.contains("ENOENT") || msg.contains("No such file") {
+        inner.error_code = Some("cloudflared_not_found");
         inner.error = Some(format!(
-            "Cloudflared non trovato (atteso in {}). Reinstalla RE-KORD oppure configura REKORD_CLOUDFLARED_BIN.",
+            "cloudflared not found (expected in {}). Reinstall RE-KORD Server or set REKORD_CLOUDFLARED_BIN.",
             expected_cloudflared_install_path()
         ));
     } else {
+        inner.error_code = Some(code);
         inner.error = Some(msg);
     }
 }
@@ -518,6 +524,7 @@ fn stop_inner() {
     inner.status = RemoteStatus::Stopped;
     inner.public_url = None;
     inner.error = None;
+    inner.error_code = None;
     inner.started_at = None;
 }
 
@@ -543,6 +550,7 @@ fn apply_found_url(generation: u64, url: String, data_dir: &Path) -> bool {
     inner.status = RemoteStatus::Running;
     inner.public_url = Some(normalized.clone());
     inner.error = None;
+    inner.error_code = None;
     info!(public_url = %normalized, "Cloudflare tunnel URL ready");
     crate::diagnostics::log_activity(
         data_dir,
@@ -578,6 +586,7 @@ fn start_tunnel(port: u16, data_dir: PathBuf, cloudflared: Option<PathBuf>) {
             inner.status = RemoteStatus::Running;
             inner.public_url = Some(normalized.clone());
             inner.error = None;
+            inner.error_code = None;
             inner.started_at = Some(chrono::Utc::now().to_rfc3339());
             crate::diagnostics::log_activity(
                 &data_dir,
@@ -595,8 +604,9 @@ fn start_tunnel(port: u16, data_dir: PathBuf, cloudflared: Option<PathBuf>) {
     let Some(path) = cloudflared else {
         mark_error(
             &mut inner,
+            "cloudflared_not_found",
             format!(
-                "Cloudflared non trovato (atteso in {}). Reinstalla RE-KORD Server.",
+                "cloudflared not found (expected in {}). Reinstall RE-KORD Server.",
                 expected_cloudflared_install_path()
             ),
         );
@@ -606,8 +616,9 @@ fn start_tunnel(port: u16, data_dir: PathBuf, cloudflared: Option<PathBuf>) {
     if !path.is_file() {
         mark_error(
             &mut inner,
+            "cloudflared_not_found",
             format!(
-                "Cloudflared non trovato (atteso in {}). Reinstalla RE-KORD Server.",
+                "cloudflared not found (expected in {}). Reinstall RE-KORD Server.",
                 expected_cloudflared_install_path()
             ),
         );
@@ -621,6 +632,7 @@ fn start_tunnel(port: u16, data_dir: PathBuf, cloudflared: Option<PathBuf>) {
     inner.status = RemoteStatus::Starting;
     inner.public_url = None;
     inner.error = None;
+    inner.error_code = None;
     inner.started_at = Some(chrono::Utc::now().to_rfc3339());
 
     let target = format!("http://127.0.0.1:{port}");
@@ -635,7 +647,7 @@ fn start_tunnel(port: u16, data_dir: PathBuf, cloudflared: Option<PathBuf>) {
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            mark_error(&mut inner, e.to_string());
+            mark_error(&mut inner, "tunnel_failed", e.to_string());
             return;
         }
     };
@@ -670,7 +682,8 @@ fn start_tunnel(port: u16, data_dir: PathBuf, cloudflared: Option<PathBuf>) {
                 if inner.generation == generation && inner.status == RemoteStatus::Starting {
                     mark_error(
                         &mut inner,
-                        "Timeout avvio tunnel: cloudflared non ha restituito un URL pubblico.",
+                        "tunnel_start_timeout",
+                        "Tunnel start timed out: cloudflared did not return a public URL.",
                     );
                     kill_child(&mut inner);
                 }
@@ -682,7 +695,11 @@ fn start_tunnel(port: u16, data_dir: PathBuf, cloudflared: Option<PathBuf>) {
             if stdout_done && stderr_done {
                 let mut inner = manager().lock();
                 if inner.generation == generation && inner.status == RemoteStatus::Starting {
-                    mark_error(&mut inner, "Tunnel terminato prima di essere pronto");
+                    mark_error(
+                        &mut inner,
+                        "tunnel_exited_early",
+                        "Tunnel exited before it was ready",
+                    );
                     kill_child(&mut inner);
                 }
                 return;
@@ -760,8 +777,8 @@ fn start_tunnel(port: u16, data_dir: PathBuf, cloudflared: Option<PathBuf>) {
             }
             if guard.enabled {
                 match status {
-                    Ok(_) => mark_error(&mut guard, "Tunnel terminato"),
-                    Err(e) => mark_error(&mut guard, e.to_string()),
+                    Ok(_) => mark_error(&mut guard, "tunnel_exited", "Tunnel exited"),
+                    Err(e) => mark_error(&mut guard, "tunnel_failed", e.to_string()),
                 }
             } else {
                 guard.status = RemoteStatus::Stopped;
@@ -922,7 +939,7 @@ async fn remote_login(
     inner.logged_in_loaded = true;
     ok(json!({
         "loginUrl": CF_DASHBOARD,
-        "note": "Apri Cloudflare Dashboard e completa il login.",
+        "note": "Open the Cloudflare dashboard and complete the login.",
         "cloudflareLoggedIn": true,
     }))
 }

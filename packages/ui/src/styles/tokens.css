@@ -126,11 +126,11 @@
   --rk-side-w: 56px;
   --rk-header-h: 56px;
   --rk-content-max: 1360px;
-  /* Altezza utile della finestra. `interactive-widget=overlays-content` fa sì che
-     la tastiera virtuale copra la pagina senza rimpicciolire il viewport, quindi
-     dvh non la vede: lib/viewportMetrics.ts riscrive questa variabile con
-     l'altezza del visual viewport. Chi deve stare sopra la tastiera (dialoghi,
-     fogli) misura su questa e non su dvh. */
+  /* Usable window height. `interactive-widget=overlays-content` makes
+     the virtual keyboard cover the page without shrinking the viewport, so
+     dvh does not see it: lib/viewportMetrics.ts rewrites this variable with
+     the visual viewport's height. Whatever must stay above the keyboard (dialogs,
+     sheets) measures against this and not against dvh. */
   --rk-app-vh: 100dvh;
   /* Controls: buttons and fields share one height so they line up in a row. */
   --rk-control-h: 2.25rem;
@@ -158,7 +158,7 @@
   --rk-space-lg: 0.75rem;
   --rk-space-xl: 1rem;
   --rk-space-2xl: 1.5rem;
-  /* Gap verticale tra schede/sezioni maggiori (hero ↔ body, toolbar ↔ lista, …) */
+  /* Vertical gap between major cards/sections (hero ↔ body, toolbar ↔ list, …) */
   --rk-section-gap: 0.65rem;
   --rk-cta: linear-gradient(
     135deg,
@@ -202,8 +202,8 @@
   --rk-accent-soft: color-mix(in srgb, var(--rk-accent) 14%, transparent);
 }
 
-/* Cromatura mobile: stessa soglia xxl del client (vedi styles/responsive.css e
-   lib/breakpoints.ts), scritta con la convenzione `N - 0.02` verso il basso. */
+/* Mobile chrome: same xxl threshold as the client (see styles/responsive.css and
+   lib/breakpoints.ts), written with the `N - 0.02` downwards convention. */
 @media (max-width: 999.98px) {
   :root {
     --rk-side-w: 0px;

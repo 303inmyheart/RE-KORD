@@ -59,8 +59,8 @@
   let visible = typeof document !== "undefined" ? !document.hidden : true;
   let inView = true;
   let unsubPrefs: (() => void) | null = null;
-  // Copie non reattive lette dal ciclo di disegno, che gira fuori da Svelte: le
-  // riallinea l'effetto piu' sotto a ogni cambio di stato.
+  // Non-reactive copies read by the draw loop, which runs outside Svelte: the
+  // effect further down realigns them on every state change.
   let playingRef = false;
   let modeRef: VizMode = "bars";
   let expandedRef = false;

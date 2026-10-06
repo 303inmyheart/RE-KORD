@@ -82,7 +82,7 @@ export const GENRE_POOL = [
   "Jazz",
 ] as const;
 
-/** Hash stabile per stub grafici (nessuna persistenza). */
+/** Stable hash for graphic stubs (no persistence). */
 export function hashSeed(s: string): number {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -92,7 +92,7 @@ export function hashSeed(s: string): number {
   return h >>> 0;
 }
 
-/** Preview deterministica per densità grafica fino a meta reali. */
+/** Deterministic preview for graphic density until real meta exists. */
 export function previewMoods(seed: string): TrackMoodId[] {
   const h = hashSeed(seed);
   if (h % 5 === 0) return [];
@@ -116,9 +116,9 @@ export function normalizeMoodIds(raw: unknown): TrackMoodId[] {
 }
 
 /**
- * Mood personali salvati (rel_path preferito; id numerico solo legacy client).
- * Nessun fallback “preview”: senza salvataggio → lista vuota (i preview restano
- * solo per tile decorative via `previewMoods`).
+ * Saved personal moods (rel_path preferred; numeric id only for the legacy client).
+ * No “preview” fallback: without a save → empty list (previews remain
+ * only for decorative tiles via `previewMoods`).
  */
 export function resolveTrackMoods(
   trackId: number,
@@ -162,8 +162,8 @@ export function albumGenre(album: { genre?: string | null } | null | undefined):
 }
 
 /**
- * Legacy `trackHasFileMeta`: brano “ok” se ha genere o data uscita.
- * Usato per badge note e alert “brani senza meta”.
+ * Legacy `trackHasFileMeta`: track is “ok” if it has a genre or release date.
+ * Used for note badges and the “tracks without meta” alert.
  */
 export function trackHasFileMeta(
   track: { genre?: string | null; release_date?: string | null } | null | undefined,
@@ -174,8 +174,8 @@ export function trackHasFileMeta(
 }
 
 /**
- * Legacy `hasAlbumMeta`: sidecar/studio meta album applicata.
- * Fallback su campi album-level se il flag non è ancora popolato.
+ * Legacy `hasAlbumMeta`: album sidecar/studio meta applied.
+ * Falls back to album-level fields if the flag is not populated yet.
  */
 export function albumHasAlbumMeta(album: {
   has_album_meta?: boolean;

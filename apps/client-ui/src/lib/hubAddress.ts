@@ -1,17 +1,17 @@
 /**
- * Interpretazione dell'indirizzo dell'hub scritto a mano o letto da un QR.
+ * Parsing of the hub address typed by hand or read from a QR.
  *
- * Vive a parte dalla schermata di connessione perche' e' tutta logica di stringhe,
- * l'unica parte davvero sbagliabile del primo avvio: chi installa l'APK digita
- * «192.168.1.20:7420» a mano, e chi inquadra il QR del tunnel ottiene un URL con
- * dentro un percorso.
+ * It lives apart from the connection screen because it is all string logic,
+ * the only part of the first launch that is really easy to get wrong: whoever installs the APK types
+ * «192.168.1.20:7420» by hand, and whoever scans the tunnel QR gets a URL with
+ * a path inside.
  */
 
-/** Porta dell'hub: `--bind 0.0.0.0:7420` e' il valore di serie del server. */
+/** Hub port: `--bind 0.0.0.0:7420` is the server's stock value. */
 export const DEFAULT_HUB_PORT = "7420";
 
 export type HubAddress = {
-  /** Origine da salvare come base delle chiamate API: nessuna barra finale. */
+  /** Origin to save as the base for API calls: no trailing slash. */
   base: string;
   host: string;
   port: string;
@@ -19,9 +19,9 @@ export type HubAddress = {
 };
 
 /**
- * Accetta quello che scrive una persona: `192.168.1.20`, `192.168.1.20:7420`,
- * `http://…`, `https://nome.trycloudflare.com`, con o senza percorso in coda.
- * Senza schema si assume http, che in rete locale e' l'unico che l'hub parla.
+ * Accepts what a person types: `192.168.1.20`, `192.168.1.20:7420`,
+ * `http://…`, `https://nome.trycloudflare.com`, with or without a trailing path.
+ * Without a scheme http is assumed, which on the local network is the only one the hub speaks.
  */
 export function parseHubAddress(raw: string): HubAddress | null {
   const trimmed = String(raw ?? "").trim();
@@ -35,8 +35,8 @@ export function parseHubAddress(raw: string): HubAddress | null {
   }
   if (!url.hostname) return null;
   const https = url.protocol === "https:";
-  // Un URL pubblico gira su 443 e la porta non si scrive: mettercela in coda
-  // («https://nome.trycloudflare.com:7420») romperebbe il tunnel.
+  // A public URL runs on 443 and the port is not written: appending it
+  // («https://nome.trycloudflare.com:7420») would break the tunnel.
   const port = url.port || (https ? "" : DEFAULT_HUB_PORT);
   const authority = port ? `${url.hostname}:${port}` : url.hostname;
   return {
@@ -47,7 +47,7 @@ export function parseHubAddress(raw: string): HubAddress | null {
   };
 }
 
-/** Porta valida da mettere in un URL: 1–65535, cifre e nient'altro. */
+/** Valid port to put in a URL: 1–65535, digits and nothing else. */
 export function isValidPort(raw: string): boolean {
   const s = String(raw ?? "").trim();
   if (!/^\d{1,5}$/.test(s)) return false;
@@ -56,16 +56,16 @@ export function isValidPort(raw: string): boolean {
 }
 
 /**
- * Indirizzo dai campi «IP» e «porta». Torna null quando manca qualcosa, cosi'
- * il bottone Connetti resta spento invece di provare un URL storto.
+ * Address from the «IP» and «port» fields. Returns null when something is missing, so
+ * the Connect button stays off instead of trying a malformed URL.
  */
 export function hubBaseFromParts(host: string, port: string): string | null {
   const h = String(host ?? "").trim();
   if (!h) return null;
   const p = String(port ?? "").trim();
   if (!isValidPort(p)) return null;
-  // Chi incolla «http://192.168.1.20:7420» nel campo dell'IP intende quello:
-  // l'indirizzo completo vince sulla porta scritta accanto.
+  // Whoever pastes «http://192.168.1.20:7420» into the IP field means that:
+  // the full address wins over the port written next to it.
   if (/^https?:\/\//i.test(h) || h.includes(":")) {
     const parsed = parseHubAddress(h);
     return parsed ? parsed.base : null;
@@ -74,8 +74,8 @@ export function hubBaseFromParts(host: string, port: string): string | null {
 }
 
 /**
- * Come presentare un indirizzo salvato: il tunnel va nel campo dell'URL pubblico,
- * la rete locale nei due campi IP e porta.
+ * How to present a saved address: the tunnel goes in the public URL field,
+ * the local network in the two IP and port fields.
  */
 export function guessHubMode(raw: string): "local" | "public" {
   const parsed = parseHubAddress(raw);
@@ -84,10 +84,10 @@ export function guessHubMode(raw: string): "local" | "public" {
 }
 
 /**
- * Contenuto di un QR → base dell'hub. Il QR del pannello Rete contiene l'URL
- * pubblico in chiaro, ma un QR inquadrato di fretta puo' portarsi dietro un
- * percorso (`/admin`) o arrivare da un pannello che incapsula l'URL in un JSON:
- * in entrambi i casi qui si torna alla sola origine.
+ * QR content → hub base. The Network panel's QR contains the public URL
+ * in plain text, but a QR scanned in a hurry can carry a
+ * path (`/admin`) or come from a panel that wraps the URL in JSON:
+ * in both cases here we go back to the bare origin.
  */
 export function hubBaseFromQr(text: string): string | null {
   const raw = String(text ?? "").trim();
@@ -105,7 +105,7 @@ export function hubBaseFromQr(text: string): string | null {
   return parseHubAddress(raw)?.base ?? null;
 }
 
-/** Etichetta breve per lo stato «mi sto collegando a…»: lo schema non serve. */
+/** Short label for the «connecting to…» state: the scheme is not needed. */
 export function formatHubLabel(raw: string): string {
   const parsed = parseHubAddress(raw);
   if (!parsed) return String(raw ?? "").trim();

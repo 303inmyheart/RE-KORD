@@ -14,7 +14,7 @@ export function fisherYatesShuffle<T>(items: readonly T[]): T[] {
   return a;
 }
 
-/** Mantiene [0..currentIdx] e mescola solo la coda successiva (legacy shuffleTailFromCurrent). */
+/** Keeps [0..currentIdx] and shuffles only the following queue (legacy shuffleTailFromCurrent). */
 export function shuffleTailFromCurrent<T>(items: readonly T[], currentIdx: number): T[] {
   if (items.length <= 1) return [...items];
   const i = Math.min(Math.max(0, currentIdx), items.length - 1);
@@ -67,8 +67,8 @@ export type ShuffleExclusionOpts = {
 };
 
 /**
- * Regola bloccati: i brani esclusi non entrano nelle code generate, salvo se
- * si parte esplicitamente da un brano bloccato (allora restano ammessi).
+ * Blocked rule: excluded tracks do not enter generated queues, unless
+ * we explicitly start from a blocked track (then they stay allowed).
  */
 export function filterPoolForExclusions(
   pool: readonly Track[],
@@ -156,7 +156,7 @@ export function buildSmartRandomQueue(
   return a;
 }
 
-/** Seed fisso + smart shuffle del resto del pool (preferiti / genere / mood card). */
+/** Fixed seed + smart shuffle of the rest of the pool (favourites / genre / mood card). */
 export function buildShuffleQueueFromSeed(
   seed: Track,
   pool: readonly Track[],
@@ -173,7 +173,7 @@ export function buildShuffleQueueFromSeed(
   return [seed, ...shuffled].slice(0, CARD_QUEUE_CAP);
 }
 
-/** Smart radio: seed + libreria ordinata per similarità mood/genere. */
+/** Smart radio: seed + library ordered by mood/genre similarity. */
 export function buildRadioFromSeed(
   seed: Track,
   library: readonly Track[],

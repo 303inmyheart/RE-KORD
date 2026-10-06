@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  /** Una sola popover aperta tra tutte le TrackRow. */
+  /** Only one popover open across all TrackRows. */
   let dismissActivePopover: (() => void) | null = null;
 
   function claimTrackRowPopover(dismiss: () => void) {
@@ -42,7 +42,7 @@
     favorited = false,
     active = false,
     playlistOptions = [],
-    /** Come React TrackListRow: coda/playlist sempre disponibili salvo opt-out. */
+    /** Like React TrackListRow: queue/playlist always available unless opted out. */
     showQueueActions = true,
     showPlaylistAction = true,
     autoFocusActive = true,
@@ -109,7 +109,7 @@
   const albumLocked = $derived(albumLockedProp ?? trackRowStats.albumLocked(track));
   const plays = $derived(playsProp ?? trackRowStats.plays(track));
   const moods = $derived(moodsProp ?? trackRowStats.moods(track));
-  /** Riga attiva: EQ in posa statica (mai animato nelle righe: costo WebKitGTK). */
+  /** Active row: EQ in static pose (never animated in rows: WebKitGTK cost). */
   const showStudio = $derived(active);
   const trackLyricsKind = $derived(lyricsKind(track.lyrics));
   const missingMeta = $derived(!trackHasFileMeta(track));
@@ -120,7 +120,7 @@
   );
   const numbered = $derived(number != null && number > 0);
 
-  /** Opzioni playlist: prop esplicita, altrimenti catalogo sessione (come React). */
+  /** Playlist options: explicit prop, otherwise the session catalog (like React). */
   const resolvedPlaylistOptions = $derived(
     playlistOptions.length > 0 ? playlistOptions : session.playlistOptions,
   );
@@ -160,7 +160,7 @@
     return () => cancelAnimationFrame(raf);
   });
 
-  /** Come old usePopoverLayerAnchored: fuori click, Esc, scroll (capture), resize — document-level. */
+  /** Like old usePopoverLayerAnchored: outside click, Esc, scroll (capture), resize — document-level. */
   $effect(() => {
     if (!menuOpen && !playlistOpen) return;
 

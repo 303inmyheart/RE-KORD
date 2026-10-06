@@ -1,4 +1,4 @@
-/* Dialoghi di Studio: selezione Discogs e scelta della scansione. */
+/* Studio dialogs: Discogs selection and scan choice. */
 .meta-edit-backdrop {
   position: fixed;
   inset: 0;
@@ -15,8 +15,8 @@
 
 .meta-edit-dialog {
   width: min(36rem, 100%);
-  /* Su --rk-app-vh e non su vh: qui dentro si scrive, e la tastiera copre la
-     pagina invece di rimpicciolirla (vedi lib/viewportMetrics.ts). */
+  /* On --rk-app-vh and not on vh: there is typing in here, and the keyboard covers the
+     page instead of shrinking it (see lib/viewportMetrics.ts). */
   max-height: min(calc(var(--rk-app-vh) * 0.8), 40rem);
   overflow: auto;
   padding: var(--rk-space-xl) var(--rk-space-xl);
@@ -26,9 +26,9 @@
   box-shadow: var(--rk-shadow);
 }
 
-/* Da foglio (telefono): la maniglia sta in alto al bordo e l'ultima riga di
-   comandi resta sopra la home bar, perché questi due dialoghi non hanno una
-   barra di azioni a cui appoggiarsi. */
+/* As a sheet (phone): the handle sits at the top edge and the last row of
+   controls stays above the home bar, because these two dialogs have no
+   action bar to lean on. */
 @media (max-width: 999.98px) {
   .meta-edit-dialog {
     padding-top: var(--rk-space-2xs);

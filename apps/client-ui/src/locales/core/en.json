@@ -154,5 +154,9 @@
   "core.api.errorCode.ytdlp_checksum_missing": "Could not verify yt-dlp (no checksum): not installed.",
   "core.api.errorCode.ytdlp_checksum_mismatch": "The downloaded yt-dlp does not match its checksum: not installed.",
   "core.api.errorCode.ytdlp_install_failed": "yt-dlp install failed.",
-  "core.api.errorCode.cloudflared_not_found": "cloudflared not found on the hub."
+  "core.api.errorCode.cloudflared_not_found": "cloudflared not found: reinstall RE-KORD Server or set REKORD_CLOUDFLARED_BIN.",
+  "core.api.errorCode.tunnel_start_timeout": "Tunnel start timed out: cloudflared did not return a public URL.",
+  "core.api.errorCode.tunnel_exited_early": "The tunnel closed before it was ready.",
+  "core.api.errorCode.tunnel_exited": "The tunnel closed.",
+  "core.api.errorCode.tunnel_failed": "The tunnel failed to start."
 }

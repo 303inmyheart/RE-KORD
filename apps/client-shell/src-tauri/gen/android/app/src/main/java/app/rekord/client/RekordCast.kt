@@ -33,12 +33,12 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 
 /**
- * Opzioni Cast (letta da Play Services tramite il meta-data nel manifest):
- * Default Media Receiver, come nella 5.0 e come il sender web.
+ * Cast options (read by Play Services through the meta-data in the manifest):
+ * Default Media Receiver, as in 5.0 and as the web sender.
  *
- * Notifica e MediaSession del Cast SDK sono spente: la notifica la disegna gia'
- * [RekordMediaService] con lo stato che la pagina rispecchia dal receiver, e due
- * notifiche per lo stesso brano sarebbero un doppione.
+ * The Cast SDK's notification and MediaSession are disabled: [RekordMediaService]
+ * already draws the notification with the state the page mirrors from the receiver,
+ * and two notifications for the same track would be a duplicate.
  */
 class RekordCastOptionsProvider : OptionsProvider {
     override fun getCastOptions(context: Context): CastOptions {
@@ -58,25 +58,25 @@ class RekordCastOptionsProvider : OptionsProvider {
 }
 
 /**
- * Google Cast nativo (porting di `RekordCastManager` della 5.0).
+ * Native Google Cast (port of 5.0's `RekordCastManager`).
  *
- * La 5.0 lasciava suonare la pagina in muto e ricaricava sul receiver ogni stato
- * della Media Session. Qui decide tutto la pagina: `src/lib/cast/androidCast.ts`
- * e' un `CastBackend` come il sender web, chiama i metodi di [RekordCastJs] e
- * riceve lo stato dal receiver come evento DOM `rekord:cast` — la stessa strada
- * di [RekordMediaBridge] per i comandi della notifica.
+ * 5.0 let the page play muted and reloaded every Media Session state onto the
+ * receiver. Here the page decides everything: `src/lib/cast/androidCast.ts`
+ * is a `CastBackend` like the web sender, calls the methods of [RekordCastJs] and
+ * receives the receiver's state as a `rekord:cast` DOM event — the same path
+ * [RekordMediaBridge] uses for notification commands.
  *
- * Dettagli dell'evento (`detail`):
- *  - `{type:"status", status:{...}}`: vedi [statusJson], ~1 Hz durante la riproduzione;
+ * Event details (`detail`):
+ *  - `{type:"status", status:{...}}`: see [statusJson], ~1 Hz during playback;
  *  - `{type:"session", event:"cancelled"|"startFailed"|"unavailable", code?}`;
- *  - `{type:"result", id, ok, error?}`: esito di un `load`.
+ *  - `{type:"result", id, ok, error?}`: outcome of a `load`.
  *
- * Tutto il Cast SDK vive sul thread principale: i metodi del ponte arrivano dal
- * thread di JavaBridge e si limitano a postare.
+ * The whole Cast SDK lives on the main thread: the bridge methods arrive on the
+ * JavaBridge thread and only post.
  */
 object RekordCast {
     private const val EVENT = "rekord:cast"
-    /** Passo dei tasti volume sul dispositivo Cast (0..1). */
+    /** Volume key step on the Cast device (0..1). */
     private const val VOLUME_STEP = 0.05
 
     private val main = Handler(Looper.getMainLooper())
@@ -90,7 +90,7 @@ object RekordCast {
 
     private var session: CastSession? = null
     private var client: RemoteMediaClient? = null
-    /** Sessione in avvio o in ripresa: il selettore chiuso non vuol dire «annullato». */
+    /** Session starting or resuming: a closed picker does not mean "cancelled". */
     private var starting = false
 
     private var activity: WeakReference<Activity>? = null
@@ -98,12 +98,12 @@ object RekordCast {
 
     private var lastSent = ""
 
-    /** Ultimo stato, letto in modo sincrono dalla pagina con `getStatus()`. */
+    /** Latest status, read synchronously by the page with `getStatus()`. */
     @Volatile
     var latestStatus: String = "{\"ready\":false,\"supported\":false}"
         private set
 
-    /** Serve a MainActivity (WebView sveglia, tasti volume) e alla notifica. */
+    /** Used by MainActivity (WebView kept awake, volume keys) and by the notification. */
     @Volatile
     var isConnected = false
         private set
@@ -160,9 +160,9 @@ object RekordCast {
     }
 
     /**
-     * Da chiamare sul thread principale (MainActivity.onCreate). Senza Play
-     * Services, o con una versione che il Cast SDK non accetta, Cast resta
-     * semplicemente non disponibile: il pulsante nella pagina non compare.
+     * Call on the main thread (MainActivity.onCreate). Without Play
+     * Services, or with a version the Cast SDK doesn't accept, Cast is
+     * simply unavailable: the button on the page doesn't appear.
      */
     fun init(context: Context) {
         if (initStarted) return
@@ -186,12 +186,12 @@ object RekordCast {
                 }
                 .addOnFailureListener { e ->
                     executor.shutdown()
-                    Logger.warn("RekordCast: CastContext non disponibile: ${e.message}")
+                    Logger.warn("RekordCast: CastContext unavailable: ${e.message}")
                     finishInit(null, "cast-context")
                 }
         } catch (e: Exception) {
             executor.shutdown()
-            Logger.warn("RekordCast: Cast SDK non disponibile: ${e.message}")
+            Logger.warn("RekordCast: Cast SDK unavailable: ${e.message}")
             finishInit(null, "cast-sdk")
         }
     }
@@ -210,10 +210,10 @@ object RekordCast {
             castContext = ctx
             supported = true
             unsupportedReason = null
-            // Sessione ripresa all'avvio (app riaperta mentre il Chromecast suonava).
+            // Session resumed at startup (app reopened while the Chromecast was playing).
             ctx.sessionManager.currentCastSession?.takeIf { it.isConnected }?.let { attach(it) }
         } catch (e: Exception) {
-            Logger.warn("RekordCast: inizializzazione fallita: ${e.message}")
+            Logger.warn("RekordCast: initialization failed: ${e.message}")
             castContext = null
             supported = false
             unsupportedReason = "cast-init"
@@ -254,7 +254,7 @@ object RekordCast {
         client = null
     }
 
-    // ── Stato verso la pagina ─────────────────────────────────────────────
+    // ── Status to the page ────────────────────────────────────────────────
 
     private fun castStateName(state: Int): String = when (state) {
         CastState.NO_DEVICES_AVAILABLE -> "NO_DEVICES_AVAILABLE"
@@ -281,7 +281,7 @@ object RekordCast {
         else -> null
     }
 
-    /** Stato grezzo: la traduzione in `CastStatus` la fa `androidCastStatus.ts`. */
+    /** Raw status: `androidCastStatus.ts` converts it into a `CastStatus`. */
     private fun statusJson(): JSONObject {
         val o = JSONObject()
             .put("ready", ready)
@@ -303,11 +303,11 @@ object RekordCast {
                 try {
                     o.put("volume", s.volume)
                 } catch (e: Exception) {
-                    /* Sessione in chiusura: il volume non si legge piu'. */
+                    /* Session closing: the volume can no longer be read. */
                 }
             }
         } catch (e: Exception) {
-            Logger.warn("RekordCast: stato non leggibile: ${e.message}")
+            Logger.warn("RekordCast: unreadable status: ${e.message}")
         }
         return o
     }
@@ -323,13 +323,13 @@ object RekordCast {
 
     private fun dispatch(detail: JSONObject) {
         val view = RekordMediaBridge.webView ?: return
-        // JSONObject produce un letterale JS valido: si incolla cosi' com'e'.
+        // JSONObject produces a valid JS literal: it is pasted in as is.
         val script = "window.dispatchEvent(new CustomEvent('$EVENT',{detail:$detail}))"
         main.post {
             try {
                 view.evaluateJavascript(script, null)
             } catch (e: Exception) {
-                Logger.warn("RekordCast: evento non consegnato: ${e.message}")
+                Logger.warn("RekordCast: event not delivered: ${e.message}")
             }
         }
     }
@@ -340,7 +340,7 @@ object RekordCast {
         dispatch(o)
     }
 
-    // ── Comandi dalla pagina (sempre sul thread principale) ───────────────
+    // ── Commands from the page (always on the main thread) ────────────────
 
     fun bindActivity(a: Activity?) {
         activity = a?.let { WeakReference(it) }
@@ -351,9 +351,9 @@ object RekordCast {
     }
 
     /**
-     * Selettore dei dispositivi di androidx.mediarouter. Scegliere un dispositivo
-     * seleziona la rotta, e il Cast SDK avvia la sessione da solo; chiudere il
-     * selettore senza scegliere si racconta alla pagina come «cancelled».
+     * androidx.mediarouter device picker. Choosing a device selects the route,
+     * and the Cast SDK starts the session on its own; closing the picker without
+     * choosing is reported to the page as "cancelled".
      */
     fun requestSession() {
         val ctx = castContext
@@ -373,8 +373,8 @@ object RekordCast {
             dialog.routeSelector = selector
             dialog.setOnDismissListener {
                 chooser = null
-                // La scelta di una rotta chiude il selettore e la sessione parte un
-                // attimo dopo: si guarda poco piu' in la' se e' partita davvero.
+                // Choosing a route closes the picker and the session starts a moment
+                // later: check a little afterwards whether it really started.
                 main.postDelayed({
                     val router = appContext?.let { MediaRouter.getInstance(it) }
                     val route = router?.selectedRoute
@@ -388,7 +388,7 @@ object RekordCast {
             chooser = dialog
             dialog.show()
         } catch (e: Exception) {
-            Logger.warn("RekordCast: selettore non disponibile: ${e.message}")
+            Logger.warn("RekordCast: picker unavailable: ${e.message}")
             chooser = null
             dispatch(JSONObject().put("type", "session").put("event", "unavailable"))
         }
@@ -398,7 +398,7 @@ object RekordCast {
         try {
             castContext?.sessionManager?.endCurrentSession(stopReceiver)
         } catch (e: Exception) {
-            Logger.warn("RekordCast: chiusura sessione: ${e.message}")
+            Logger.warn("RekordCast: ending session: ${e.message}")
         }
     }
 
@@ -471,7 +471,7 @@ object RekordCast {
         client?.seek(MediaSeekOptions.Builder().setPosition(ms).build())
     }
 
-    /** Volume del dispositivo (0..1), per i tasti volume e la notifica. */
+    /** Device volume (0..1), for the volume keys and the notification. */
     fun volume(): Double = try {
         session?.volume ?: 0.0
     } catch (e: Exception) {
@@ -482,7 +482,7 @@ object RekordCast {
         try {
             session?.volume = level.coerceIn(0.0, 1.0)
         } catch (e: Exception) {
-            Logger.warn("RekordCast: volume non impostato: ${e.message}")
+            Logger.warn("RekordCast: volume not set: ${e.message}")
         }
     }
 
@@ -493,9 +493,9 @@ object RekordCast {
 }
 
 /**
- * Superficie esposta alla pagina come `window.RekordCastNative` (nome cercato da
- * `src/lib/cast/androidCast.ts`). Come per [RekordMedia], la WebView carica solo
- * il nostro bundle.
+ * Surface exposed to the page as `window.RekordCastNative` (the name looked up by
+ * `src/lib/cast/androidCast.ts`). As with [RekordMedia], the WebView loads only
+ * our bundle.
  */
 class RekordCastJs {
     private val main = Handler(Looper.getMainLooper())

@@ -37,7 +37,7 @@ export function prefersReducedMotion(): boolean {
   return reducedMotionMqRef()?.matches === true;
 }
 
-/** Touch o layout compatto: stesso tier su mobile WebView e browser stretto. */
+/** Touch or compact layout: same tier on mobile WebView and narrow browser. */
 export function isCompactRenderTarget(): boolean {
   if (typeof window !== "undefined" && window.innerWidth < BREAKPOINTS.sm) {
     return true;
@@ -62,7 +62,7 @@ export function vizFrameCapMs(): number {
 }
 
 /**
- * Visualizer Ascolta while playing (paused: the caller draws one frame and
+ * Listen visualizer while playing (paused: the caller draws one frame and
  * stops). Capped at 30 fps, 24 fps on WebKitGTK, lower on compact targets.
  */
 export function vizLoopCadence(opts: {

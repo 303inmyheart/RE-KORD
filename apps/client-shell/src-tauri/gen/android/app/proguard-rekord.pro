@@ -1,8 +1,8 @@
-# I metodi del ponte con la WebView li chiama solo JavaScript: R8 non vede nessuna
-# chiamata e in release li butterebbe via, lasciando la notifica senza dati.
+# The WebView bridge methods are called only from JavaScript: R8 sees no call
+# sites and would strip them in release, leaving the notification without data.
 -keepclasseswithmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
 
-# Google Cast: l'OptionsProvider lo istanzia Play Services per nome, dal manifest.
+# Google Cast: Play Services instantiates the OptionsProvider by name, from the manifest.
 -keep class app.rekord.client.RekordCastOptionsProvider { *; }

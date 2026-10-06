@@ -69,7 +69,7 @@
   const canWrite = $derived(studioAccess.canWrite);
   const writeTitle = $derived(studioAccess.reason ?? undefined);
 
-  /** Auto-rileva tipo link solo quando cambia l’URL (non sovrascrive scelta manuale). */
+  /** Auto-detect the link type only when the URL changes (does not override a manual choice). */
   $effect(() => {
     const url = dl.url.trim();
     if (url === lastDetectedUrl) return;

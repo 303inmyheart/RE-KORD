@@ -348,5 +348,10 @@
   "hub.kind.account": "Konto",
   "hub.kind.download": "Download",
   "hub.kind.settings": "Einstellungen",
-  "hub.kind.restore": "Wiederherstellung"
+  "hub.kind.restore": "Wiederherstellung",
+  "network.remote.errorCode.cloudflared_not_found": "cloudflared nicht gefunden: Installiere RE-KORD Server neu oder setze REKORD_CLOUDFLARED_BIN.",
+  "network.remote.errorCode.tunnel_start_timeout": "Tunnel-Start abgelaufen: cloudflared hat keine öffentliche URL geliefert.",
+  "network.remote.errorCode.tunnel_exited_early": "Der Tunnel wurde beendet, bevor er bereit war.",
+  "network.remote.errorCode.tunnel_exited": "Der Tunnel wurde beendet.",
+  "network.remote.errorCode.tunnel_failed": "Der Tunnel konnte nicht gestartet werden."
 }

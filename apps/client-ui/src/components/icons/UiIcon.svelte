@@ -1,5 +1,5 @@
 <script lang="ts">
-  /** Icone Material-like allineate a RekordUiIcons del vecchio app. */
+  /** Material-like icons aligned with the old app's RekordUiIcons. */
   let {
     name,
     class: className = "",

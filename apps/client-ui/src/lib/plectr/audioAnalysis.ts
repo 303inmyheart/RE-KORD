@@ -13,7 +13,7 @@ const HOP_SIZE = 1024;
 const FRAME_SIZE = 2048;
 const SECTION_SECONDS = 8;
 const SNAP_SUBDIVISION = 4;
-/** Motivi dedicati per Easy / Normal / Hard. */
+/** Dedicated patterns for Easy / Normal / Hard. */
 const MOTIFS = {
   easy: [
     [0, 1, 2, 3, 2, 1, 0, 2],
@@ -35,8 +35,8 @@ const MOTIFS = {
   ],
 };
 
-/** Sorgente audio per l'analisi: AudioBuffer la soddisfa strutturalmente,
- *  e un payload ricostruito in un Worker (canali trasferiti) pure. */
+/** Audio source for analysis: AudioBuffer satisfies it structurally,
+ *  and so does a payload rebuilt in a Worker (transferred channels). */
 export interface AnalyzableAudio {
   length: number;
   numberOfChannels: number;

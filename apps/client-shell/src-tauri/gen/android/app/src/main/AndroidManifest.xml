@@ -4,24 +4,24 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
-      La musica deve continuare a schermo spento: serve un servizio in foreground
-      di tipo mediaPlayback (da Android 14 il tipo va anche chiesto come permesso)
-      e, da Android 13, il permesso per mostrare la notifica.
+      Music must keep playing with the screen off: this needs a foreground service
+      of type mediaPlayback (since Android 14 the type must also be requested as a
+      permission) and, since Android 13, the permission to show the notification.
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!--
-      Comandi dalla notifica / dalle cuffie a schermo spento: un wake lock di pochi
-      secondi tiene sveglia la CPU finche' la WebView non ha ricevuto il comando.
+      Commands from the notification / headphones with the screen off: a wake lock of
+      a few seconds keeps the CPU awake until the WebView has received the command.
     -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!--
-      Fotocamera per leggere il QR dell'hub (plugin barcode-scanner). Il plugin la
-      dichiara gia', ma insieme a una feature camera.any *obbligatoria*: per il
-      Play Store un TV o un tablet senza fotocamera non potrebbe installare l'app.
-      Qui la si rende facoltativa (l'indirizzo si puo' sempre scrivere a mano).
+      Camera for scanning the hub's QR code (barcode-scanner plugin). The plugin
+      already declares it, but together with a *required* camera.any feature: on the
+      Play Store a TV or tablet without a camera could not install the app.
+      Here it is made optional (the address can always be typed by hand).
     -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature
@@ -29,17 +29,17 @@
         android:required="false"
         tools:replace="android:required" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <!-- Su TV non c'e' touchscreen: senza questa riga il Play Store la esclude. -->
+    <!-- TVs have no touchscreen: without this line the Play Store excludes them. -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
     <!--
-      allowBackup=false: il backup automatico di Android copierebbe localStorage
-      della WebView (indirizzo dell'hub, account scelto) su un altro telefono, dove
-      quell'hub magari non esiste. I dati veri stanno sull'hub e hanno il loro backup.
-      banner: icona del launcher Android TV (LEANBACK_LAUNCHER la richiede).
+      allowBackup=false: Android's automatic backup would copy the WebView's
+      localStorage (hub address, chosen account) to another phone, where that hub
+      may not exist. The real data lives on the hub and has its own backup.
+      banner: Android TV launcher icon (LEANBACK_LAUNCHER requires it).
     -->
     <application
         android:allowBackup="false"
@@ -49,8 +49,8 @@
         android:theme="@style/Theme.rekord_client"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
         <!--
-          Google Cast (RekordCast.kt): Play Services legge da qui la classe con le
-          opzioni (Default Media Receiver, notifica del Cast SDK spenta).
+          Google Cast (RekordCast.kt): Play Services reads from here the class with
+          the options (Default Media Receiver, Cast SDK notification disabled).
         -->
         <meta-data
             android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
@@ -70,8 +70,8 @@
         </activity>
 
         <!--
-          Notifica media e comandi: il filtro MEDIA_BUTTON serve sia al tasto sulle
-          cuffie sia ai pulsanti della notifica, che passano da MediaButtonReceiver.
+          Media notification and controls: the MEDIA_BUTTON filter serves both the
+          headphone button and the notification buttons, which go through MediaButtonReceiver.
         -->
         <service
             android:name=".RekordMediaService"

@@ -146,7 +146,7 @@
         lyrics: draftLyrics,
       });
       const prev = { ...loadUserPrefs().trackMoods };
-      // Chiave stabile = rel_path (parity legacy / sopravvive al re-scan).
+      // Stable key = rel_path (legacy parity / survives a re-scan).
       delete prev[String(tr.id)];
       const trackMoods = { ...prev, [tr.rel_path]: draftMoods };
       patchUserPrefs({ trackMoods });
@@ -1130,8 +1130,8 @@
     line-height: var(--rk-lh);
   }
 
-  /* Il testo di una canzone si legge meglio largo — ma solo dove il dialogo è un
-     pannello: sul telefono è un foglio a tutta larghezza e non va ristretto. */
+  /* Song lyrics read better wide — but only where the dialog is a
+     panel: on the phone it is a full-width sheet and must not be narrowed. */
   @media (min-width: 1000px) {
     :global(.meta-edit-lyrics-dialog) {
       max-width: min(42rem, 96vw);

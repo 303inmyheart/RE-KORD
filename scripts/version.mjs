@@ -1,22 +1,22 @@
 #!/usr/bin/env node
 /**
- * Una sola versione per tutto RE-KORD next.
+ * A single version for all of RE-KORD next.
  *
- *   node scripts/version.mjs sync 5.2.0   scrive 5.2.0 ovunque
- *   node scripts/version.mjs sync         riallinea tutto alla versione di package.json
- *   node scripts/version.mjs check 5.2.0  verifica che ovunque ci sia 5.2.0
- *   node scripts/version.mjs check        verifica che tutto combaci con package.json
+ *   node scripts/version.mjs sync 5.2.0   writes 5.2.0 everywhere
+ *   node scripts/version.mjs sync         realigns everything to the package.json version
+ *   node scripts/version.mjs check 5.2.0  checks that 5.2.0 is everywhere
+ *   node scripts/version.mjs check        checks that everything matches package.json
  *
- * Dove vive la versione:
- *   - package.json (radice, apps/*, packages/*)
- *   - Cargo.toml `[workspace.package] version` (i crate usano version.workspace)
- *   - Cargo.lock, voci dei crate del workspace (altrimenti `cargo --locked` fallisce)
- *   - apps/client-shell/src-tauri/tauri.conf.json `version`, se presente (di
- *     norma assente: Tauri la prende da Cargo.toml)
+ * Where the version lives:
+ *   - package.json (root, apps/*, packages/*)
+ *   - Cargo.toml `[workspace.package] version` (the crates use version.workspace)
+ *   - Cargo.lock, entries of the workspace crates (otherwise `cargo --locked` fails)
+ *   - apps/client-shell/src-tauri/tauri.conf.json `version`, if present (normally
+ *     absent: Tauri takes it from Cargo.toml)
  *   - apps/client-ui/src/lib/version.ts `APP_VERSION`
  *
- * `check` esce con codice 1 alla prima discrepanza: la CI lo usa (next.yml).
- * Niente dipendenze: gira con il solo node.
+ * `check` exits with code 1 on any mismatch: CI uses it (next.yml).
+ * No dependencies: runs with plain node.
  */
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -41,7 +41,7 @@ function packageJsonFiles() {
   return out;
 }
 
-/** Nomi dei crate del workspace, letti dai loro Cargo.toml. */
+/** Names of the workspace crates, read from their Cargo.toml files. */
 function workspaceCrates() {
   const cargo = read(path.join(ROOT, "Cargo.toml"));
   const members = /members\s*=\s*\[([\s\S]*?)\]/.exec(cargo)?.[1] ?? "";
@@ -56,8 +56,8 @@ function workspaceCrates() {
 }
 
 /**
- * Ogni "luogo" sa leggere la propria versione e scriverne una nuova
- * (preservando il resto del file byte per byte).
+ * Each "location" knows how to read its own version and write a new one
+ * (preserving the rest of the file byte for byte).
  */
 function locations() {
   const list = [];
@@ -99,7 +99,7 @@ function locations() {
     list.push({
       file: tauriConf,
       label: "tauri.conf.json",
-      // Assente = eredita da Cargo.toml: va bene, non c'e' niente da allineare.
+      // Absent = inherited from Cargo.toml: that's fine, there is nothing to align.
       optional: true,
       get: (src) => {
         const v = JSON.parse(src).version;
@@ -121,7 +121,7 @@ function locations() {
 }
 
 function usage(code = 2) {
-  console.error("Uso: node scripts/version.mjs <sync|check> [x.y.z]");
+  console.error("Usage: node scripts/version.mjs <sync|check> [x.y.z]");
   process.exit(code);
 }
 
@@ -131,7 +131,7 @@ if (cmd !== "sync" && cmd !== "check") usage();
 const rootVersion = JSON.parse(read(path.join(ROOT, "package.json"))).version;
 const target = wanted ?? rootVersion;
 if (!SEMVER.test(target)) {
-  console.error(`Versione non valida: ${target}`);
+  console.error(`Invalid version: ${target}`);
   process.exit(2);
 }
 
@@ -142,7 +142,7 @@ if (cmd === "check") {
   for (const loc of locs) {
     if (!existsSync(loc.file)) {
       if (!loc.optional) {
-        console.error(`MANCA  ${loc.label}`);
+        console.error(`MISSING ${loc.label}`);
         bad++;
       }
       continue;
@@ -150,27 +150,27 @@ if (cmd === "check") {
     const found = loc.get(read(loc.file));
     if (found == null) {
       if (!loc.optional) {
-        console.error(`??     ${loc.label}: versione non trovata`);
+        console.error(`??      ${loc.label}: version not found`);
         bad++;
       }
       continue;
     }
     if (found !== target) {
-      console.error(`DIVERSA ${loc.label}: ${found} (attesa ${target})`);
+      console.error(`MISMATCH ${loc.label}: ${found} (expected ${target})`);
       bad++;
     } else {
-      console.log(`ok     ${loc.label}: ${found}`);
+      console.log(`ok      ${loc.label}: ${found}`);
     }
   }
   if (bad) {
-    console.error(`\n${bad} discrepanze. Allinea con: node scripts/version.mjs sync ${target}`);
+    console.error(`\n${bad} mismatch(es). Align with: node scripts/version.mjs sync ${target}`);
     process.exit(1);
   }
-  console.log(`\nTutto a ${target}.`);
+  console.log(`\nEverything at ${target}.`);
   process.exit(0);
 }
 
-// sync: per file, cosi' Cargo.lock si legge e scrive una volta sola.
+// sync: grouped by file, so Cargo.lock is read and written only once.
 const byFile = new Map();
 for (const loc of locs) {
   if (!existsSync(loc.file)) continue;
@@ -183,7 +183,7 @@ for (const [file, group] of byFile) {
   for (const loc of group) {
     const found = loc.get(src);
     if (found == null) {
-      if (!loc.optional) console.warn(`attenzione: ${loc.label}: versione non trovata, salto`);
+      if (!loc.optional) console.warn(`warning: ${loc.label}: version not found, skipping`);
       continue;
     }
     src = loc.set(src, target);
@@ -191,4 +191,4 @@ for (const [file, group] of byFile) {
   }
   if (src !== before) writeFileSync(file, src);
 }
-console.log(`\nVersione ${target} scritta. Controllo: node scripts/version.mjs check`);
+console.log(`\nVersion ${target} written. Check: node scripts/version.mjs check`);

@@ -56,9 +56,7 @@ fn resolve_client_ui_dir(args: &Args) -> Option<PathBuf> {
     if let Some(dir) = args.client_ui.clone().filter(|p| p.is_dir()) {
         return Some(dir);
     }
-    let mut candidates = vec![
-        PathBuf::from("apps/client-ui/dist"),
-    ];
+    let mut candidates = vec![PathBuf::from("apps/client-ui/dist")];
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join("client-ui"));
@@ -72,9 +70,7 @@ fn resolve_admin_ui_dir(args: &Args) -> Option<PathBuf> {
     if let Some(dir) = args.admin_ui.clone().filter(|p| p.is_dir()) {
         return Some(dir);
     }
-    let mut candidates = vec![
-        PathBuf::from("apps/server-ui/dist"),
-    ];
+    let mut candidates = vec![PathBuf::from("apps/server-ui/dist")];
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join("admin-ui"));

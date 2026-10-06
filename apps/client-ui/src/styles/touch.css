@@ -1,14 +1,14 @@
-/* Strato touch: quello che cambia in base al puntatore, non alla larghezza.
-   Un tablet da 1200px col dito vuole bersagli grossi, un portatile da 800px col
-   mouse no: la discriminante è `pointer: coarse`, non il breakpoint. Le misure
-   stanno sui token --rk-tap-min (controlli singoli) e --rk-tap-row (icone dentro
-   le righe di lista, dove 44px costerebbe una riga di densità). */
+/* Touch layer: what changes based on the pointer, not the width.
+   A 1200px tablet used by finger wants big targets, an 800px laptop with a
+   mouse does not: the deciding factor is `pointer: coarse`, not the breakpoint. The sizes
+   live in the tokens --rk-tap-min (single controls) and --rk-tap-row (icons inside
+   list rows, where 44px would cost a row of density). */
 
 @media (pointer: coarse) {
-  /* Niente attesa di 300ms sul tap e niente lampo grigio: lo stato premuto lo
-     danno già i controlli. Le superfici con un gesto proprio (barra di posizione,
-     maniglia di riordino, riga del player) dichiarano il loro touch-action su una
-     classe e vincono su questa regola, che pesca per tipo di elemento. */
+  /* No 300ms tap delay and no grey flash: the controls already provide the
+     pressed state. Surfaces with their own gesture (position bar,
+     reorder handle, player row) declare their touch-action on a
+     class and win over this rule, which matches by element type. */
   button,
   a,
   summary,
@@ -22,8 +22,8 @@
     -webkit-tap-highlight-color: transparent;
   }
 
-  /* Tab di sezione, segmentati di ordinamento e filtri, voci di menu: stanno in
-     fila stretta e sono i bersagli su cui si sbaglia di più. */
+  /* Section tabs, sort and filter segmented controls, menu items: they sit in
+     a tight row and are the targets people miss most. */
   .section-nav-tab,
   .segmented--joined button,
   .track-row__overflow-item {
@@ -36,9 +36,9 @@
     min-height: var(--rk-tap-row);
   }
 
-  /* Chip dei generi nell'hero album: due bersagli attaccati, e quello piccolo
-     toglie il genere. Il chip si alza e le sue due metà lo riempiono, così la ×
-     non si prende per il nome e viceversa. */
+  /* Genre chips in the album hero: two adjacent targets, and the small one
+     removes the genre. The chip grows taller and its two halves fill it, so the ×
+     is not hit instead of the name and vice versa. */
   .album-hero__genre-chip {
     align-items: stretch;
     min-height: var(--rk-tap-row);
@@ -50,8 +50,8 @@
     min-height: var(--rk-tap-row);
   }
 
-  /* Preferito, modifica metadati ed escludi dallo shuffle, nell'hero di Ascolta:
-     tre bersagli attaccati da 28px, e uno dei tre toglie il brano dallo shuffle. */
+  /* Favourite, edit metadata and exclude from shuffle, in the Listen hero:
+     three adjacent 28px targets, and one of the three removes the track from shuffle. */
   .listen-stage__eyebrow-row .listen-stage__fav,
   .listen-stage__eyebrow-actions .track-row__ic {
     width: var(--rk-tap-row);
@@ -60,10 +60,10 @@
     min-height: var(--rk-tap-row);
   }
 
-  /* Il «?» della modalità download: 23px erano un bersaglio da mouse, e col dito è
-     l'unico modo per sapere che link va in quale modalità. Il tondo resta tondo,
-     cresce la sua area. Accanto, la freccia per salire di cartella: si tocca a ogni
-     passo mentre si cerca dove scaricare. */
+  /* The download mode «?»: 23px was a mouse target, and by finger it is
+     the only way to know which link goes in which mode. The circle stays a circle,
+     its area grows. Next to it, the arrow to go up a folder: it is tapped at every
+     step while looking for where to download. */
   .tools-dl-mode__help,
   .tools-dl-dest__up-icon {
     width: var(--rk-tap-row);

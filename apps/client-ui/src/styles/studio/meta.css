@@ -1,4 +1,4 @@
-/* Metadati: gruppi di azioni, campi opzionali e riepilogo entità. */
+/* Metadata: action groups, optional fields and entity summary. */
 .tools-meta .studio-meta-split {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -94,7 +94,7 @@
   border-top: 1px dashed var(--rk-line);
 }
 
-/* Opzionali: a tutta larghezza sotto le essenziali, con due schede. */
+/* Optional: full width below the essentials, with two cards. */
 .studio-meta-optional {
   display: flex;
   flex-direction: column;
@@ -242,7 +242,7 @@
   }
 }
 
-/* —— Curiosità —— */
+/* —— Curiosità (trivia) —— */
 .studio-einfo {
   display: flex;
   flex-direction: column;

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Scarica ffmpeg (build statica LGPL di https://github.com/BtbN/FFmpeg-Builds) a una
-# release fissata, la verifica e ne estrae solo l'eseguibile `ffmpeg` (piu' la
-# licenza): all'hub serve per la transcodifica verso Chromecast / Google Home.
+# Downloads ffmpeg (LGPL static build from https://github.com/BtbN/FFmpeg-Builds) at a
+# pinned release, verifies it and extracts only the `ffmpeg` executable (plus the
+# license): the hub needs it to transcode for Chromecast / Google Home.
 #
-#   scripts/fetch-ffmpeg.sh [piattaforma] [cartella]
-#     piattaforma: linux-x64 | linux-arm64 | windows-x64
-#                  (predefinita: quella di questa macchina; su macOS usare Homebrew)
-#     cartella:    dove mettere l'eseguibile (predefinita: release/bin/<piattaforma>)
+#   scripts/fetch-ffmpeg.sh [platform] [directory]
+#     platform:    linux-x64 | linux-arm64 | windows-x64
+#                  (default: this machine's; on macOS use Homebrew)
+#     directory:   where to put the executable (default: release/bin/<platform>)
 #
-#   FFMPEG_TAG=autobuild-AAAA-MM-GG-HH-MM FFMPEG_BUILD=n8.1.3-14-g330caae0c1 \
-#     scripts/fetch-ffmpeg.sh                  altra build
+#   FFMPEG_TAG=autobuild-YYYY-MM-DD-HH-MM FFMPEG_BUILD=n8.1.3-14-g330caae0c1 \
+#     scripts/fetch-ffmpeg.sh                  another build
 #
-# La build LGPL basta: decodifica FLAC/OGG/Opus/WAV e codifica MP3 (libmp3lame)
-# e AAC (encoder nativo). Il checksum: vedi scripts/lib/fetch-common.sh; BtbN
-# pubblica `checksums.sha256` e il campo `digest` di ogni asset nell'API GitHub.
+# The LGPL build is enough: it decodes FLAC/OGG/Opus/WAV and encodes MP3 (libmp3lame)
+# and AAC (native encoder). Checksums: see scripts/lib/fetch-common.sh; BtbN
+# publishes `checksums.sha256` and each asset's `digest` field in the GitHub API.
 set -euo pipefail
 source "$(dirname "$0")/lib/fetch-common.sh"
 
-# Release fissata: aggiornarla e' una modifica voluta (e va provata).
+# Pinned release: bumping it is a deliberate change (and must be tested).
 FFMPEG_TAG="${FFMPEG_TAG:-autobuild-2026-10-04-20-51}"
 FFMPEG_BUILD="${FFMPEG_BUILD:-n8.1.3-14-g330caae0c1}"
 FFMPEG_SERIES="${FFMPEG_SERIES:-8.1}"
@@ -28,8 +28,8 @@ case "$PLATFORM" in
   linux-x64) ASSET="ffmpeg-$FFMPEG_BUILD-linux64-lgpl-$FFMPEG_SERIES.tar.xz"; OUT=ffmpeg ;;
   linux-arm64) ASSET="ffmpeg-$FFMPEG_BUILD-linuxarm64-lgpl-$FFMPEG_SERIES.tar.xz"; OUT=ffmpeg ;;
   windows-x64) ASSET="ffmpeg-$FFMPEG_BUILD-win64-lgpl-$FFMPEG_SERIES.zip"; OUT=ffmpeg.exe ;;
-  macos-*) rk_fetch_die "nessuna build statica ufficiale per macOS: brew install ffmpeg" ;;
-  *) rk_fetch_die "piattaforma non riconosciuta: $PLATFORM" ;;
+  macos-*) rk_fetch_die "no official static build for macOS: brew install ffmpeg" ;;
+  *) rk_fetch_die "unrecognized platform: $PLATFORM" ;;
 esac
 
 rk_need curl awk
@@ -59,11 +59,11 @@ case "$ASSET" in
   *) tar -xJf "$TMP/$ASSET" -C "$TMP/x" ;;
 esac
 BIN="$(find "$TMP/x" -type f -path "*/bin/$OUT" | head -n1)"
-[[ -n "$BIN" ]] || rk_fetch_die "$OUT non trovato dentro $ASSET"
+[[ -n "$BIN" ]] || rk_fetch_die "$OUT not found inside $ASSET"
 LICENSE="$(find "$TMP/x" -maxdepth 2 -type f -name 'LICENSE*' | head -n1)"
 
 mkdir -p "$DEST"
 install -m 0755 "$BIN" "$DEST/$OUT"
 [[ -n "$LICENSE" ]] && install -m 0644 "$LICENSE" "$DEST/ffmpeg-LICENSE.txt"
 echo "$FFMPEG_BUILD ($FFMPEG_TAG, LGPL)" > "$DEST/ffmpeg.version"
-echo "  fatto: $DEST/$OUT"
+echo "  done: $DEST/$OUT"

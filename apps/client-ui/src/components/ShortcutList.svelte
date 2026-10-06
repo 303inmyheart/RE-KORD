@@ -106,8 +106,8 @@
     font-size: var(--rk-fs-sm);
   }
 
-  /* Griglia a due colonne: niente bordo destro sulla seconda colonna e riga di
-     separazione tranne che sull'ultima coppia. */
+  /* Two-column grid: no right border on the second column and a separator
+     line except on the last pair. */
   .shortcut-row:nth-child(2n) {
     border-right: none;
   }

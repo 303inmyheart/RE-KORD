@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Costruisce l'APK del client RE-KORD per Android.
+# Builds the RE-KORD client APK for Android.
 #
-#   ./scripts/android-build.sh                 APK debug universale, firmato con la
-#                                              chiave di debug: si installa e basta
-#   ./scripts/android-build.sh --release        APK di release (serve keystore.properties)
-#   ./scripts/android-build.sh --split          un APK per architettura, piu' leggero
-#   ./scripts/android-build.sh --aab            bundle per il Play Store
-#   ./scripts/android-build.sh --install        manda l'APK al telefono collegato
+#   ./scripts/android-build.sh                 universal debug APK, signed with the
+#                                              debug key: just install it
+#   ./scripts/android-build.sh --release        release APK (needs keystore.properties)
+#   ./scripts/android-build.sh --split          one APK per architecture, smaller
+#   ./scripts/android-build.sh --aab            bundle for the Play Store
+#   ./scripts/android-build.sh --install        sends the APK to the connected phone
 #   ./scripts/android-build.sh --targets aarch64,x86_64
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,8 +17,8 @@ PROFILE=debug
 FORMAT=--apk
 SPLIT=0
 INSTALL=0
-# Solo arm64 per difetto: e' l'architettura di ogni telefono in circolazione, e ogni
-# architettura in piu' e' una compilazione Rust in piu'.
+# arm64 only by default: it is the architecture of every phone in use today, and every
+# extra architecture is one more Rust compilation.
 TARGETS=aarch64
 
 while (( $# )); do
@@ -31,10 +31,10 @@ while (( $# )); do
     --install) INSTALL=1 ;;
     --targets) shift; TARGETS="${1:-}" ;;
     --targets=*) TARGETS="${1#*=}" ;;
-    # L'aiuto e' il commento in testa al file: si stampa finche' le righe iniziano
-    # con #, cosi' non va risincronizzato a mano quando il blocco cresce.
+    # The help is the comment at the top of the file: it is printed as long as lines
+    # start with #, so it needs no manual resync when the block grows.
     -h|--help) awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
-    *) rk_die "Opzione non riconosciuta: $1 (--help per l'elenco)" ;;
+    *) rk_die "Unrecognized option: $1 (--help for the list)" ;;
   esac
   shift
 done
@@ -47,23 +47,23 @@ for t in "${TARGET_LIST[@]}"; do
     armv7|arm) RUST_TARGETS+=(armv7-linux-androideabi) ;;
     i686|x86) RUST_TARGETS+=(i686-linux-android) ;;
     x86_64) RUST_TARGETS+=(x86_64-linux-android) ;;
-    *) rk_die "Architettura non riconosciuta: $t (aarch64, armv7, i686, x86_64)" ;;
+    *) rk_die "Unrecognized architecture: $t (aarch64, armv7, i686, x86_64)" ;;
   esac
 done
 
 rk_android_preflight "${RUST_TARGETS[@]}"
 
 ANDROID_DIR="apps/client-shell/src-tauri/gen/android"
-[[ -d "$ANDROID_DIR" ]] || rk_die "Manca $ANDROID_DIR: lancia prima ./scripts/android-init.sh"
+[[ -d "$ANDROID_DIR" ]] || rk_die "Missing $ANDROID_DIR: run ./scripts/android-init.sh first"
 
 KEYSTORE="$ANDROID_DIR/keystore.properties"
 if [[ "$PROFILE" == release && ! -f "$KEYSTORE" ]]; then
   cat >&2 <<EOF
 
-Nota: manca $KEYSTORE, l'APK di release si firma con la chiave di debug
-dell'SDK. Si installa subito, ma non va sul Play Store e il passaggio poi alla
-chiave vera richiede di disinstallare l'app. Per creare una chiave tua (una volta
-sola, e conservala: senza la stessa chiave gli aggiornamenti non si installano sopra):
+Note: $KEYSTORE is missing, so the release APK is signed with the SDK debug
+key. It installs right away, but it cannot go on the Play Store, and switching to
+the real key later requires uninstalling the app. To create your own key (only
+once, and keep it safe: without the same key, updates will not install over it):
 
   keytool -genkey -v -keystore $ANDROID_DIR/rekord.jks \\
     -keyalg RSA -keysize 2048 -validity 10000 -alias rekord
@@ -75,16 +75,16 @@ sola, e conservala: senza la stessa chiave gli aggiornamenti non si installano s
   keyPassword=...
   PROPS
 
-Chiave e password restano fuori da git.
+The key and passwords stay out of git.
 
 EOF
 fi
 
-echo "==> Build client Android ($PROFILE, ${FORMAT#--}, ${TARGETS})"
+echo "==> Android client build ($PROFILE, ${FORMAT#--}, ${TARGETS})"
 MARKER="$(mktemp)"
 trap 'rm -f "$MARKER"' EXIT
 
-# La CLI di Tauri conosce solo --debug: la release e' il suo comportamento normale.
+# The Tauri CLI only knows --debug: release is its default behaviour.
 ARGS=(android build "$FORMAT")
 [[ "$PROFILE" == debug ]] && ARGS+=(--debug)
 for t in "${TARGET_LIST[@]}"; do
@@ -95,18 +95,18 @@ done
 pnpm --filter @rekord/client-shell exec tauri "${ARGS[@]}"
 
 echo
-echo "==> Pacchetti prodotti"
+echo "==> Packages produced"
 mapfile -t ARTIFACTS < <(find "$ANDROID_DIR/app/build/outputs" \
   -type f \( -name '*.apk' -o -name '*.aab' \) -newer "$MARKER" | sort)
-(( ${#ARTIFACTS[@]} )) || rk_die "Nessun pacchetto trovato sotto $ANDROID_DIR/app/build/outputs"
+(( ${#ARTIFACTS[@]} )) || rk_die "No package found under $ANDROID_DIR/app/build/outputs"
 for f in "${ARTIFACTS[@]}"; do
   echo "  $(du -h "$f" | cut -f1)  $f"
 done
 
 if (( INSTALL )); then
   APK="$(printf '%s\n' "${ARTIFACTS[@]}" | grep -m1 '\.apk$' || true)"
-  [[ -n "$APK" ]] || rk_die "--install vuole un APK, non un bundle .aab"
-  command -v adb >/dev/null 2>&1 || rk_die "adb non trovato: sdkmanager platform-tools"
-  echo "==> Installo su dispositivo"
+  [[ -n "$APK" ]] || rk_die "--install needs an APK, not an .aab bundle"
+  command -v adb >/dev/null 2>&1 || rk_die "adb not found: sdkmanager platform-tools"
+  echo "==> Installing on device"
   adb install -r "$APK"
 fi

@@ -39,7 +39,7 @@
     empty,
     kind = "artist" as "artist" | "album",
     dense = true,
-    /** Colonne più strette (parity old library-overview-cols--dashboard). */
+    /** Narrower columns (parity with old library-overview-cols--dashboard). */
     dashboard = false,
     onselect,
   }: {

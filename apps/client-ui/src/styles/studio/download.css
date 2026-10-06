@@ -1,4 +1,4 @@
-/* Download: scelta cartella, modalità, elenco release, log e barre di avanzamento. */
+/* Download: folder choice, mode, release list, log and progress bars. */
 .tools-dl-dest__head {
   display: flex;
   flex-wrap: wrap;
@@ -58,10 +58,10 @@
   display: flex;
   align-items: center;
   gap: var(--rk-space-xs);
-  /* Sotto i 720px la riga del percorso è una colonna, e lì una base flessibile
-     conta come altezza: con `1 1 14rem` la barra si allungava per 224px verso il
-     basso con dentro una freccia e due briciole. Da 720px in su, dove la riga è
-     davvero una riga, torna elastica (vedi il blocco min-width: 720px). */
+  /* Below 720px the path row is a column, and there a flex basis
+     counts as height: with `1 1 14rem` the bar stretched 224px
+     downwards with an arrow and two crumbs inside. From 720px up, where the row is
+     really a row, it becomes elastic again (see the min-width: 720px block). */
   flex: 0 0 auto;
   min-width: 0;
 }
@@ -121,7 +121,7 @@
   gap: var(--rk-space-xs);
   max-height: min(50vh, 16rem);
   overflow: auto;
-  /* In fondo alla lista il gesto si ferma qui e non scorre la pagina sotto. */
+  /* At the end of the list the gesture stops here and does not scroll the page below. */
   overscroll-behavior: contain;
   padding: var(--rk-space-xs);
   margin: 0;
@@ -356,11 +356,11 @@
   display: block;
 }
 
-/* Telefono: la guida diventa una nota in linea sotto i tre bottoni, e sposta il
-   resto in basso invece di sovrapporsi. Da popover era illeggibile: larga 350px e
-   ancorata al bordo destro di un «?» che sta a sinistra, finiva quasi tutta fuori
-   dallo schermo. E senza mouse non c'è nemmeno il passaggio del puntatore: si apre
-   toccando il «?», che prende il fuoco, e si chiude toccando altrove. */
+/* Phone: the help becomes an inline note below the three buttons, and pushes the
+   rest down instead of overlapping. As a popover it was unreadable: 350px wide and
+   anchored to the right edge of a «?» sitting on the left, it ended up almost entirely off
+   screen. And without a mouse there is no hover either: it opens
+   by tapping the «?», which takes focus, and closes by tapping elsewhere. */
 @media (max-width: 559.98px) {
   .tools-dl-mode {
     display: grid;
@@ -374,21 +374,21 @@
 
   .tools-dl-mode__seg {
     grid-area: seg;
-    /* Il minimo a tutta larghezza spingeva il «?» su una riga sua, orfano del
-       gruppo che spiega. */
+    /* The full-width minimum pushed the «?» onto a row of its own, orphaned from the
+       group it explains. */
     min-width: 0;
   }
 
-  /* Il contenitore sparisce come scatola: il bottone si mette accanto ai modi, la
-     nota va nella riga sotto. */
+  /* The container disappears as a box: the button sits next to the modes, the
+     note goes on the row below. */
   .tools-dl-mode__help-wrap {
     display: contents;
   }
 
   .tools-dl-mode__help {
     grid-area: help;
-    /* Il gruppo dei modi va a capo e diventa alto due righe: il «?» sta al suo
-       centro, non appeso all'angolo. */
+    /* The modes group wraps and becomes two rows tall: the «?» sits at its
+       centre, not hanging from the corner. */
     align-self: center;
   }
 
@@ -595,8 +595,8 @@
 .tools-dl-dest__pathrow {
   display: flex;
   flex-direction: column;
-  /* In colonna «centrare» stringe: la regola in testa al foglio allinea al centro e
-     la barra del percorso finiva larga quanto le sue briciole, a metà pannello. */
+  /* In a column «centre» shrinks: the rule at the top of the sheet centre-aligns and
+     the path bar ended up as wide as its crumbs, halfway across the panel. */
   align-items: stretch;
   gap: var(--rk-space-sm);
   min-width: 0;

@@ -294,9 +294,9 @@
     color: color-mix(in srgb, var(--rk-accent) 92%, var(--rk-ink) 8%);
   }
 
-  /* Telefono: la pillola del livello scende sotto il nome. Accanto ad esso, in
-     150px che restano fra avatar e bottone, mangiava metà riga e i nomi finivano
-     tutti in «TestAcc…» — e il nome è l'unica cosa che distingue una riga. */
+  /* Phone: the level pill drops below the name. Next to it, in the
+     150px left between avatar and button, it ate half the row and the names all
+     ended up as «TestAcc…» — and the name is the only thing that tells rows apart. */
   @media (max-width: 559.98px) {
     .account-row__text {
       grid-template-columns: minmax(0, 1fr);

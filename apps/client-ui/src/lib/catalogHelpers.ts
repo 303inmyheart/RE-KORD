@@ -33,7 +33,7 @@ export function indexHasArtist(
   return artists.some((a) => a.name === artistId);
 }
 
-/** Artista non in selezione, oppure almeno un album catalogo mancante nella libreria filtrata. */
+/** Artist not in the selection, or at least one catalog album missing from the filtered library. */
 export function catalogArtistNeedsAttention(
   ar: CatalogArtistEntry,
   libraryAlbums: Album[] | null | undefined,

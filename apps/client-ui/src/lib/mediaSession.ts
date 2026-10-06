@@ -112,9 +112,9 @@ function metadataKey(track: MediaSessionTrack): string {
 let lastMetadataKey: string | null = null;
 
 export function setMediaSessionMetadata(track: MediaSessionTrack | null): void {
-  // La miniatura da 256 e' quella che l'hub tiene in cache ed e' la taglia che
-  // la notifica Android mostra: chiedere l'originale vorrebbe dire scaricare
-  // qualche mega per un riquadro.
+  // The 256 thumbnail is the one the hub keeps in cache and it is the size
+  // the Android notification shows: asking for the original would mean downloading
+  // a few megabytes for a small square.
   const shade = trackCover(track, 256);
   pushNativeMetadata(track, shade ? absolute(shade) : "");
   if (!canUseMediaSession()) return;

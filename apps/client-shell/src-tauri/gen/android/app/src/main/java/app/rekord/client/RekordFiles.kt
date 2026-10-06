@@ -15,15 +15,15 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Salvataggio dei file che la pagina costruisce in memoria (backup dell'hub,
- * profilo, pacchetto tema): nella WebView di Android `<a download href="blob:">`
- * non fa niente, e il DownloadManager non sa leggere un URL `blob:`.
+ * Saves files that the page builds in memory (hub backup, profile, theme
+ * package): in the Android WebView `<a download href="blob:">` does nothing,
+ * and DownloadManager cannot read a `blob:` URL.
  *
- * La pagina (`src/lib/platform/downloads.ts`) manda i byte a pezzi in base64:
- * `begin(nome, mime)` → id, `append(id, pezzo)` ripetuto, `finish(id)` → dove e'
- * finito il file. Da Android 10 si scrive in Download tramite MediaStore, senza
- * permessi; prima, nella cartella Download privata dell'app (visibile dal file
- * manager sotto Android/data/app.rekord.client).
+ * The page (`src/lib/platform/downloads.ts`) sends the bytes in base64 chunks:
+ * `begin(name, mime)` → id, `append(id, chunk)` repeated, `finish(id)` → where the
+ * file ended up. Since Android 10 it writes to Download via MediaStore, with no
+ * permissions; before that, to the app's private Download folder (visible in the file
+ * manager under Android/data/app.rekord.client).
  */
 class RekordFiles(private val context: Context) {
     private class Pending(val stream: OutputStream, val uri: Uri?, val label: String)
@@ -58,7 +58,7 @@ class RekordFiles(private val context: Context) {
             open[id] = pending
             id
         } catch (e: Exception) {
-            Logger.warn("RekordFiles: impossibile creare $safe: ${e.message}")
+            Logger.warn("RekordFiles: cannot create $safe: ${e.message}")
             -1
         }
     }
@@ -70,13 +70,13 @@ class RekordFiles(private val context: Context) {
             pending.stream.write(Base64.decode(base64, Base64.DEFAULT))
             true
         } catch (e: Exception) {
-            Logger.warn("RekordFiles: scrittura fallita: ${e.message}")
+            Logger.warn("RekordFiles: write failed: ${e.message}")
             abort(id)
             false
         }
     }
 
-    /** Torna il percorso leggibile, o una stringa vuota se qualcosa e' andato storto. */
+    /** Returns the human-readable path, or an empty string if something went wrong. */
     @JavascriptInterface
     fun finish(id: Int): String {
         val pending = open.remove(id) ?: return ""
@@ -88,7 +88,7 @@ class RekordFiles(private val context: Context) {
             }
             pending.label
         } catch (e: Exception) {
-            Logger.warn("RekordFiles: chiusura fallita: ${e.message}")
+            Logger.warn("RekordFiles: close failed: ${e.message}")
             ""
         }
     }

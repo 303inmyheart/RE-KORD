@@ -18,17 +18,17 @@ class MainActivity : TauriActivity() {
   private var notificationAsked = false
 
   /**
-   * Il tasto Indietro lo gestiamo noi (vedi [installBackHandler]): quello di
-   * WryActivity, arrivato in fondo alla cronologia, chiude l'activity — e con lei
-   * la WebView in cui suona la musica.
+   * We handle the Back button ourselves (see [installBackHandler]): WryActivity's
+   * handler, once it reaches the end of the history, closes the activity — and with
+   * it the WebView where the music is playing.
    */
   override val handleBackNavigation: Boolean = false
 
   /**
-   * Registrato alla costruzione dell'activity, come vuole ComponentActivity: cosi'
-   * non serve inventare un codice di richiesta che potrebbe pestare i piedi ai
-   * plugin Tauri. La risposta non cambia niente: senza permesso la musica suona
-   * comunque, resta senza notifica.
+   * Registered when the activity is constructed, as ComponentActivity requires: this
+   * way there is no need to invent a request code that could clash with the Tauri
+   * plugins. The answer changes nothing: without the permission the music still
+   * plays, just without a notification.
    */
   private val askNotifications =
     registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -38,15 +38,15 @@ class MainActivity : TauriActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     RekordMediaBridge.attach(applicationContext)
-    // Google Cast: senza Play Services resta spento e la pagina non mostra il pulsante.
+    // Google Cast: without Play Services it stays off and the page doesn't show the button.
     RekordCast.init(applicationContext)
     RekordCast.bindActivity(this)
   }
 
   /**
-   * Telefono in verticale, come la 5.0 (l'interfaccia compatta e' pensata cosi');
-   * tablet e TV ruotano liberamente. Il confine e' quello di Android per i layout
-   * "sw600dp": sotto i 600 dp di lato corto e' un telefono.
+   * Phones in portrait, as in 5.0 (the compact UI is designed that way);
+   * tablets and TVs rotate freely. The threshold is Android's own for "sw600dp"
+   * layouts: below 600 dp on the short side it is a phone.
    */
   private fun applyOrientationPolicy() {
     val config = resources.configuration
@@ -64,7 +64,7 @@ class MainActivity : TauriActivity() {
     super.onWebViewCreate(webView)
     this.webView = webView
     RekordMediaBridge.webView = webView
-    // I nomi combaciano con quelli cercati da `src/lib/nativeMedia.ts` e
+    // The names match those looked up by `src/lib/nativeMedia.ts` and
     // `src/lib/platform/downloads.ts`.
     webView.addJavascriptInterface(RekordMedia(this), "RekordMediaNative")
     webView.addJavascriptInterface(RekordFiles(applicationContext), "RekordFilesNative")
@@ -74,8 +74,8 @@ class MainActivity : TauriActivity() {
   }
 
   /**
-   * In trasmissione i tasti volume regolano il Chromecast, non il telefono (a
-   * schermo spento ci pensa la MediaSession di [RekordMediaService]).
+   * While casting, the volume keys control the Chromecast, not the phone (with the
+   * screen off, [RekordMediaService]'s MediaSession takes care of it).
    */
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
     if (RekordCast.isConnected) {
@@ -93,10 +93,10 @@ class MainActivity : TauriActivity() {
   }
 
   /**
-   * Indietro: prima si risale la cronologia della pagina (il client spinge una
-   * voce per ogni vista e per ogni finestra aperta, cosi' Indietro chiude quella).
-   * In fondo alla cronologia l'app non si chiude: va in secondo piano come con il
-   * tasto Home, e la musica continua — il servizio media tiene vivo il processo.
+   * Back: first walk back through the page history (the client pushes an entry
+   * for every view and every open dialog, so Back closes it).
+   * At the end of the history the app doesn't close: it goes to the background as
+   * with the Home button, and the music keeps playing — the media service keeps the process alive.
    */
   private fun installBackHandler(view: WebView) {
     onBackPressedDispatcher.addCallback(
@@ -114,15 +114,15 @@ class MainActivity : TauriActivity() {
   }
 
   /**
-   * WryActivity mette in pausa la WebView quando l'app va in secondo piano, e la
-   * pausa della WebView spegne anche l'audio della pagina. Se c'e' un brano che
-   * suona la si riaccende subito: il servizio in foreground tiene vivo il
-   * processo, quindi la musica continua a schermo spento.
+   * WryActivity pauses the WebView when the app goes to the background, and pausing
+   * the WebView also silences the page's audio. If a track is playing, it is
+   * resumed immediately: the foreground service keeps the process alive, so the
+   * music keeps playing with the screen off.
    */
   override fun onPause() {
     super.onPause()
-    // In trasmissione la coda la manda avanti la pagina (fine brano sul receiver →
-    // brano successivo): anche in pausa deve restare sveglia per sentirlo.
+    // While casting, the page advances the queue (track ends on the receiver →
+    // next track): even when paused it must stay awake to notice.
     if (RekordMediaService.isPlaying || RekordCast.isConnected) webView?.onResume()
   }
 
@@ -138,11 +138,11 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onDestroy() {
-    // Qui si arriva solo quando l'activity muore davvero (rimossa dai recenti,
-    // processo recuperato dal sistema): Indietro la manda in secondo piano senza
-    // distruggerla. Con l'activity muore la WebView, e l'audio sta dentro la
-    // WebView: la notifica non deve sopravvivere a un brano che non suona piu'.
-    // Un cambio di configurazione non passa di qui (configChanges nel manifest).
+    // We only get here when the activity really dies (removed from recents,
+    // process reclaimed by the system): Back sends it to the background without
+    // destroying it. The WebView dies with the activity, and the audio lives inside
+    // the WebView: the notification must not outlive a track that no longer plays.
+    // A configuration change doesn't come through here (configChanges in the manifest).
     if (RekordMediaBridge.webView === webView) RekordMediaBridge.webView = null
     webView = null
     RekordCast.bindActivity(null)

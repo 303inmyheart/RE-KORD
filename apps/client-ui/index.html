@@ -2,11 +2,11 @@
 <html lang="it">
   <head>
     <meta charset="UTF-8" />
-    <!-- viewport-fit=cover: il layout arriva sotto tacca e barre di sistema, e i
-         bordi li recupera il CSS con env(safe-area-inset-*).
-         interactive-widget=overlays-content: la tastiera copre la pagina invece di
-         schiacciarla, così la cromatura fissa non salta; chi deve stare sopra la
-         tastiera usa --rk-app-vh (vedi lib/viewportMetrics.ts). -->
+    <!-- viewport-fit=cover: the layout extends under the notch and system bars, and
+         the CSS recovers the edges with env(safe-area-inset-*).
+         interactive-widget=overlays-content: the keyboard covers the page instead of
+         squeezing it, so the fixed chrome does not jump; whatever must stay above the
+         keyboard uses --rk-app-vh (see lib/viewportMetrics.ts). -->
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=overlays-content"
@@ -17,15 +17,15 @@
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
-    <!-- PWA: solo il client servito dall'hub la usa (vedi src/lib/platform/pwa.ts). -->
+    <!-- PWA: only the client served by the hub uses it (see src/lib/platform/pwa.ts). -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <!-- Nessun font da Google Fonts: l'hub e i gusci nativi devono funzionare
-         senza Internet (e la CSP di Tauri non lo permetterebbe). Inter e
-         JetBrains Mono arrivano col pacchetto (packages/ui/src/styles/fonts.css);
-         qui si anticipa solo Inter latino, l'unico file che serve al primo paint. -->
+    <!-- No Google Fonts: the hub and the native shells must work without
+         Internet (and Tauri's CSP would not allow it). Inter and
+         JetBrains Mono ship with the package (packages/ui/src/styles/fonts.css);
+         here we only preload Latin Inter, the only file needed for first paint. -->
     <link
       rel="preload"
       as="font"

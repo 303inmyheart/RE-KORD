@@ -144,7 +144,7 @@
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    /* Il rail è il bordo sinistro dello schermo: in orizzontale la tacca cade qui. */
+    /* The rail is the left edge of the screen: in landscape the notch falls here. */
     padding: 0 0 0 env(safe-area-inset-left, 0px);
     z-index: var(--rk-z-sidebar);
     overflow: hidden;

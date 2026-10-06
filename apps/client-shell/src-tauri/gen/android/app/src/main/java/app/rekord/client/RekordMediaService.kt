@@ -33,18 +33,18 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 /**
- * Tiene in vita la riproduzione quando l'app va in secondo piano e disegna la
- * notifica media di sistema.
+ * Keeps playback alive when the app goes to the background and draws the
+ * system media notification.
  *
- * Il suono resta nella WebView: questo servizio non ha un lettore. Fa due cose
- * che dalla pagina non si possono fare. Primo, essere un servizio in foreground,
- * cosi' Android non congela il processo a schermo spento. Secondo, tenere una
- * MediaSession: da lei nascono la notifica, i comandi in schermata di blocco e
- * il tasto sulle cuffie, che poi tornano alla pagina via [RekordMediaBridge].
+ * The sound stays in the WebView: this service has no player. It does two things
+ * the page cannot do. First, it is a foreground service, so Android doesn't
+ * freeze the process with the screen off. Second, it holds a MediaSession: the
+ * notification, the lock screen controls and the headphone button come from it,
+ * and then travel back to the page via [RekordMediaBridge].
  *
- * MediaSessionCompat e' deprecata in favore di Media3, ma Media3 chiede di
- * implementare un `Player`: qui il player e' un tag <audio> dall'altra parte di
- * un ponte JavaScript, quindi la sessione "a mano" resta la strada corta.
+ * MediaSessionCompat is deprecated in favour of Media3, but Media3 requires
+ * implementing a `Player`: here the player is an <audio> tag on the other side of
+ * a JavaScript bridge, so a hand-made session remains the shortest path.
  */
 @Suppress("DEPRECATION")
 class RekordMediaService : Service() {
@@ -60,18 +60,18 @@ class RekordMediaService : Service() {
     private lateinit var audioManager: AudioManager
     private var focusRequest: AudioFocusRequest? = null
     private var hasFocus = false
-    /** Messo in pausa da una perdita temporanea (telefonata, navigatore): si riparte. */
+    /** Paused by a transient loss (phone call, navigation app): resume afterwards. */
     private var resumeOnGain = false
     private var noisyRegistered = false
 
     /**
-     * Il fuoco audio di Android: chi suona lo chiede, e chi lo perde si fa da
-     * parte. La WebView non lo chiede da sola, quindi lo fa il servizio per lei e
-     * traduce i cambi in comandi per il lettore (stessi `rekord:media-action`
-     * della notifica).
+     * Android audio focus: whoever plays requests it, and whoever loses it steps
+     * aside. The WebView doesn't request it on its own, so the service does it on
+     * its behalf and translates the changes into player commands (the same
+     * `rekord:media-action` as the notification).
      *
-     * Dalla 8.0 l'abbassamento del volume (duck) lo fa il sistema da se' finche'
-     * `setWillPauseWhenDucked` resta false: qui non serve fare niente.
+     * Since 8.0 the system lowers the volume (ducking) by itself as long as
+     * `setWillPauseWhenDucked` stays false: nothing to do here.
      */
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
         main.post {
@@ -89,8 +89,8 @@ class RekordMediaService : Service() {
                 }
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> Unit
                 AudioManager.AUDIOFOCUS_LOSS -> {
-                    // Un'altra app di musica: si mette in pausa e non si riparte da
-                    // soli. Il fuoco si richiede al prossimo play.
+                    // Another music app: pause and don't resume on our own.
+                    // Focus is requested again on the next play.
                     resumeOnGain = false
                     if (isPlaying) RekordMediaBridge.send("pause")
                     abandonFocus()
@@ -99,7 +99,7 @@ class RekordMediaService : Service() {
         }
     }
 
-    /** Cuffie scollegate / Bluetooth spento: pausa subito, prima che suoni dall'altoparlante. */
+    /** Headphones unplugged / Bluetooth off: pause right away, before it plays through the speaker. */
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY && isPlaying) {
@@ -133,15 +133,15 @@ class RekordMediaService : Service() {
             isActive = true
         }
         running = this
-        // Il primo disegno lo fa onStartCommand.
+        // onStartCommand does the first render.
         applyCastTarget(rerender = false)
     }
 
     /**
-     * In trasmissione la musica esce dal Chromecast: niente fuoco audio (un
-     * navigatore o una telefonata non devono mettere in pausa il salotto), niente
-     * pausa quando si staccano le cuffie, e i tasti volume a schermo spento vanno
-     * al dispositivo Cast. La notifica resta, con il nome del dispositivo.
+     * While casting, the music comes out of the Chromecast: no audio focus (a
+     * navigation app or a phone call must not pause the living room), no
+     * pause when headphones are unplugged, and the volume keys with the screen off go
+     * to the Cast device. The notification stays, showing the device name.
      */
     private fun applyCastTarget(rerender: Boolean = true) {
         if (castTarget != null) {
@@ -177,10 +177,10 @@ class RekordMediaService : Service() {
         MediaButtonReceiver.handleIntent(session, intent)
         val state = latest
         if (state == null) {
-            // La musica e' finita nel frattempo (coda svuotata a un passo dal play).
-            // Chi e' stato avviato con startForegroundService deve comunque andare in
-            // foreground, altrimenti Android lo uccide con un'eccezione: si entra e
-            // si esce subito.
+            // The music ended in the meantime (queue cleared right before play).
+            // A service started with startForegroundService must still go into the
+            // foreground, otherwise Android kills it with an exception: enter and
+            // leave immediately.
             enterForeground(buildNotification(idle()))
             stop(this)
             return START_NOT_STICKY
@@ -189,7 +189,7 @@ class RekordMediaService : Service() {
         return START_NOT_STICKY
     }
 
-    /** Riscrive sessione e notifica con lo stato appena arrivato dalla pagina. */
+    /** Rewrites the session and notification with the state just received from the page. */
     private fun render(state: NowPlaying) {
         requestArt(state.artworkUrl)
         session.setMetadata(
@@ -234,9 +234,9 @@ class RekordMediaService : Service() {
                 enterForeground(notification)
             }
         } else {
-            // In pausa non si sta riproducendo niente: si lascia il foreground
-            // (Android 14 lo pretende) ma la notifica resta, cosi' si puo'
-            // ripartire da lei. DETACH la tiene in piedi dopo l'uscita.
+            // While paused nothing is playing: leave the foreground
+            // (Android 14 demands it) but keep the notification, so playback can
+            // be resumed from it. DETACH keeps it up after leaving.
             if (inForeground) {
                 ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
                 inForeground = false
@@ -268,8 +268,8 @@ class RekordMediaService : Service() {
                 AudioManager.AUDIOFOCUS_GAIN,
             )
         }
-        // DELAYED (una telefonata in corso): il GAIN arrivera' col listener. Se
-        // viene negato non si ferma l'utente che ha appena premuto play.
+        // DELAYED (a phone call in progress): GAIN will arrive via the listener. If
+        // it is denied, we don't stop the user who just pressed play.
         hasFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
     }
 
@@ -299,7 +299,7 @@ class RekordMediaService : Service() {
         try {
             unregisterReceiver(noisyReceiver)
         } catch (e: IllegalArgumentException) {
-            Logger.warn("RekordMedia: receiver gia' rimosso: ${e.message}")
+            Logger.warn("RekordMedia: receiver already removed: ${e.message}")
         }
     }
 
@@ -389,8 +389,8 @@ class RekordMediaService : Service() {
     }
 
     /**
-     * La copertina arriva dall'hub via HTTP: si scarica una volta per URL e si
-     * ridisegna quando e' pronta, senza bloccare la notifica.
+     * The cover art comes from the hub over HTTP: it is downloaded once per URL and
+     * redrawn when ready, without blocking the notification.
      */
     private fun requestArt(url: String?) {
         if (url == null) {
@@ -403,7 +403,7 @@ class RekordMediaService : Service() {
         art = null
         artLoader.execute {
             val bitmap = downloadArt(url)
-            // Se nel frattempo il brano e' cambiato, questa copertina non serve piu'.
+            // If the track changed in the meantime, this cover art is no longer needed.
             if (bitmap == null || url != artUrl) return@execute
             main.post {
                 if (url != artUrl) return@post
@@ -424,7 +424,7 @@ class RekordMediaService : Service() {
             if (connection.responseCode !in 200..299) return null
             connection.inputStream.use { BitmapFactory.decodeStream(it) }
         } catch (e: Exception) {
-            Logger.warn("RekordMedia: copertina non scaricata: ${e.message}")
+            Logger.warn("RekordMedia: cover art not downloaded: ${e.message}")
             null
         } finally {
             connection?.disconnect()
@@ -445,7 +445,7 @@ class RekordMediaService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    /** Se l'app viene chiusa dai recenti la WebView muore, e con lei l'audio. */
+    /** If the app is closed from recents the WebView dies, and the audio with it. */
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
         stop(this)
@@ -453,9 +453,9 @@ class RekordMediaService : Service() {
 
     override fun onDestroy() {
         running = null
-        // `latest` non si azzera qui: se il servizio muore senza passare da stop()
-        // (memoria, sistema) la pagina sta ancora suonando, e il prossimo stato che
-        // manda lo fara' ripartire. A svuotarlo ci pensa chi ferma la musica.
+        // `latest` is not cleared here: if the service dies without going through stop()
+        // (memory, system) the page is still playing, and the next state it sends
+        // will restart it. Whoever stops the music takes care of clearing it.
         artLoader.shutdownNow()
         main.removeCallbacksAndMessages(null)
         unregisterNoisy()
@@ -479,14 +479,14 @@ class RekordMediaService : Service() {
         @Volatile
         private var latest: NowPlaying? = null
 
-        /** Nome del dispositivo Cast collegato, null quando la musica suona qui. */
+        /** Name of the connected Cast device, null when the music plays here. */
         @Volatile
         private var castTarget: String? = null
 
         /**
-         * Chiamata da [RekordCast] quando una sessione Cast parte o finisce. Il
-         * servizio non si accende da qui: lo accende il primo stato «in
-         * riproduzione» che la pagina rispecchia dal receiver.
+         * Called by [RekordCast] when a Cast session starts or ends. The
+         * service is not started from here: it is started by the first "playing"
+         * state that the page mirrors from the receiver.
          */
         fun setCastTarget(deviceName: String?) {
             if (castTarget == deviceName) return
@@ -494,13 +494,13 @@ class RekordMediaService : Service() {
             running?.applyCastTarget()
         }
 
-        /** Serve a MainActivity per decidere se tenere sveglia la WebView. */
+        /** Used by MainActivity to decide whether to keep the WebView awake. */
         val isPlaying: Boolean
             get() = latest?.playing == true
 
         /**
-         * Chiamata dalla pagina a ogni cambio di brano o di stato: la prima
-         * volta accende il servizio, poi lo aggiorna.
+         * Called by the page on every track or state change: the first
+         * time it starts the service, then it updates it.
          */
         fun publish(context: Context, state: NowPlaying) {
             latest = state
@@ -509,9 +509,9 @@ class RekordMediaService : Service() {
                 service.render(state)
                 return
             }
-            // Il servizio nasce solo con un brano che suona: e' l'unico caso in cui
-            // Android lascia accendere un foreground service, ed e' l'unico in cui
-            // serve. Un brano in pausa senza servizio non ha niente da tenere in vita.
+            // The service is only created while a track is playing: it is the only case in
+            // which Android allows starting a foreground service, and the only one where
+            // it is needed. A paused track without a service has nothing to keep alive.
             if (!state.playing) return
             ContextCompat.startForegroundService(
                 context,

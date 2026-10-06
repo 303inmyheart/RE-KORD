@@ -1,4 +1,4 @@
-/* Statistiche — parity React statistics-page + statistics.css */
+/* Statistics — React statistics-page + statistics.css parity */
 
 .statistics-page__sections {
   display: grid;
@@ -283,7 +283,7 @@
   line-height: var(--rk-lh-tight);
 }
 
-/* Due griglie: 4 (plays) + 3 (totals). Escluse dalle media query .stats-grid generiche. */
+/* Two grids: 4 (plays) + 3 (totals). Excluded from the generic .stats-grid media queries. */
 .stats-grid.statistics-overview-grid--plays {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }

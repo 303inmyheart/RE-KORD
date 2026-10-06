@@ -12,22 +12,22 @@
   import { TRACK_MOOD_COLORS, trackMoodLabelKey } from "../lib/trackMoods";
 
   let {
-    /** Track/inline: gap meta + mood. Card/hero: chip di stato album/artista. */
+    /** Track/inline: meta gap + mood. Card/hero: album/artist status chips. */
     variant = "foot" as "foot" | "hero" | "inline",
-    /** Solo track/genre: mostra mood. */
+    /** Track/genre only: shows mood. */
     moods = [] as TrackMoodId[],
     missingMeta = false,
-    /** Conteggio album senza meta (artista) oppure flag album (se >0 → A on). */
+    /** Count of albums without meta (artist) or album flag (if >0 → A on). */
     albumsMissingMetaCount = 0,
     tracksMissingMetaCount = 0,
     favoriteCount = 0,
-    /** Album intero escluso. */
+    /** Whole album excluded. */
     albumExcluded = false,
-    /** N album esclusi (artista). */
+    /** N albums excluded (artist). */
     albumsExcludedCount = 0,
-    /** Brani esclusi (singoli o per album). */
+    /** Excluded tracks (individually or by album). */
     tracksExcludedCount = 0,
-    /** Card album loose: nessun badge "metadati album". */
+    /** Loose album card: no "album metadata" badge. */
     loose = false,
   }: {
     variant?: "foot" | "hero" | "inline";

@@ -31,7 +31,7 @@
           width: s,
           margin: 2,
           errorCorrectionLevel: "M",
-          // Bianco e nero fissi: un QR sui colori del tema non si legge.
+          // Fixed black and white: a QR in the theme's colours cannot be read.
           color: { dark: "#000000", light: "#ffffff" },
         });
         if (!cancelled && id === gen) dataUrl = url;

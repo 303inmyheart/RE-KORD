@@ -1,6 +1,6 @@
 /**
- * Import stato utente dalla RE-KORD React legacy (UserStateV1 / user-state.json).
- * Preferenze → localStorage; favoriti/playlist → API hub (resolve per rel_path).
+ * Import of user state from the legacy React RE-KORD (UserStateV1 / user-state.json).
+ * Preferences → localStorage; favourites/playlists → hub API (resolved by rel_path).
  */
 
 import { api, type Album, type Track } from "./api";

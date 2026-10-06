@@ -205,8 +205,8 @@
         {#if session.error}
           <Banner tone="error">{session.error}</Banner>
           {#if session.status === "offline"}
-            <!-- Sul telefono l'hub cambia indirizzo appena il router lo rinumera: da
-                 qui si riapre la procedura, invece di cercare la voce in Impostazioni. -->
+            <!-- On the phone the hub changes address as soon as the router renumbers it: from
+                 here the flow reopens, instead of hunting for the entry in Settings. -->
             <div class="offline-out">
               <Button variant="ghost" onclick={() => connectGate.open()}>
                 {t("settings.changeHub")}
@@ -317,7 +317,7 @@
     padding: var(--rk-page-pad-y) var(--rk-page-pad-r) var(--rk-page-pad-x)
       var(--rk-page-pad-l);
     scrollbar-gutter: stable;
-    /* Il rimbalzo di fine lista resta qui: non deve passare alla shell fissa. */
+    /* The end-of-list bounce stays here: it must not reach the fixed shell. */
     overscroll-behavior: contain;
   }
 
@@ -354,7 +354,7 @@
     min-width: 0;
   }
 
-  /* Ritmo verticale solo da --rk-section-gap: niente margin extra tra blocchi. */
+  /* Vertical rhythm only from --rk-section-gap: no extra margin between blocks. */
   .inner > :global(.rk-surface-card),
   .inner > :global(.rk-panel),
   .inner > :global(.rk-hero),

@@ -32,7 +32,7 @@
     padding: 0.75rem 0.95rem;
     border: 1px solid var(--rk-line);
     border-radius: var(--rk-radius);
-    /* Stesso composite delle altre schede (Panel / surface-card); banda accent in glass-surfaces.css. */
+    /* Same composite as the other cards (Panel / surface-card); accent band in glass-surfaces.css. */
     background:
       linear-gradient(var(--rk-surface-2), var(--rk-surface-2)),
       var(--rk-bg);

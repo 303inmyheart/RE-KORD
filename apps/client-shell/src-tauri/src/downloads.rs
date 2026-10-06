@@ -1,10 +1,10 @@
-//! «Salva con nome» per i file che la pagina costruisce in memoria (backup
-//! dell'hub, profilo, pacchetto tema).
+//! "Save as" for files the page builds in memory (hub backup, profile, theme
+//! package).
 //!
-//! Nel browser basta `<a download href="blob:...">`; nelle webview di sistema
-//! (WebKitGTK, WKWebView) quel click non produce niente. La pagina manda qui i
-//! byte come corpo grezzo dell'IPC e il nome nell'intestazione `x-rekord-filename`
-//! (percent-encoded), e qui si chiede dove salvare.
+//! In a browser `<a download href="blob:...">` is enough; in system webviews
+//! (WebKitGTK, WKWebView) that click does nothing. The page sends the bytes here
+//! as the raw IPC body and the name in the `x-rekord-filename` header
+//! (percent-encoded), and here we ask where to save.
 
 use std::path::PathBuf;
 use tauri::ipc::{InvokeBody, Request};
@@ -13,7 +13,7 @@ use tauri_plugin_dialog::DialogExt;
 
 const NAME_HEADER: &str = "x-rekord-filename";
 
-/// Torna il percorso scritto, oppure `None` se l'utente ha annullato.
+/// Returns the written path, or `None` if the user cancelled.
 #[tauri::command]
 pub async fn save_download(app: AppHandle, request: Request<'_>) -> Result<Option<String>, String> {
     let InvokeBody::Raw(bytes) = request.body() else {
@@ -32,8 +32,8 @@ pub async fn save_download(app: AppHandle, request: Request<'_>) -> Result<Optio
     if let Some(dir) = default_dir() {
         dialog = dialog.set_directory(dir);
     }
-    // blocking_* va bene qui: i comandi async girano sul runtime, non sul thread
-    // della finestra, che resta libero di disegnare il dialogo.
+    // blocking_* is fine here: async commands run on the runtime, not on the
+    // window thread, which stays free to draw the dialog.
     let Some(target) = dialog.blocking_save_file() else {
         return Ok(None);
     };
@@ -56,7 +56,7 @@ fn default_dir() -> Option<PathBuf> {
         })
 }
 
-/// Solo il nome: niente cartelle, niente caratteri che Windows rifiuta.
+/// Just the name: no folders, no characters Windows rejects.
 fn sanitize_file_name(raw: &str) -> String {
     let base = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
     base.chars()

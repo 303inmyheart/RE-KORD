@@ -1,4 +1,4 @@
-/* Guscio Studio: griglia della pagina, riquadri, titoli di pannello e mode switch. */
+/* Studio shell: page grid, panes, panel titles and mode switch. */
 .tools.tool-studio-layout {
   display: flex;
   flex-direction: column;
@@ -8,7 +8,7 @@
 
 .studio-page-card {
   min-width: 0;
-  /* Allinea densità alle surface-card di contenuto (libreria/body). */
+  /* Aligns density with the content surface-cards (library/body). */
   padding: var(--rk-space-lg) var(--rk-space-xl);
 }
 
@@ -108,7 +108,7 @@
   border-radius: var(--rk-radius-lg);
 }
 
-/* —— Mode switch (Locale/Web, Classico/Explora) —— */
+/* —— Mode switch (Local/Web, Classic/Explore) —— */
 .tools-dl-studio-switch {
   display: inline-flex;
   align-items: center;
@@ -166,7 +166,7 @@
   background: color-mix(in srgb, var(--rk-accent-2) 85%, #fff);
 }
 
-/* —— Registro attività (Download, Metadati) —— */
+/* —— Activity log (Download, Metadata) —— */
 .studio-log-panel {
   display: flex;
   flex-direction: column;
@@ -289,7 +289,7 @@
   color: var(--rk-muted-strong, var(--rk-muted));
 }
 
-/* —— Sola lettura: perché i comandi di scrittura sono spenti —— */
+/* —— Read-only: why the write controls are off —— */
 .studio-access-notice {
   display: flex;
   align-items: flex-start;

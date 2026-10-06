@@ -99,7 +99,7 @@
 }
 
 .album-hero__tracks {
-  /* Gap hero ↔ tracklist: gestito da AppShell .inner via --rk-section-gap */
+  /* Hero ↔ tracklist gap: handled by AppShell .inner via --rk-section-gap */
   margin-top: 0;
   padding: var(--rk-space-lg) var(--rk-space-xl);
 }

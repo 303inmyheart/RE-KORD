@@ -1,10 +1,10 @@
-# RE-KORD hub (next) con Docker Compose.
+# RE-KORD hub with Docker Compose.
 #
-#   cd next && docker compose up -d --build
-#   apri http://<host>:7420  (pannello: http://<host>:7420/admin)
+#   docker compose up -d --build              (from the repository root)
+#   open http://<host>:7420  (admin panel: http://<host>:7420/admin)
 #
-# Dalla 5.0: la porta passa da 3001 a 7420 e i volumi cambiano (/config → /data).
-# Vedi docs/UPGRADE-FROM-5.0.md.
+# Coming from 5.0: the port moves from 3001 to 7420 and the volumes change (/config → /data).
+# See docs/UPGRADE-FROM-5.0.md.
 services:
   rekord:
     build:
@@ -18,26 +18,26 @@ services:
       REKORD_BIND: 0.0.0.0:7420
       REKORD_DATA_DIR: /data
       REKORD_MUSIC_ROOT: /music
-      # Le "operazioni macchina" (scansione, percorso libreria, restore, tunnel)
-      # richiedono un client locale. Dal container ogni richiesta arriva dalla
-      # rete Docker, quindi senza questa variabile vanno fatte con
+      # "Machine operations" (scan, library path, restore, tunnel) require a
+      # local client. Inside the container every request comes from the Docker
+      # network, so without this variable they must be done with
       #   docker exec rekord curl -X POST http://127.0.0.1:7420/api/v1/library/scan
-      # Con 1 le puo' fare l'account Default da qualunque client che raggiunge
-      # l'hub: attivala solo su una rete di cui ti fidi.
+      # With 1 the Default account can perform them from any client that reaches
+      # the hub: enable it only on a network you trust.
       REKORD_ALLOW_REMOTE_ADMIN: ${REKORD_ALLOW_REMOTE_ADMIN:-0}
-      # Origini web extra ammesse da CORS (oltre a quella dell'hub e ai client Tauri).
+      # Extra web origins allowed by CORS (besides the hub's own and the Tauri clients).
       # REKORD_ALLOWED_ORIGINS: https://musica.example.org
       # REKORD_PUBLIC_URL: https://musica.example.org
       # ENABLE_YTDLP: "1"
       # REKORD_YTDLP_COOKIES: /data/youtube-cookies.txt
       TZ: ${TZ:-Europe/Rome}
     volumes:
-      # Database, impostazioni, account. Nella 5.0 era /config.
+      # Database, settings, accounts. In 5.0 this was /config.
       - ${REKORD_DATA_HOST:-./docker-data/data}:/data
-      # Libreria musicale (Artista/Album/brano). Togli :ro se usi Studio/download.
+      # Music library (Artist/Album/track). Remove :ro if you use Studio/downloads.
       - ${REKORD_MUSIC_HOST:-./docker-data/music}:/music
     restart: unless-stopped
-    # L'utente nel container ha uid 10001: le cartelle montate devono essere
-    # scrivibili da lui (sudo chown -R 10001:10001 docker-data), oppure imposta
-    # qui il tuo uid:gid (id -u / id -g).
+    # The container user has uid 10001: the mounted folders must be writable
+    # by it (sudo chown -R 10001:10001 docker-data), or set your own
+    # uid:gid here (id -u / id -g).
     # user: "1000:1000"

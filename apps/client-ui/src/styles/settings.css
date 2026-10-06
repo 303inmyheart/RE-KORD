@@ -1,4 +1,4 @@
-/* Impostazioni — chrome allineato a view-page / section-head--page-toolbar */
+/* Settings — chrome aligned with view-page / section-head--page-toolbar */
 
 .settings-page__body {
   display: grid;
@@ -6,10 +6,10 @@
   min-width: 0;
 }
 
-/* Un riquadro di una griglia si allarga fin dove arriva il suo contenuto: senza
-   questo, una tabella larga (il log attività) sporge dalla finestra e trascina con
-   sé lo scorrimento orizzontale di tutta la pagina. Chi ha contenuto largo se lo
-   scorre dentro il suo contenitore. */
+/* A grid cell grows as far as its content reaches: without
+   this, a wide table (the activity log) sticks out of the window and drags
+   the whole page's horizontal scroll with it. Whoever has wide content
+   scrolls it inside its own container. */
 .settings-page__body > * {
   min-width: 0;
 }
@@ -52,7 +52,7 @@
   box-sizing: border-box;
 }
 
-/* Tema + opacità vetro (come legacy settings-theme-glass-block) */
+/* Theme + glass opacity (like legacy settings-theme-glass-block) */
 .settings-theme-glass-block {
   display: grid;
   gap: 0.75rem;
@@ -127,7 +127,7 @@
   flex: 0 0 auto;
 }
 
-/* Label sopra; slider + num + % sulla seconda riga (legacy) */
+/* Label on top; slider + num + % on the second row (legacy) */
 .settings-glass-opacity {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -372,7 +372,7 @@
   margin-top: 0.85rem;
 }
 
-/* Activity log — densità da legacy, layout 3 colonne (schema next) */
+/* Activity log — density from legacy, 3-column layout (next schema) */
 .settings-activity-section.rk-panel .rk-panel__actions .rk-btn {
   min-height: 1.85rem;
   padding: 0.28rem 0.65rem;
@@ -522,11 +522,11 @@
   word-break: break-word;
 }
 
-/* Telefono e tablet verticale: ogni voce diventa un blocco invece di una riga di
-   tabella. Quattro colonne chiedono 480px e su un telefono ne restano 290: la
-   tabella scorreva di lato e la colonna del dettaglio — l'unica per cui si apre
-   questo pannello — stava fuori dallo schermo. Ora in testa c'è quando insieme al
-   tipo, sotto il messaggio per intero, in fondo l'account. */
+/* Phone and portrait tablet: each entry becomes a block instead of a table
+   row. Four columns need 480px and on a phone 290 are left: the
+   table scrolled sideways and the detail column — the only reason this
+   panel gets opened — was off screen. Now the top shows when together with the
+   type, below it the full message, at the bottom the account. */
 @media (max-width: 719.98px) {
   .settings-activity-section .activity-log-table,
   .settings-activity-section .activity-log-table tbody {
@@ -534,8 +534,8 @@
     width: 100%;
   }
 
-  /* Le intestazioni restano nel documento per chi legge con lo screen reader, ma
-     non servono più: ogni valore sta al suo posto nel blocco. */
+  /* The headers stay in the document for screen reader users, but
+     are no longer needed: each value sits in its place in the block. */
   .settings-activity-section .activity-log-table thead {
     position: absolute;
     width: 1px;
@@ -578,8 +578,8 @@
 
   .settings-activity-section .activity-log-td-msg {
     grid-area: msg;
-    /* Il minimo da tabella teneva larga la colonna e con essa tutto il pannello,
-       che sporgeva dalla finestra e faceva scorrere la pagina di lato. */
+    /* The table minimum kept the column wide and with it the whole panel,
+       which stuck out of the window and made the page scroll sideways. */
     min-width: 0;
     max-width: none;
   }

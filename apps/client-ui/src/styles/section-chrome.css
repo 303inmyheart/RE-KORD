@@ -1,4 +1,4 @@
-/* Toolbar / nav di sezione — parity RE-KORD 5.0 + polish */
+/* Section toolbar / nav — RE-KORD 5.0 parity + polish */
 
 :root {
   /* Icon gutter of a page toolbar, and the indent anything below the title
@@ -98,7 +98,7 @@
   color: inherit;
 }
 
-/* Page toolbar: lead icon scala come .page-toolbar-back-ic (eyebrow + titolo). */
+/* Page toolbar: lead icon scales like .page-toolbar-back-ic (eyebrow + title). */
 .section-head--page-toolbar .section-head__lead {
   align-items: stretch;
 }
@@ -184,7 +184,7 @@
   --ui-ic-size: 1.05rem;
 }
 
-/* Sort segmented (Nome / Preferiti) */
+/* Sort segmented (Name / Favourites) */
 .segmented--joined {
   display: flex;
   flex-wrap: wrap;
@@ -382,15 +382,15 @@
   font-size: clamp(0.8rem, 0.85vw, 0.98rem);
 }
 
-/* Telefono: le toolbar di libreria smettono di stringersi nell'angolo destro.
-   Dopo le regole desktop qui sopra, che allineano a destra e tengono la larghezza
-   automatica: da qui si scrive il contrario, e vince chi viene dopo. */
+/* Phone: the library toolbars stop squeezing into the right corner.
+   After the desktop rules above, which right-align and keep an automatic
+   width: from here the opposite is written, and whoever comes later wins. */
 @media (max-width: 559.98px) {
-  /* Titolo sopra, comandi su una riga loro: in fila restava un titolo schiacciato
-     accanto a un gruppo di bottoni schiacciati. Vale per tutte le intestazioni dei
-     pannelli filtro, non solo per quella della tracklist di un genere: senza questo
-     i comandi vanno a capo da soli e restano larghi quanto il loro contenuto,
-     appoggiati al bordo destro. */
+  /* Title on top, controls on a row of their own: side by side it left a squashed title
+     next to a group of squashed buttons. Applies to all the filter-panel
+     headers, not only the one of a genre's tracklist: without this
+     the controls wrap on their own and stay as wide as their content,
+     leaning on the right edge. */
   .library-filter-panel .section-head--page-toolbar,
   .library-genre-tracklist-headrow {
     flex-flow: column nowrap;
@@ -403,8 +403,8 @@
     width: 100%;
   }
 
-  /* Il segmentato prende la riga e le voci se la dividono: due bersagli larghi
-     invece di due etichette da 80px appoggiate al bordo. */
+  /* The segmented control takes the row and its items share it: two wide targets
+     instead of two 80px labels leaning on the edge. */
   .library-sort-panel .segmented--joined,
   .library-overview-toolbar .segmented--joined {
     width: 100%;
@@ -419,7 +419,7 @@
     min-width: 0;
   }
 
-  /* «Riproduci tutto» e compagnia sono l'azione della pagina: a tutta riga. */
+  /* «Play all» and friends are the page's action: full row. */
   .page-toolbar-card .section-head__tools .play-collection-btn {
     flex: 1 1 100%;
   }
@@ -463,7 +463,7 @@
   justify-content: center;
   box-sizing: border-box;
   margin: 0;
-  /* Scala a ~altezza eyebrow + riga titolo/chip (non il default 1.25rem di UiIcon). */
+  /* Scales to ~eyebrow height + title/chip row (not UiIcon's default 1.25rem). */
   --ui-ic-size: 2.45rem;
   min-width: calc(var(--ui-ic-size) + 0.3rem);
   padding: 0.1rem 0.15rem;
@@ -682,7 +682,7 @@
 .dashboard-session-card {
   /* Parity old surface-card (ui-pro-layout): space-4 / space-5 */
   padding: var(--rk-space-lg) var(--rk-space-xl);
-  /* Il gap tra schede è gestito da .dashboard-page / .dashboard-page__main */
+  /* The gap between cards is handled by .dashboard-page / .dashboard-page__main */
   margin-bottom: 0;
 }
 
@@ -919,7 +919,7 @@
   }
 }
 
-/* Match underline (Almeno uno / Tutti) — stile tab */
+/* Match underline (Almeno uno / Tutti) — tab style */
 .dashboard-mix-match.segmented--joined,
 .match-underline {
   display: inline-flex;
@@ -1048,7 +1048,7 @@
   min-width: 6.75rem;
 }
 
-/* Mood filter tiles — spenti (neutri) finché non selezionati; --on = tinta mood */
+/* Mood filter tiles — off (neutral) until selected; --on = mood tint */
 .library-mood-filter-btn {
   width: 100%;
   box-sizing: border-box;

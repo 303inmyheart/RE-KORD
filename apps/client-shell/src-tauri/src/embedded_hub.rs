@@ -1,17 +1,17 @@
-//! Hub incorporato ("server flavor", feature `hub`, solo desktop).
+//! Embedded hub ("server flavor", `hub` feature, desktop only).
 //!
-//! L'app Electron "Server" della 5.0 avviava l'hub insieme alla finestra. Qui
-//! `rekord_core::run_hub` gira su un runtime tokio in un thread suo, cosi' la
-//! finestra non aspetta mai l'hub e l'hub non dipende dal ciclo degli eventi.
-//! Il client nella finestra lo trova da solo: all'avvio prova gia'
+//! The 5.0 Electron "Server" app started the hub together with the window. Here
+//! `rekord_core::run_hub` runs on a tokio runtime in its own thread, so the
+//! window never waits for the hub and the hub doesn't depend on the event loop.
+//! The client in the window finds it on its own: on startup it already tries
 //! `http://127.0.0.1:7420`.
 //!
-//! Configurazione, in ordine di precedenza:
-//! 1. variabili d'ambiente `REKORD_EMBEDDED_HUB=0` (spegne), `REKORD_BIND`,
-//!    `REKORD_DATA_DIR` (stessi nomi di `rekord-server`);
+//! Configuration, in order of precedence:
+//! 1. environment variables `REKORD_EMBEDDED_HUB=0` (turns it off), `REKORD_BIND`,
+//!    `REKORD_DATA_DIR` (same names as `rekord-server`);
 //! 2. `<app data dir>/hub.json` → `{ "enabled": true, "bind": "0.0.0.0:7420",
-//!    "dataDir": null }`, creato con questi valori al primo avvio;
-//! 3. predefiniti: `0.0.0.0:7420` (raggiungibile in LAN, come l'app 5.0) e dati
+//!    "dataDir": null }`, created with these values on first launch;
+//! 3. defaults: `0.0.0.0:7420` (reachable on the LAN, like the 5.0 app) and data
 //!    in `<app data dir>/hub`.
 
 use serde::{Deserialize, Serialize};
@@ -73,16 +73,13 @@ fn load_config(app_data: &Path) -> HubFileConfig {
     let path = app_data.join(CONFIG_FILE);
     match std::fs::read_to_string(&path) {
         Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|e| {
-            eprintln!(
-                "[rekord] {} non valido ({e}): uso i valori predefiniti",
-                path.display()
-            );
+            eprintln!("[rekord] {} invalid ({e}): using defaults", path.display());
             HubFileConfig::default()
         }),
         Err(_) => {
             let cfg = HubFileConfig::default();
-            // Scritto subito: chi vuole cambiare porta o cartella trova il file
-            // gia' pronto invece di doverne indovinare il formato.
+            // Written right away: whoever wants to change the port or folder finds
+            // the file ready instead of having to guess its format.
             if std::fs::create_dir_all(app_data).is_ok() {
                 if let Ok(raw) = serde_json::to_string_pretty(&cfg) {
                     let _ = std::fs::write(&path, raw);
@@ -93,17 +90,17 @@ fn load_config(app_data: &Path) -> HubFileConfig {
     }
 }
 
-/// Interfaccia impacchettata come risorsa (`tauri.hub.conf.json`), se c'e':
-/// `admin-ui` per il pannello su /admin, `client-ui` per i telefoni e i browser
-/// in LAN o dal tunnel che aprono http://<pc>:7420/.
+/// UI bundled as a resource (`tauri.hub.conf.json`), if present: `admin-ui` for
+/// the panel on /admin, `client-ui` for phones and browsers on the LAN or
+/// through the tunnel that open http://<pc>:7420/.
 fn bundled_ui(app: &AppHandle, name: &str) -> Option<PathBuf> {
     let dir = app.path().resource_dir().ok()?.join(name);
     dir.join("index.html").is_file().then_some(dir)
 }
 
-/// yt-dlp, cloudflared e ffmpeg impacchettati in `bin/` (pnpm pack:*:server):
-/// l'hub li cerca tramite le stesse variabili d'ambiente di `rekord-server`, che
-/// restano prioritarie se l'utente le ha gia' impostate.
+/// yt-dlp, cloudflared and ffmpeg bundled in `bin/` (pnpm pack:*:server): the
+/// hub looks them up through the same environment variables as `rekord-server`,
+/// which still take priority if the user has already set them.
 fn export_bundled_tools(app: &AppHandle) {
     let Ok(bin) = app.path().resource_dir().map(|d| d.join("bin")) else {
         return;
@@ -136,9 +133,7 @@ pub fn start(app: &AppHandle) {
     let app_data = match app.path().app_data_dir() {
         Ok(dir) => dir,
         Err(e) => {
-            eprintln!(
-                "[rekord] hub incorporato non avviato: cartella dati dell'app sconosciuta ({e})"
-            );
+            eprintln!("[rekord] embedded hub not started: unknown app data folder ({e})");
             return;
         }
     };
@@ -148,7 +143,7 @@ pub fn start(app: &AppHandle) {
         None => file.enabled,
     };
     if !enabled {
-        eprintln!("[rekord] hub incorporato spento (hub.json / REKORD_EMBEDDED_HUB)");
+        eprintln!("[rekord] embedded hub disabled (hub.json / REKORD_EMBEDDED_HUB)");
         return;
     }
 
@@ -156,7 +151,7 @@ pub fn start(app: &AppHandle) {
     let bind: SocketAddr = match bind_raw.parse() {
         Ok(addr) => addr,
         Err(e) => {
-            eprintln!("[rekord] indirizzo hub non valido «{bind_raw}» ({e}): uso {DEFAULT_BIND}");
+            eprintln!("[rekord] invalid hub address «{bind_raw}» ({e}): using {DEFAULT_BIND}");
             DEFAULT_BIND.parse().expect("default bind")
         }
     };
@@ -168,12 +163,12 @@ pub fn start(app: &AppHandle) {
     let opts = rekord_core::HubOptions {
         bind,
         data_dir,
-        // La finestra usa la copia di Tauri; questa e' per gli altri dispositivi.
+        // The window uses Tauri's copy; this one is for the other devices.
         client_ui_dir: bundled_ui(app, "client-ui"),
         admin_ui_dir: bundled_ui(app, "admin-ui"),
     };
-    // Prima di avviare il runtime dell'hub: nessun altro thread dell'hub legge
-    // ancora l'ambiente.
+    // Before starting the hub runtime: no other hub thread reads the
+    // environment yet.
     export_bundled_tools(app);
 
     let (tx, rx) = oneshot::channel::<()>();
@@ -188,7 +183,7 @@ pub fn start(app: &AppHandle) {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    eprintln!("[rekord] runtime dell'hub non creato: {e}");
+                    eprintln!("[rekord] hub runtime not created: {e}");
                     let _ = done_tx.send(());
                     return;
                 }
@@ -197,9 +192,9 @@ pub fn start(app: &AppHandle) {
                 let _ = rx.await;
             };
             if let Err(e) = runtime.block_on(rekord_core::run_hub(opts, shutdown)) {
-                // Tipicamente la porta e' gia' occupata da un rekord-server
-                // standalone: il client si colleghera' a quello.
-                eprintln!("[rekord] hub incorporato fermo: {e:#}");
+                // Typically the port is already taken by a standalone
+                // rekord-server: the client will connect to that one.
+                eprintln!("[rekord] embedded hub stopped: {e:#}");
             }
             runtime.shutdown_timeout(Duration::from_secs(2));
             let _ = done_tx.send(());
@@ -214,11 +209,11 @@ pub fn start(app: &AppHandle) {
                 });
             }
         }
-        Err(e) => eprintln!("[rekord] thread dell'hub non avviato: {e}"),
+        Err(e) => eprintln!("[rekord] hub thread not started: {e}"),
     }
 }
 
-/// Chiusura ordinata all'uscita dell'app: niente DB lasciato a meta' scrittura.
+/// Orderly shutdown when the app exits: no DB left half-written.
 pub fn stop(app: &AppHandle) {
     let Some(handle) = app.try_state::<HubHandle>() else {
         return;
@@ -230,6 +225,6 @@ pub fn stop(app: &AppHandle) {
         let _ = tx.send(());
     }
     if running.done.recv_timeout(Duration::from_secs(8)).is_err() {
-        eprintln!("[rekord] l'hub non si e' fermato in tempo: chiusura forzata");
+        eprintln!("[rekord] hub did not stop in time: forcing shutdown");
     }
 }

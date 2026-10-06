@@ -1,4 +1,4 @@
-/* Copertine: campi sorgente, griglia dei candidati e azioni di salvataggio. */
+/* Covers: source fields, candidate grid and save actions. */
 .tools-art .studio-covers-split {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -114,7 +114,7 @@
   text-decoration: underline;
 }
 
-/* Album di destinazione: copertina attuale accanto ai selettori. */
+/* Target album: current cover next to the selectors. */
 .studio-covers-target__body {
   display: flex;
   gap: var(--rk-space-lg);

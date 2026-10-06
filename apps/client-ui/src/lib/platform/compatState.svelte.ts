@@ -1,10 +1,10 @@
 /**
- * Stato del banner di aggiornamento (`components/UpdateBanner.svelte`).
+ * State of the update banner (`components/UpdateBanner.svelte`).
  *
- * Si alimenta da due strade: la sonda della procedura di connessione
- * (`connect.svelte.ts`, che ha gia' in mano `/api/v1/health`) e un controllo
- * leggero in background — all'avvio, al ritorno in primo piano, ogni tanto —
- * perche' l'hub puo' essere aggiornato mentre il client e' aperto.
+ * It is fed from two paths: the connection flow's probe
+ * (`connect.svelte.ts`, which already has `/api/v1/health` in hand) and a
+ * light background check — at startup, on returning to the foreground, every so often —
+ * because the hub can be updated while the client is open.
  */
 
 import { getServerBaseUrl } from "../config";
@@ -31,12 +31,12 @@ function verdictKey(v: CompatVerdict): string {
 
 class CompatStore {
   verdict = $state<CompatVerdict>({ kind: "ok" });
-  /** Chiave dell'avviso chiuso a mano: lo stesso avviso non torna fino al prossimo cambio. */
+  /** Key of the notice closed by hand: the same notice does not come back until the next change. */
   dismissed = $state(readDismissed());
 
   get visible(): boolean {
     if (this.verdict.kind === "ok") return false;
-    // L'avviso bloccante non si chiude per sempre: resta finche' non si aggiorna.
+    // The blocking notice does not close forever: it stays until an update happens.
     if (this.verdict.kind === "client-too-old") return true;
     return verdictKey(this.verdict) !== this.dismissed;
   }
@@ -54,7 +54,7 @@ class CompatStore {
     try {
       localStorage.setItem(DISMISS_KEY, this.dismissed);
     } catch {
-      /* storage pieno o negato: l'avviso torna al prossimo avvio, pazienza */
+      /* storage full or denied: the notice comes back on the next startup, never mind */
     }
   }
 }
@@ -64,15 +64,15 @@ export const compat = new CompatStore();
 function currentHubBase(): string | null {
   const saved = getServerBaseUrl();
   if (saved) return saved;
-  // Senza indirizzo salvato, nel browser l'hub e' l'origine della pagina; nel
-  // guscio nativo l'origine e' l'app stessa e non c'e' niente da chiedere.
+  // Without a saved address, in the browser the hub is the page's origin; in the
+  // native shell the origin is the app itself and there is nothing to ask.
   if (isTauri() || typeof location === "undefined") return null;
   return location.origin.startsWith("http") ? location.origin : null;
 }
 
 let lastCheck = 0;
 
-/** Chiede `/api/v1/health` all'hub corrente e aggiorna il verdetto. Mai un errore. */
+/** Asks the current hub for `/api/v1/health` and updates the verdict. Never an error. */
 export async function checkHubCompat(base: string | null = currentHubBase()): Promise<void> {
   if (!base) return;
   lastCheck = Date.now();
@@ -86,11 +86,11 @@ export async function checkHubCompat(base: string | null = currentHubBase()): Pr
     if (body?.service !== "RE-KORD") return;
     compat.apply(body);
   } catch {
-    /* Hub irraggiungibile: ci pensa l'indicatore di connessione, non questo banner. */
+    /* Hub unreachable: the connection indicator handles it, not this banner. */
   }
 }
 
-/** Controlli periodici; torna la funzione che li ferma. */
+/** Periodic checks; returns the function that stops them. */
 export function watchHubCompat(): () => void {
   if (typeof window === "undefined") return () => {};
   const maybe = () => {

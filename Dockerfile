@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1.7
 #
-# RE-KORD hub (next) in un container.
+# RE-KORD hub in a container.
 #
 #   docker build -t rekord:5.0.0 .            (from the repository root)
-#   docker compose up -d                      (vedi docker-compose.yml)
+#   docker compose up -d                      (see docker-compose.yml)
 #
-# Stadi: ui (client + pannello admin con pnpm) → server (rekord-server in
-# release) → tools (yt-dlp e cloudflared scaricati a versione fissata e
-# verificati con SHA-256, vedi scripts/fetch-*.sh) → runtime (debian slim con
-# ffmpeg, utente non root, /data e /music come volumi).
+# Stages: ui (client + admin panel with pnpm) → server (rekord-server in
+# release) → tools (yt-dlp and cloudflared downloaded at a pinned version and
+# verified with SHA-256, see scripts/fetch-*.sh) → runtime (debian slim with
+# ffmpeg, non-root user, /data and /music as volumes).
 
 ARG NODE_VERSION=22
 ARG RUST_VERSION=1
@@ -19,8 +19,8 @@ FROM node:${NODE_VERSION}-${DEBIAN_RELEASE}-slim AS ui
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH CI=1
 RUN corepack enable
 WORKDIR /src
-# Prima solo i manifest: lo strato delle dipendenze resta in cache finche'
-# lockfile e package.json non cambiano.
+# Manifests first: the dependency layer stays cached as long as the
+# lockfile and package.json files don't change.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/client-ui/package.json apps/client-ui/
 COPY apps/server-ui/package.json apps/server-ui/
@@ -39,8 +39,8 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY apps/server apps/server
-# Il guscio Tauri e' membro del workspace ma qui non si compila: basta il suo
-# manifest (e una lib vuota) perche' cargo legga il workspace.
+# The Tauri shell is a workspace member but is not built here: its manifest
+# (and an empty lib) is enough for cargo to read the workspace.
 COPY apps/client-shell/src-tauri/Cargo.toml apps/client-shell/src-tauri/Cargo.toml
 RUN mkdir -p apps/client-shell/src-tauri/src && : > apps/client-shell/src-tauri/src/lib.rs
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
@@ -57,7 +57,7 @@ WORKDIR /src
 COPY scripts/lib/fetch-common.sh scripts/lib/
 COPY scripts/fetch-ytdlp.sh scripts/fetch-cloudflared.sh scripts/third-party.sha256 scripts/
 ARG TARGETARCH
-# Vuoti = versioni fissate negli script.
+# Empty = the versions pinned in the scripts.
 ARG YTDLP_VERSION=
 ARG CLOUDFLARED_VERSION=
 RUN set -eu; \
@@ -79,7 +79,7 @@ COPY --from=ui /src/apps/client-ui/dist /app/client-ui
 COPY --from=ui /src/apps/server-ui/dist /app/admin-ui
 COPY --from=tools /out/ /app/bin/
 
-# Stesse variabili della riga di comando: rekord-server --help.
+# Same variables as the command line: rekord-server --help.
 ENV REKORD_BIND=0.0.0.0:7420 \
     REKORD_DATA_DIR=/data \
     REKORD_MUSIC_ROOT=/music \
@@ -97,6 +97,6 @@ EXPOSE 7420
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD ["sh", "-c", "curl -fsS \"http://127.0.0.1:${REKORD_BIND##*:}/api/v1/health\" >/dev/null || exit 1"]
 
-# tini inoltra SIGTERM all'hub (chiusura ordinata del DB) e raccoglie i processi
-# figli (ffmpeg, yt-dlp, cloudflared).
+# tini forwards SIGTERM to the hub (clean DB shutdown) and reaps the child
+# processes (ffmpeg, yt-dlp, cloudflared).
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/rekord-server"]

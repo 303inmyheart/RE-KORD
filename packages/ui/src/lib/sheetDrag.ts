@@ -1,32 +1,32 @@
 /**
- * Trascinamento verso il basso per chiudere un foglio.
+ * Drag down to close a sheet.
  *
- * Su telefono il dialogo arriva dal bordo inferiore e la × sta in alto a destra,
- * lontana dal pollice: il gesto naturale per farlo sparire è spingerlo giù. Qui
- * c'è la geometria pura (`createSheetDragGesture`, testabile senza DOM) e l'azione
- * Svelte che la attacca al pannello.
+ * On the phone the dialog comes from the bottom edge and the × sits at the top right,
+ * far from the thumb: the natural gesture to dismiss it is pushing it down. Here
+ * is the pure geometry (`createSheetDragGesture`, testable without a DOM) and the
+ * Svelte action that attaches it to the panel.
  */
 
-/** Sotto questo spostamento è ancora un tocco fermo, non un trascinamento. */
+/** Below this distance it is still a stationary tap, not a drag. */
 export const SHEET_ACTIVATE_PX = 8;
-/** Da qui in giù il foglio si chiude anche se il dito si è fermato. */
+/** From here down the sheet closes even if the finger has stopped. */
 export const SHEET_DISMISS_PX = 96;
-/** Uno strappo veloce chiude prima di arrivare alla soglia. */
+/** A quick flick closes before reaching the threshold. */
 export const SHEET_FLICK_PX_PER_MS = 0.5;
-/** Ma non basta sfiorare: un colpetto di pochi pixel resta un tocco. */
+/** But a mere brush is not enough: a nudge of a few pixels stays a tap. */
 export const SHEET_FLICK_MIN_PX = 24;
 
-/** Stessa soglia della cromatura mobile: vedi styles/tokens.css e sheet.css. */
+/** Same threshold as the mobile chrome: see styles/tokens.css and sheet.css. */
 export const SHEET_MEDIA_QUERY = "(max-width: 999.98px)";
 
 export interface SheetDragGesture {
-  /** Inizia a seguire il dito. */
+  /** Starts following the finger. */
   start(y: number, time: number): void;
-  /** Restituisce di quanto va spostato il foglio, mai sopra la sua posizione. */
+  /** Returns how far the sheet must move, never above its resting position. */
   move(y: number, time: number): number;
-  /** Chiude la presa e dice se il foglio deve andarsene. */
+  /** Ends the grab and tells whether the sheet must go away. */
   end(y: number, time: number): { dismiss: boolean };
-  /** Vero quando lo spostamento ha superato la soglia di attivazione. */
+  /** True when the movement has passed the activation threshold. */
   isDragging(): boolean;
   cancel(): void;
 }
@@ -76,20 +76,20 @@ export function createSheetDragGesture(): SheetDragGesture {
 }
 
 export interface SheetDragOptions {
-  /** Attivo solo quando il dialogo è davvero un foglio (telefono). */
+  /** Active only when the dialog really is a sheet (phone). */
   enabled: boolean;
-  /** Da dove si può prendere il foglio: la maniglia e la sua intestazione. */
+  /** Where the sheet can be grabbed: the handle and its header. */
   gripSelector: string;
   onclose: () => void;
 }
 
-/** Quanto dura il ritorno a posto quando il gesto non è bastato. */
+/** How long the snap-back lasts when the gesture was not enough. */
 const SNAP_BACK_MS = 160;
 
 /**
- * Azione Svelte: si applica al pannello del foglio, che è anche l'elemento che
- * si sposta. La presa però vale solo dentro `gripSelector`, altrimenti scorrere
- * il contenuto o premere un bottone farebbe partire il gesto.
+ * Svelte action: applied to the sheet's panel, which is also the element that
+ * moves. The grab however only counts inside `gripSelector`, otherwise scrolling
+ * the content or pressing a button would start the gesture.
  */
 export function sheetDrag(node: HTMLElement, options: SheetDragOptions) {
   let opts = options;
@@ -119,7 +119,7 @@ export function sheetDrag(node: HTMLElement, options: SheetDragOptions) {
     if (!opts.enabled || activePointer != null || !e.isPrimary) return;
     if (!(e.target instanceof Element)) return;
     if (!e.target.closest(opts.gripSelector)) return;
-    // Un comando dentro l'intestazione (la × per prima) resta un comando.
+    // A control inside the header (the × first of all) stays a control.
     if (e.target.closest("button, a, input, select, textarea")) return;
 
     activePointer = e.pointerId;
@@ -143,7 +143,7 @@ export function sheetDrag(node: HTMLElement, options: SheetDragOptions) {
     stop();
     if (dismiss) {
       opts.onclose();
-      // Il foglio viene smontato: la posizione va azzerata per il prossimo giro.
+      // The sheet is being unmounted: the position must be reset for the next round.
       setOffset(0);
       return;
     }

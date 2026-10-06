@@ -1,10 +1,10 @@
 /**
- * Primo avvio: a quale hub ci si collega e con quale account.
+ * First launch: which hub to connect to and with which account.
  *
- * Nel browser servito dall'hub non si vede niente di tutto questo, perche' l'hub
- * e' l'origine della pagina e risponde subito. Serve nell'APK e nel client
- * desktop, dove l'interfaccia e' dentro l'app e l'hub e' un indirizzo che solo
- * chi installa conosce.
+ * In the browser served by the hub none of this is visible, because the hub
+ * is the page's origin and answers right away. It is needed in the APK and in the
+ * desktop client, where the UI is inside the app and the hub is an address only
+ * the person installing it knows.
  */
 
 import { getSelectedAccountId, type Account, type AccountsResponse } from "./account";
@@ -14,7 +14,7 @@ import { checkHubCompat, compat } from "./platform/compatState.svelte";
 import { isTauri } from "./platform/env";
 
 export type ConnectPhase =
-  /** Sonda muta all'avvio: si mostra il logo, non ancora una domanda. */
+  /** Silent probe at startup: show the logo, not a question yet. */
   | "probing"
   | "connect"
   | "app";
@@ -32,26 +32,26 @@ export type HubProbe =
       accounts: Account[];
       defaultAccountId: string;
       version: string;
-      /** Versione dell'API `/api/v1` dichiarata dall'hub (assente sugli hub < 5.1). */
+      /** `/api/v1` API version declared by the hub (absent on hubs < 5.1). */
       apiVersion: number | null;
-      /** Client piu' vecchio che l'hub accetta (vedi `platform/compat.ts`). */
+      /** Oldest client the hub accepts (see `platform/compat.ts`). */
       minClientVersion: string;
     }
   | ({ ok: false } & ProbeFailure);
 
 /**
- * Sei secondi: un hub in rete locale risponde in millisecondi, e oltre questa
- * soglia chi sta davanti allo schermo ha gia' capito che l'indirizzo e' sbagliato.
+ * Six seconds: a hub on the local network answers in milliseconds, and past this
+ * threshold whoever is in front of the screen has already realised the address is wrong.
  */
 const PROBE_TIMEOUT_MS = 6_000;
 
-/** Sonda piu' corta all'avvio: qui si decide solo se mostrare la procedura. */
+/** Shorter probe at startup: here we only decide whether to show the flow. */
 const STARTUP_PROBE_TIMEOUT_MS = 3_500;
 
 /**
- * Client desktop e hub sulla stessa macchina: il caso normale su un computer, e
- * l'unico indirizzo che si puo' indovinare. Su un telefono la porta e' chiusa e
- * la prova finisce subito, senza far aspettare nessuno.
+ * Desktop client and hub on the same machine: the normal case on a computer, and
+ * the only address that can be guessed. On a phone the port is closed and
+ * the attempt ends immediately, without making anyone wait.
  */
 const LOCAL_HUB = "http://127.0.0.1:7420";
 const LOCAL_PROBE_TIMEOUT_MS = 1_500;
@@ -72,8 +72,8 @@ async function getJson(
 }
 
 /**
- * Chiede all'hub «ci sei?» e «che account hai?». Le due domande stanno insieme
- * perche' la risposta utile e' una sola: si puo' entrare, e con quale profilo.
+ * Asks the hub «are you there?» and «what accounts do you have?». The two questions go
+ * together because the useful answer is a single one: can we get in, and with which profile.
  */
 export async function probeHub(
   base: string,
@@ -94,12 +94,12 @@ export async function probeHub(
     apiVersion?: unknown;
     minClientVersion?: unknown;
   };
-  // Un portale wifi o un altro server sulla stessa porta risponde 200 a tutto:
-  // senza questo controllo la procedura si chiuderebbe su un indirizzo che non
-  // e' un hub, e l'errore salterebbe fuori dieci schermate dopo.
+  // A wifi portal or another server on the same port answers 200 to everything:
+  // without this check the flow would close on an address that is not
+  // a hub, and the error would show up ten screens later.
   if (info.service !== "RE-KORD") return { ok: false, reason: "not-hub" };
-  // L'avviso di versione si decide gia' qui: un client troppo vecchio deve
-  // saperlo prima di entrare, non dieci schermate dopo.
+  // The version notice is decided right here: a client that is too old must
+  // know before getting in, not ten screens later.
   compat.apply(info);
 
   let accounts: { status: number; body: unknown };
@@ -128,9 +128,9 @@ export async function probeHub(
 }
 
 /**
- * L'hub locale si indovina solo dal guscio nativo: da una pagina web servita da
- * un'altra origine la prova sarebbe una richiesta cross-origin (errore CORS in
- * console) verso una porta che quasi mai e' quella giusta.
+ * The local hub is guessed only from the native shell: from a web page served by
+ * another origin the attempt would be a cross-origin request (CORS error in the
+ * console) to a port that is almost never the right one.
  */
 function mayProbeLocalHub(): boolean {
   if (isTauri()) return true;
@@ -140,12 +140,12 @@ function mayProbeLocalHub(): boolean {
 
 class ConnectGate {
   phase = $state<ConnectPhase>("probing");
-  /** Indirizzo da riproporre nei campi: l'ultimo salvato, se c'era. */
+  /** Address to prefill in the fields: the last saved one, if any. */
   savedBase = $state("");
-  /** Account a cui il client e' legato ora (la schermata lo segna nella lista). */
+  /** Account the client is bound to now (the screen marks it in the list). */
   currentAccountId = $state<string | null>(getSelectedAccountId());
 
-  /** Ultima sonda riuscita all'avvio: la sessione la riusa invece di rifarla. */
+  /** Last successful startup probe: the session reuses it instead of redoing it. */
   private lastProbe: { base: string; at: number; data: AccountsResponse } | null = null;
 
   private rememberProbe(base: string, probe: HubProbe) {
@@ -158,8 +158,8 @@ class ConnectGate {
   }
 
   /**
-   * Risposta «account» della sonda d'avvio, se e' recente e riguarda l'hub in
-   * uso: l'avvio della sessione non rifa' le stesse due richieste. Una volta sola.
+   * «accounts» answer of the startup probe, if it is recent and concerns the hub in
+   * use: the session startup does not redo the same two requests. Only once.
    */
   takeRecentProbe(maxAgeMs: number): AccountsResponse | null {
     const p = this.lastProbe;
@@ -172,14 +172,14 @@ class ConnectGate {
   }
 
   /**
-   * All'avvio: con un indirizzo gia' salvato si entra e basta — se l'hub non
-   * risponde ci pensa il ciclo di riconnessione della sessione, con
-   * l'interfaccia in piedi.
+   * At startup: with an address already saved we just go in — if the hub does not
+   * answer, the session's reconnect loop takes care of it, with the
+   * UI up.
    *
-   * Senza indirizzo si prova prima l'origine della pagina, che nel browser e'
-   * l'hub stesso, e poi l'hub locale. Solo se non risponde nessuno si chiede
-   * dove sia: la procedura di primo avvio non deve comparire a chi ha aperto
-   * l'interfaccia servita dall'hub.
+   * Without an address we first try the page's origin, which in the browser is
+   * the hub itself, and then the local hub. Only if nobody answers do we ask
+   * where it is: the first-launch flow must not appear to someone who opened
+   * the UI served by the hub.
    */
   async decideOnStart(): Promise<boolean> {
     // The boot splash has no text: wait there for the user's language, so
@@ -193,7 +193,7 @@ class ConnectGate {
   private async decide(): Promise<boolean> {
     this.savedBase = getServerBaseUrl();
     if (this.savedBase) {
-      // Si entra subito; la compatibilita' con l'hub si verifica in background.
+      // Go in right away; compatibility with the hub is checked in the background.
       void checkHubCompat(this.savedBase);
       return true;
     }
@@ -209,8 +209,8 @@ class ConnectGate {
     const local = await probeHub(LOCAL_HUB, LOCAL_PROBE_TIMEOUT_MS);
     if (local.ok) {
       this.rememberProbe(LOCAL_HUB, local);
-      // Va salvato: nel guscio nativo l'origine e' l'app, e senza base le
-      // chiamate finirebbero su tauri://localhost.
+      // It must be saved: in the native shell the origin is the app, and without a base the
+      // calls would end up on tauri://localhost.
       setServerBaseUrl(LOCAL_HUB);
       this.savedBase = LOCAL_HUB;
       return true;
@@ -218,7 +218,7 @@ class ConnectGate {
     return false;
   }
 
-  /** Riapre la procedura: dalle impostazioni, o quando l'hub ha cambiato indirizzo. */
+  /** Reopens the flow: from settings, or when the hub has changed address. */
   open() {
     this.savedBase = getServerBaseUrl();
     this.currentAccountId = getSelectedAccountId();

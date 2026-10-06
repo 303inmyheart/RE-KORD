@@ -21,9 +21,9 @@
     onconnected,
     ondismiss,
   }: {
-    /** Indirizzo dell'ultima connessione: si ripropone nei campi. */
+    /** Address of the last connection: prefilled in the fields. */
     savedBase?: string;
-    /** Riaperta dalle impostazioni, con l'app dietro: si puo' tornare indietro. */
+    /** Reopened from settings, with the app behind: going back is possible. */
     dismissible?: boolean;
     onconnected: (base: string, accountId: string) => void;
     ondismiss?: () => void;
@@ -106,7 +106,7 @@
     accounts = probe.accounts;
     defaultAccountId = probe.defaultAccountId;
     step = "accounts";
-    // Un hub con un solo profilo non e' una scelta: si entra e si guarda la libreria.
+    // A hub with a single profile is not a choice: go in and look at the library.
     if (probe.accounts.length === 1) enter(probe.accounts[0].id);
   }
 
@@ -143,7 +143,7 @@
       return;
     }
     applySaved(base);
-    // Il QR e' stato inquadrato per collegarsi, non per riempire un campo.
+    // The QR was scanned to connect, not to fill in a field.
     await connect();
   }
 
@@ -320,8 +320,8 @@
             </Button>
           {/if}
           {#if dismissible && ondismiss}
-            <!-- Uscire senza cambiare nulla: un'azione di contorno, non un pari
-                 di «Connetti». -->
+            <!-- Leave without changing anything: a side action, not a peer
+                 of «Connect». -->
             <Button class="connect__quiet" variant="link" onclick={ondismiss}>
               {t("connect.cancel")}
             </Button>
@@ -380,7 +380,7 @@
     width: 100%;
     max-width: 26rem;
     padding: var(--rk-space-2xl);
-    /* La lista degli account e' piu' larga dei due campi dell'indirizzo. */
+    /* The account list is wider than the two address fields. */
     transition: max-width 0.22s ease;
   }
 
@@ -437,14 +437,14 @@
     color: var(--rk-muted-strong);
   }
 
-  /* Primo avvio col dito su un telefono: i due modi sono bersagli, non etichette. */
+  /* First launch by finger on a phone: the two modes are targets, not labels. */
   .connect__body :global(.connect__seg .rk-seg__opt) {
     min-height: calc(var(--rk-tap-min) - 6px);
   }
 
   .connect__hostrow {
     display: grid;
-    /* L'IP prende quel che resta, la porta quattro cifre e basta. */
+    /* The IP takes what's left, the port four digits and that's it. */
     grid-template-columns: minmax(0, 1fr) 6rem;
     gap: var(--rk-space-lg);
   }
@@ -570,8 +570,8 @@
     margin-top: var(--rk-space-2xl);
   }
 
-  /* I bottoni della procedura sono a tutta riga: qui c'e' una cosa da fare per
-     schermata, e sul telefono la riga e' il bersaglio piu' facile da prendere. */
+  /* The flow's buttons span the full row: here there is one thing to do per
+     screen, and on the phone the row is the easiest target to hit. */
   .connect__actions :global(.connect__cta) {
     width: 100%;
     min-height: var(--rk-tap-min);
@@ -603,8 +603,8 @@
     }
 
     .connect__shell {
-      /* Sul telefono la scheda occupa la larghezza: centrarla in 390px lascerebbe
-         due margini e un campo dell'indirizzo stretto. */
+      /* On the phone the card takes the full width: centring it in 390px would leave
+         two margins and a narrow address field. */
       align-items: flex-start;
       padding-top: var(--rk-space-xl);
     }

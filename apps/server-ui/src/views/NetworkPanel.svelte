@@ -111,7 +111,11 @@
     {/if}
 
     {#if remote.error}
-      <Banner tone="error">{remote.error}</Banner>
+      <Banner tone="error"
+        >{remote.errorCode && t(`network.remote.errorCode.${remote.errorCode}`) !== `network.remote.errorCode.${remote.errorCode}`
+          ? t(`network.remote.errorCode.${remote.errorCode}`)
+          : remote.error}</Banner
+      >
     {/if}
     {#if !remote.cloudflaredAvailable}
       <Banner tone="info">{t("network.remote.noCloudflared")}</Banner>

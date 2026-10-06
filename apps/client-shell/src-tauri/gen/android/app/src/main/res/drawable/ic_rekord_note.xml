@@ -1,6 +1,6 @@
 <!--
-  Icona piccola della notifica media. Android la ridisegna come sagoma a un
-  colore, quindi vale solo il profilo: una nota singola, piena.
+  Small icon for the media notification. Android redraws it as a single-colour
+  silhouette, so only the outline matters: a single, filled note.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"

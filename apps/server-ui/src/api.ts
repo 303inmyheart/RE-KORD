@@ -389,6 +389,8 @@ export type RemoteAccessState = {
   provider: string;
   publicUrl: string | null;
   error: string | null;
+  /** Stable code for `error`, translated by the panel. */
+  errorCode?: string | null;
   startedAt: string | null;
   cloudflaredPath: string | null;
   cloudflareLoggedIn: boolean;

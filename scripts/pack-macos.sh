@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Pacchetti macOS di RE-KORD in release/macos/ (gira solo su un Mac):
+# RE-KORD macOS packages in release/macos/ (runs only on a Mac):
 #
-#   rekord-server-<v>-macos-<arch>.tar.gz   hub: eseguibile, run.sh, client-ui, admin-ui
-#   RE-KORD_<v>_<arch>.dmg                  client desktop (Tauri)
+#   rekord-server-<v>-macos-<arch>.tar.gz   hub: executable, run.sh, client-ui, admin-ui
+#   RE-KORD_<v>_<arch>.dmg                  desktop client (Tauri)
 #   SHA256SUMS
 #
-#   scripts/pack-macos.sh                 tutto
-#   scripts/pack-macos.sh --no-client     solo l'hub
-#   scripts/pack-macos.sh --with-tools    aggiunge yt-dlp e cloudflared verificati in bin/
-#   scripts/pack-macos.sh --server-flavor anche il client "Server" (hub incorporato)
-#   scripts/pack-macos.sh --universal     binari universali (arm64 + x86_64)
+#   scripts/pack-macos.sh                 everything
+#   scripts/pack-macos.sh --no-client     the hub only
+#   scripts/pack-macos.sh --with-tools    adds verified yt-dlp and cloudflared in bin/
+#   scripts/pack-macos.sh --server-flavor also the "Server" client (embedded hub)
+#   scripts/pack-macos.sh --universal     universal binaries (arm64 + x86_64)
 #
-# Firma e notarizzazione: Tauri le fa da solo se trova APPLE_SIGNING_IDENTITY,
-# APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID nell'ambiente. Senza, il .dmg non e'
-# firmato e Gatekeeper chiede conferma al primo avvio (tasto destro → Apri).
+# Signing and notarization: Tauri does them on its own if it finds APPLE_SIGNING_IDENTITY,
+# APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID in the environment. Without them, the .dmg is
+# unsigned and Gatekeeper asks for confirmation on first launch (right-click → Open).
 set -euo pipefail
-[[ "$(uname -s)" == Darwin ]] || { echo "pack-macos.sh gira solo su macOS." >&2; exit 1; }
+[[ "$(uname -s)" == Darwin ]] || { echo "pack-macos.sh runs only on macOS." >&2; exit 1; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
@@ -30,7 +30,7 @@ while (( $# )); do
     --server-flavor) SERVER_FLAVOR=1 ;;
     --universal) UNIVERSAL=1 ;;
     -h|--help) awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
-    *) echo "Opzione non riconosciuta: $1" >&2; exit 2 ;;
+    *) echo "Unrecognized option: $1" >&2; exit 2 ;;
   esac
   shift
 done
@@ -51,20 +51,20 @@ mkdir -p "$OUT"
 MARKER="$OUT/.pack-started"
 touch "$MARKER"
 exec > >(tee -a "$LOG") 2>&1
-echo "RE-KORD $VERSION — pacchetti macOS ($ARCH) — $(date)"
+echo "RE-KORD $VERSION — macOS packages ($ARCH) — $(date)"
 
 step() { echo; echo "==> $*"; }
 
-step "Controllo versioni"
+step "Version check"
 node scripts/version.mjs check "$VERSION"
 
-step "Dipendenze JS (lockfile bloccato)"
+step "JS dependencies (frozen lockfile)"
 pnpm install --frozen-lockfile
 
-step "Build UI (client + pannello admin)"
+step "UI build (client + admin panel)"
 pnpm build:ui
 
-step "Build hub (release)"
+step "Hub build (release)"
 if (( UNIVERSAL )); then
   rustup target add aarch64-apple-darwin x86_64-apple-darwin
   cargo build -p rekord-server --release --locked --target aarch64-apple-darwin
@@ -79,7 +79,7 @@ else
   SERVER_BIN="$TARGET_DIR/release/rekord-server"
 fi
 
-step "Pacchetto hub: $STAGE_NAME"
+step "Hub package: $STAGE_NAME"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 install -m 0755 "$SERVER_BIN" "$STAGE/rekord-server"
@@ -100,8 +100,8 @@ EOF
 chmod +x "$STAGE/run.sh"
 
 if (( TOOLS )); then
-  step "yt-dlp e cloudflared (download verificato)"
-  # yt-dlp_macos e' gia' universale; cloudflared no: si prende quello della macchina.
+  step "yt-dlp and cloudflared (verified download)"
+  # yt-dlp_macos is already universal; cloudflared isn't: take the one for this machine.
   plat="macos-$([[ "$(uname -m)" == arm64 ]] && echo arm64 || echo x64)"
   bash scripts/fetch-ytdlp.sh "$plat" "$STAGE/bin"
   bash scripts/fetch-cloudflared.sh "$plat" "$STAGE/bin"
@@ -113,7 +113,7 @@ echo "  $OUT/$STAGE_NAME.tar.gz"
 
 bundle_client() {
   local label="$1"; shift
-  step "Client desktop $label (Tauri, dmg)"
+  step "Desktop client $label (Tauri, dmg)"
   local args=(build --bundles dmg)
   local bundle="$TARGET_DIR/release/bundle/dmg"
   if (( UNIVERSAL )); then
@@ -128,7 +128,7 @@ bundle_client() {
     echo "  $OUT/$(basename "$f")"
     found=1
   done
-  (( found )) || { echo "Nessun .dmg prodotto in $bundle" >&2; exit 1; }
+  (( found )) || { echo "No .dmg produced in $bundle" >&2; exit 1; }
 }
 
 if (( CLIENT )); then
@@ -136,7 +136,7 @@ if (( CLIENT )); then
   (( SERVER_FLAVOR )) && bundle_client "RE-KORD Server" --features hub --config src-tauri/tauri.hub.conf.json
 fi
 
-step "Checksum"
+step "Checksums"
 (
   cd "$OUT"
   shasum -a 256 ./*.tar.gz ./*.dmg 2>/dev/null | sed 's# \./# #' > SHA256SUMS || true
@@ -144,4 +144,4 @@ step "Checksum"
 )
 rm -f "$MARKER"
 echo
-echo "Fatto: $OUT (log: $LOG)"
+echo "Done: $OUT (log: $LOG)"

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Scarica cloudflared (tunnel per l'accesso remoto) da
-# https://github.com/cloudflare/cloudflared/releases a una versione fissata e lo
-# verifica.
+# Downloads cloudflared (tunnel for remote access) from
+# https://github.com/cloudflare/cloudflared/releases at a pinned version and
+# verifies it.
 #
-#   scripts/fetch-cloudflared.sh [piattaforma] [cartella]
-#     piattaforma: linux-x64 | linux-arm64 | windows-x64 | macos-x64 | macos-arm64
-#     cartella:    predefinita release/bin/<piattaforma>
+#   scripts/fetch-cloudflared.sh [platform] [directory]
+#     platform:    linux-x64 | linux-arm64 | windows-x64 | macos-x64 | macos-arm64
+#     directory:   default release/bin/<platform>
 #
-#   CLOUDFLARED_VERSION=2025.8.1 scripts/fetch-cloudflared.sh   altra versione
+#   CLOUDFLARED_VERSION=2025.8.1 scripts/fetch-cloudflared.sh   another version
 #
-# Il checksum pubblicato si legge dal campo `digest` degli asset nell'API GitHub
-# (GITHUB_TOKEN, se presente, evita il limite di richieste anonime). Vedi
-# scripts/lib/fetch-common.sh. L'hub trova cloudflared accanto al proprio
-# eseguibile (o in bin/), oppure tramite REKORD_CLOUDFLARED_BIN.
+# The published checksum is read from the assets' `digest` field in the GitHub API
+# (GITHUB_TOKEN, if set, avoids the anonymous rate limit). See
+# scripts/lib/fetch-common.sh. The hub finds cloudflared next to its own
+# executable (or in bin/), or via REKORD_CLOUDFLARED_BIN.
 set -euo pipefail
 source "$(dirname "$0")/lib/fetch-common.sh"
 
@@ -27,7 +27,7 @@ case "$PLATFORM" in
   windows-x64) ASSET=cloudflared-windows-amd64.exe; OUT=cloudflared.exe ;;
   macos-x64) ASSET=cloudflared-darwin-amd64.tgz; OUT=cloudflared; ARCHIVE=1 ;;
   macos-arm64) ASSET=cloudflared-darwin-arm64.tgz; OUT=cloudflared; ARCHIVE=1 ;;
-  *) rk_fetch_die "piattaforma non riconosciuta: $PLATFORM" ;;
+  *) rk_fetch_die "unrecognized platform: $PLATFORM" ;;
 esac
 
 rk_need curl awk
@@ -55,4 +55,4 @@ else
   install -m 0755 "$TMP/$ASSET" "$DEST/$OUT"
 fi
 echo "$CLOUDFLARED_VERSION" > "$DEST/cloudflared.version"
-echo "  fatto: $DEST/$OUT"
+echo "  done: $DEST/$OUT"

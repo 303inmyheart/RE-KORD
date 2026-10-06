@@ -1,11 +1,11 @@
 import type { Album, Artist } from "./api";
 import { hashSeed } from "./trackMoods";
 
-/** Mappa artista → id album cover (pick pseudo-random stabile, come densità old). */
+/** Maps artist → cover album id (stable pseudo-random pick, like old density). */
 export function buildArtistCoverAlbumMap(
   artists: Artist[],
   albums: Album[],
-  /** Se true, reshuffle random (es. al Sync); altrimenti hash stabile. */
+  /** If true, random reshuffle (e.g. on Sync); otherwise stable hash. */
   reshuffle = false,
 ): Map<number, number> {
   const byArtist = new Map<number, number[]>();

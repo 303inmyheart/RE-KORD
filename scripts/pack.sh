@@ -1,38 +1,38 @@
 #!/usr/bin/env bash
-# Pacchetti di RE-KORD: un comando per piattaforma e versione, come nella 5.0.
+# RE-KORD packages: one command per platform and flavor, as in 5.0.
 #
 #   pnpm pack:linux:server   release/linux/
-#                              RE-KORD-Server-<v>-linux-x64.AppImage / .deb   app desktop con l'hub
-#                              RE-KORD-Server-<v>-linux-x64-headless.tar.gz   hub senza finestra (systemd)
+#                              RE-KORD-Server-<v>-linux-x64.AppImage / .deb   desktop app with the hub
+#                              RE-KORD-Server-<v>-linux-x64-headless.tar.gz   windowless hub (systemd)
 #   pnpm pack:linux:client   release/linux/
 #                              RE-KORD-Client-<v>-linux-x64.AppImage / .deb
 #   pnpm pack:win:server     release/windows/
-#                              RE-KORD-Server-<v>-windows-x64.zip   cartella con "RE-KORD Server.exe"
-#                                                                   (hub incorporato), niente installer
+#                              RE-KORD-Server-<v>-windows-x64.zip   folder with "RE-KORD Server.exe"
+#                                                                   (embedded hub), no installer
 #   pnpm pack:win:client     release/windows/
-#                              RE-KORD-Client-<v>-windows-x64.exe   exe unico, si avvia e basta
+#                              RE-KORD-Client-<v>-windows-x64.exe   single exe, just run it
 #   pnpm pack:android        release/android/
-#                              RE-KORD-Client-<v>-android-arm64.apk   (build ottimizzata; firmata
-#                              con keystore.properties se c'e', altrimenti con la chiave di debug)
-#   pnpm pack:all            tutto quanto sopra
+#                              RE-KORD-Client-<v>-android-arm64.apk   (optimized build; signed
+#                              with keystore.properties if present, otherwise with the debug key)
+#   pnpm pack:all            all of the above
 #
-#   scripts/pack.sh <linux|windows|android|all> [server|client|all] [opzioni]
-#     --no-tools   versione server senza yt-dlp, cloudflared e ffmpeg (usa quelli del sistema)
-#     --native     niente Docker: serve la toolchain completa su questa macchina
+#   scripts/pack.sh <linux|windows|android|all> [server|client|all] [options]
+#     --no-tools   server flavor without yt-dlp, cloudflared and ffmpeg (uses the system ones)
+#     --native     no Docker: requires the full toolchain on this machine
 #
-# Linux e Windows si compilano in un container Docker (scripts/docker/builder.Dockerfile)
-# che ha webkit2gtk, GStreamer e cargo-xwin: su questa macchina basta Docker. Lo si salta
-# con --native, oppure da solo su Linux quando webkit2gtk-4.1 e' gia' installato.
-# Android usa l'SDK/NDK locale (scripts/lib/android-env.sh).
+# Linux and Windows are built in a Docker container (scripts/docker/builder.Dockerfile)
+# that has webkit2gtk, GStreamer and cargo-xwin: Docker is all this machine needs. It is
+# skipped with --native, or automatically on Linux when webkit2gtk-4.1 is already installed.
+# Android uses the local SDK/NDK (scripts/lib/android-env.sh).
 #
-# Ogni esecuzione aggiorna release/<piattaforma>/SHA256SUMS; il log completo e'
-# release/<piattaforma>/build.log.
+# Every run updates release/<platform>/SHA256SUMS; the full log is
+# release/<platform>/build.log.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 usage() { awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; }
-die() { echo "ERRORE: $*" >&2; exit 1; }
+die() { echo "ERROR: $*" >&2; exit 1; }
 step() { echo; echo "==> $*"; }
 
 PLATFORM=""
@@ -40,8 +40,8 @@ FLAVOR=all
 TOOLS=1
 NATIVE=0
 ARGS=("$@")
-# Prima parola: piattaforma; seconda (facoltativa): versione. "all" vale per entrambe,
-# quindi conta la posizione e non il valore.
+# First word: platform; second (optional): flavor. "all" is valid for both,
+# so the position matters, not the value.
 POSITIONAL=0
 while (( $# )); do
   if [[ "$1" != -* ]]; then
@@ -50,9 +50,9 @@ while (( $# )); do
       1:linux|1:windows|1:android|1:all) PLATFORM="$1" ;;
       1:win) PLATFORM=windows ;;
       2:server|2:client|2:all) FLAVOR="$1" ;;
-      1:*) die "piattaforma non riconosciuta: $1 (linux, windows, android, all)" ;;
-      2:*) die "versione non riconosciuta: $1 (server, client, all)" ;;
-      *) die "argomento in piu': $1" ;;
+      1:*) die "unrecognized platform: $1 (linux, windows, android, all)" ;;
+      2:*) die "unrecognized flavor: $1 (server, client, all)" ;;
+      *) die "extra argument: $1" ;;
     esac
     shift
     continue
@@ -61,7 +61,7 @@ while (( $# )); do
     --no-tools) TOOLS=0 ;;
     --native) NATIVE=1 ;;
     -h|--help) usage; exit 0 ;;
-    *) die "opzione non riconosciuta: $1 (--help per l'elenco)" ;;
+    *) die "unrecognized option: $1 (--help for the list)" ;;
   esac
   shift
 done
@@ -89,21 +89,21 @@ esac
 mkdir -p "$OUT"
 want() { [[ "$FLAVOR" == all || "$FLAVOR" == "$1" ]]; }
 
-# --- Fuori dal container: preparazione, poi (se serve) si rientra in Docker -------
+# --- Outside the container: preparation, then (if needed) re-enter via Docker ----
 if [[ -z "${REKORD_BUILDER:-}" ]]; then
   LOG="$OUT/build.log"
   : > "$LOG"
   exec > >(tee -a "$LOG") 2>&1
   echo "RE-KORD $VERSION — $PLATFORM ($FLAVOR) — $(date -Is)"
 
-  step "Controllo versioni"
+  step "Version check"
   node scripts/version.mjs check "$VERSION"
 
-  step "Dipendenze JS (lockfile bloccato)"
+  step "JS dependencies (frozen lockfile)"
   pnpm install --frozen-lockfile
 
   if [[ "$PLATFORM" != android ]] && want server && (( TOOLS )); then
-    step "yt-dlp, cloudflared, ffmpeg per $TOOLS_PLATFORM (download verificato)"
+    step "yt-dlp, cloudflared, ffmpeg for $TOOLS_PLATFORM (verified download)"
     bash scripts/fetch-tools.sh "$TOOLS_PLATFORM"
   fi
 
@@ -115,22 +115,22 @@ if [[ -z "${REKORD_BUILDER:-}" ]]; then
   fi
 
   if (( use_docker )); then
-    command -v docker >/dev/null || die "serve Docker (o --native con la toolchain installata)"
+    command -v docker >/dev/null || die "Docker is required (or --native with the toolchain installed)"
     DOCKERFILE="$ROOT/scripts/docker/builder.Dockerfile"
-    # Il tag segue il contenuto del Dockerfile: cambiato quello, l'immagine si rifa'.
+    # The tag follows the Dockerfile's content: when that changes, the image is rebuilt.
     IMAGE="rekord-builder:$(sha256sum "$DOCKERFILE" | cut -c1-12)"
     if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-      step "Immagine di build $IMAGE (solo la prima volta, qualche minuto)"
+      step "Build image $IMAGE (first time only, a few minutes)"
       docker build -f "$DOCKERFILE" -t "$IMAGE" "$ROOT/scripts/docker"
     fi
     CACHE="${REKORD_BUILDER_CACHE:-$HOME/.cache/rekord-builder}"
     mkdir -p "$CACHE/cargo" "$CACHE/xwin" "$CACHE/home"
     REPO="$ROOT"
-    step "Build in Docker ($IMAGE)"
+    step "Building in Docker ($IMAGE)"
     tty=()
     [[ -t 0 ]] && tty=(-t)
-    # Stesso percorso assoluto dentro e fuori: i link di pnpm e i percorsi nei log
-    # restano validi. Target separato da quello dell'host (glibc diversa).
+    # Same absolute path inside and outside: pnpm links and paths in the logs
+    # stay valid. Target dir kept separate from the host's (different glibc).
     docker run --rm "${tty[@]}" \
       --user "$(id -u):$(id -g)" \
       -v "$REPO:$REPO" -w "$ROOT" \
@@ -142,25 +142,25 @@ if [[ -z "${REKORD_BUILDER:-}" ]]; then
     REKORD_BUILDER=native bash "$0" "${ARGS[@]}"
   fi
 
-  step "Checksum"
+  step "Checksums"
   (
     cd "$OUT"
     find . -maxdepth 1 -type f -name 'RE-KORD-*' -printf '%f\0' | sort -z | xargs -0 -r sha256sum > SHA256SUMS
     cat SHA256SUMS
   )
   echo
-  echo "Fatto: $OUT (log: $LOG)"
+  echo "Done: $OUT (log: $LOG)"
   exit 0
 fi
 
-# --- Dentro il container (o in nativo): la build vera ----------------------------
+# --- Inside the container (or native): the actual build -------------------------
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 MARKER="$(mktemp)"
 trap 'rm -f "$MARKER"' EXIT
 
 tauri() { pnpm --filter @rekord/client-shell exec tauri "$@"; }
 
-# copy_bundles <cartella bundle> <nome finale senza estensione> <estensioni...>
+# copy_bundles <bundle dir> <final name without extension> <extensions...>
 copy_bundles() {
   local dir="$1" base="$2"; shift 2
   local ext f dest found=0
@@ -173,13 +173,13 @@ copy_bundles() {
     echo "  $dest"
     found=1
   done
-  (( found )) || die "nessun pacchetto prodotto in $dir"
+  (( found )) || die "no package produced in $dir"
 }
 
 server_flavor_args() {
   printf '%s\n' --features hub --config src-tauri/tauri.hub.conf.json
   if (( TOOLS )); then
-    # Gli strumenti finiscono tra le risorse dell'app, in bin/ (embedded_hub.rs).
+    # The tools go into the app's resources, under bin/ (embedded_hub.rs).
     printf '%s\n' --config \
       "{\"bundle\":{\"resources\":{\"../../../release/bin/$TOOLS_PLATFORM/\":\"bin/\"}}}"
   fi
@@ -193,26 +193,26 @@ stage_headless_tools() {
 }
 
 linux_client() {
-  step "Client desktop Linux (deb + AppImage)"
+  step "Linux desktop client (deb + AppImage)"
   touch "$MARKER"
   tauri build --bundles deb,appimage
   copy_bundles "$TARGET_DIR/release/bundle" "RE-KORD-Client-$VERSION-linux-x64" AppImage deb
 }
 
 linux_server() {
-  step "Server desktop Linux, hub incorporato (deb + AppImage)"
+  step "Linux desktop server, embedded hub (deb + AppImage)"
   touch "$MARKER"
   local flavor
   mapfile -t flavor < <(server_flavor_args)
   tauri build --bundles deb,appimage "${flavor[@]}"
   copy_bundles "$TARGET_DIR/release/bundle" "RE-KORD-Server-$VERSION-linux-x64" AppImage deb
 
-  step "Hub headless Linux (tarball + systemd)"
+  step "Linux headless hub (tarball + systemd)"
   pnpm build:ui
   cargo build -p rekord-server --release --locked
   local name="RE-KORD-Server-$VERSION-linux-x64-headless"
-  # Si prepara fuori dalla cartella condivisa: con Docker Desktop i permessi dei
-  # file sul volume montato non si possono cambiare (chmod rifiutato).
+  # Staged outside the shared folder: with Docker Desktop, file permissions on the
+  # mounted volume cannot be changed (chmod is refused).
   local stage_root
   stage_root="$(mktemp -d)"
   local stage="$stage_root/$name"
@@ -226,11 +226,11 @@ linux_server() {
   echo "$VERSION" > "$stage/VERSION"
   cat > "$stage/run.sh" <<'EOF'
 #!/usr/bin/env bash
-# Avvia l'hub RE-KORD con le interfacce di questo pacchetto.
-# Opzioni e variabili: ./rekord-server --help (REKORD_BIND, REKORD_DATA_DIR, ...).
+# Starts the RE-KORD hub with the UIs shipped in this package.
+# Options and variables: ./rekord-server --help (REKORD_BIND, REKORD_DATA_DIR, ...).
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
-# yt-dlp, cloudflared e ffmpeg del pacchetto, se ci sono.
+# The package's yt-dlp, cloudflared and ffmpeg, if present.
 if [[ -z "${YTDLP_PATH:-}" && -x "$DIR/bin/yt-dlp" ]]; then export YTDLP_PATH="$DIR/bin/yt-dlp"; fi
 if [[ -z "${REKORD_CLOUDFLARED_BIN:-}" && -x "$DIR/bin/cloudflared" ]]; then export REKORD_CLOUDFLARED_BIN="$DIR/bin/cloudflared"; fi
 if [[ -z "${REKORD_FFMPEG:-}" && -x "$DIR/bin/ffmpeg" ]]; then export REKORD_FFMPEG="$DIR/bin/ffmpeg"; fi
@@ -241,31 +241,31 @@ exec "$DIR/rekord-server" \
 EOF
   chmod +x "$stage/run.sh"
   cat > "$stage/README.txt" <<EOF
-RE-KORD hub $VERSION (Linux x64, senza finestra)
+RE-KORD hub $VERSION (Linux x64, windowless)
 
-Prova al volo:
-  ./run.sh                       http://<questa-macchina>:7420  (pannello: /admin)
+Quick try:
+  ./run.sh                       http://<this-machine>:7420  (admin panel: /admin)
   REKORD_BIND=127.0.0.1:7420 ./run.sh
 
-Come servizio (utente dedicato, avvio automatico, dati in /var/lib/rekord):
+As a service (dedicated user, automatic start, data in /var/lib/rekord):
   sudo ./systemd/install.sh
 
-bin/ contiene yt-dlp, cloudflared e ffmpeg (LGPL, licenza in bin/ffmpeg-LICENSE.txt);
-senza, l'hub usa quelli nel PATH. Per l'app con finestra usa RE-KORD-Server-*.AppImage.
+bin/ contains yt-dlp, cloudflared and ffmpeg (LGPL, license in bin/ffmpeg-LICENSE.txt);
+without it, the hub uses the ones on the PATH. For the windowed app use RE-KORD-Server-*.AppImage.
 EOF
   tar -C "$stage_root" -czf "$OUT/$name.tar.gz" "$name"
   rm -rf "$stage_root"
   echo "  $OUT/$name.tar.gz"
 }
 
-# Windows senza installer, come la 5.0: l'exe si avvia e basta. WebView2 c'e' gia' su
-# Windows 10/11 aggiornati; il loader e' collegato staticamente nell'exe.
+# Windows without an installer, as in 5.0: just run the exe. WebView2 is already present on
+# up-to-date Windows 10/11; the loader is statically linked into the exe.
 windows_tauri() {
   tauri build --runner cargo-xwin --target "$TRIPLE_WIN" --no-bundle "$@"
 }
 
 windows_client() {
-  step "Client desktop Windows (exe portatile)"
+  step "Windows desktop client (portable exe)"
   windows_tauri
   local dest="$OUT/RE-KORD-Client-$VERSION-windows-x64.exe"
   cp -f "$TARGET_DIR/$TRIPLE_WIN/release/rekord-client.exe" "$dest"
@@ -273,15 +273,15 @@ windows_client() {
 }
 
 windows_server() {
-  step "Server desktop Windows, hub incorporato (cartella portatile in zip)"
+  step "Windows desktop server, embedded hub (portable folder in a zip)"
   local flavor
   mapfile -t flavor < <(server_flavor_args)
   windows_tauri "${flavor[@]}"
   pnpm build:server-ui
-  # L'app cerca interfacce e strumenti accanto all'exe (resource_dir su Windows).
+  # The app looks for the UIs and tools next to the exe (resource_dir on Windows).
   local name="RE-KORD-Server-$VERSION-windows-x64"
-  # Si prepara fuori dalla cartella condivisa: con Docker Desktop i permessi dei
-  # file sul volume montato non si possono cambiare (chmod rifiutato).
+  # Staged outside the shared folder: with Docker Desktop, file permissions on the
+  # mounted volume cannot be changed (chmod is refused).
   local stage_root
   stage_root="$(mktemp -d)"
   local stage="$stage_root/RE-KORD Server"
@@ -293,15 +293,15 @@ windows_server() {
   printf '%s\r\n' \
     "RE-KORD Server $VERSION (Windows x64)" \
     '' \
-    'Avvio: doppio clic su "RE-KORD Server.exe". La finestra e'' il client; l''hub parte' \
-    'insieme e resta raggiungibile dagli altri dispositivi su http://<IP-di-questo-PC>:7420' \
-    '(pannello: /admin). Al primo avvio Windows chiede di consentire l''accesso alla rete:' \
-    'rispondi si'' per le reti private.' \
+    'Start: double-click "RE-KORD Server.exe". The window is the client; the hub starts' \
+    'with it and stays reachable from other devices at http://<IP-of-this-PC>:7420' \
+    '(admin panel: /admin). On first start Windows asks whether to allow network access:' \
+    'answer yes for private networks.' \
     '' \
-    'Tieni insieme l''exe e le cartelle admin-ui, client-ui e bin: si puo'' spostare tutta' \
-    'la cartella dove vuoi. bin\ contiene yt-dlp, cloudflared e ffmpeg (LGPL, licenza in' \
-    'bin\ffmpeg-LICENSE.txt). Dati: %APPDATA%\app.rekord.server.' \
-    > "$stage/LEGGIMI.txt"
+    'Keep the exe together with the admin-ui, client-ui and bin folders: the whole folder' \
+    'can be moved anywhere. bin\ contains yt-dlp, cloudflared and ffmpeg (LGPL, license in' \
+    'bin\ffmpeg-LICENSE.txt). Data: %APPDATA%\app.rekord.server.' \
+    > "$stage/README.txt"
   rm -f "$OUT/$name.zip"
   (cd "$stage_root" && zip -qr "$OUT/$name.zip" "RE-KORD Server")
   rm -rf "$stage_root"
@@ -309,12 +309,12 @@ windows_server() {
 }
 
 android_client() {
-  step "Client Android (APK arm64, build ottimizzata)"
+  step "Android client (arm64 APK, optimized build)"
   touch "$MARKER"
   bash scripts/android-build.sh --release
   local apk
   apk="$(find apps/client-shell/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' -newer "$MARKER" | head -n1)"
-  [[ -n "$apk" ]] || die "nessun APK prodotto"
+  [[ -n "$apk" ]] || die "no APK produced"
   cp -f "$apk" "$OUT/RE-KORD-Client-$VERSION-android-arm64.apk"
   echo "  $OUT/RE-KORD-Client-$VERSION-android-arm64.apk"
 }

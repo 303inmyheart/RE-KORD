@@ -1,4 +1,4 @@
-/** Indice di inserimento per "aggiungi in coda" (dopo corrente / crossfade / manuali). */
+/** Insertion index for "add to queue" (after current / crossfade / manual ones). */
 export function computeQueueInsertIndex(
   queue: readonly { rel_path: string }[],
   options: {

@@ -1,19 +1,19 @@
 /**
- * Swipe orizzontale sulla barra del player: destra = brano precedente,
- * sinistra = successivo, tocco = apre Studio → Ascolta.
+ * Horizontal swipe on the player bar: right = previous track,
+ * left = next, tap = opens Studio → Listen.
  *
- * La matematica del gesto sta in `createSwipeGesture` senza toccare il DOM, così
- * le soglie si possono verificare con i test node; l'azione `playerSwipe` la
- * collega agli eventi pointer. Soglie come nel dock 5.x (usePlayerBarSwipe).
+ * The gesture math lives in `createSwipeGesture` without touching the DOM, so
+ * the thresholds can be checked with node tests; the `playerSwipe` action
+ * wires it to pointer events. Thresholds as in the 5.x dock (usePlayerBarSwipe).
  */
 
-/** Spostamento oltre il quale il gesto diventa uno swipe e non uno scroll. */
+/** Distance beyond which the gesture becomes a swipe and not a scroll. */
 export const SWIPE_ACTIVATE_PX = 12;
-/** Spostamento che fa scattare il cambio brano. */
+/** Distance that triggers the track change. */
 export const SWIPE_THRESHOLD_PX = 48;
-/** Oltre questo movimento verticale il gesto è uno scroll, non uno swipe. */
+/** Beyond this vertical movement the gesture is a scroll, not a swipe. */
 export const SWIPE_MAX_VERTICAL_PX = 40;
-/** Entro questo movimento il gesto conta come tocco. */
+/** Within this movement the gesture counts as a tap. */
 export const TAP_MAX_MOVE_PX = 10;
 
 export type SwipeMove = "idle" | "capture" | "cancel" | "prev" | "next";
@@ -21,11 +21,11 @@ export type SwipeEnd = "tap" | "none";
 
 export type SwipeGesture = {
   begin(x: number, y: number): void;
-  /** `capture` chiede al chiamante di prendere il pointer capture. */
+  /** `capture` asks the caller to take pointer capture. */
   move(x: number, y: number): SwipeMove;
   end(x: number, y: number): SwipeEnd;
   abort(): void;
-  /** Vero se il gesto ha cambiato brano: serve a sopprimere il click che segue. */
+  /** True if the gesture changed track: used to suppress the click that follows. */
   get fired(): boolean;
   get capturing(): boolean;
 };
@@ -94,23 +94,23 @@ export type PlayerSwipeOptions = {
   enabled: boolean;
   onprev: () => void;
   onnext: () => void;
-  /** Tocco sulla barra: tipicamente apre Studio → Ascolta. */
+  /** Tap on the bar: typically opens Studio → Listen. */
   ontap?: () => void;
   /**
-   * Elementi che gestiscono il proprio gesto: trasporto, barra di posizione,
-   * campi. Lì il gesto non parte nemmeno.
+   * Elements that handle their own gesture: transport, position bar,
+   * fields. There the gesture does not even start.
    */
   ignoreSelector?: string;
   /**
-   * Elementi che restano swipeabili ma non rispondono al tocco, perché hanno
-   * già una loro destinazione: artista e album nella riga del brano.
+   * Elements that stay swipeable but do not respond to taps, because they
+   * already have a destination of their own: artist and album in the track row.
    */
   tapIgnoreSelector?: string;
 };
 
 const DEFAULT_IGNORE = "input, [data-swipe-ignore]";
 
-/** Azione Svelte: `use:playerSwipe={{ enabled, onprev, onnext, ontap }}`. */
+/** Svelte action: `use:playerSwipe={{ enabled, onprev, onnext, ontap }}`. */
 export function playerSwipe(node: HTMLElement, options: PlayerSwipeOptions) {
   let opts = options;
   const gesture = createSwipeGesture();
@@ -129,7 +129,7 @@ export function playerSwipe(node: HTMLElement, options: PlayerSwipeOptions) {
     try {
       node.setPointerCapture(id);
     } catch {
-      /* il pointer può essere già uscito dalla pagina */
+      /* the pointer may already have left the page */
     }
   };
 
@@ -138,7 +138,7 @@ export function playerSwipe(node: HTMLElement, options: PlayerSwipeOptions) {
     try {
       node.releasePointerCapture(pointerId);
     } catch {
-      /* il pointer può essere già stato rilasciato dal browser */
+      /* the pointer may already have been released by the browser */
     }
     pointerId = null;
   };
@@ -187,7 +187,7 @@ export function playerSwipe(node: HTMLElement, options: PlayerSwipeOptions) {
     release();
   };
 
-  /** Lo swipe finisce sopra un pulsante: il click che segue non deve partire. */
+  /** The swipe ends over a button: the click that follows must not fire. */
   const onClickCapture = (e: MouseEvent) => {
     if (!suppressClick) return;
     suppressClick = false;

@@ -84,7 +84,7 @@
     else onopenAlbum();
   }
 
-  /** Legacy: click empty area of the top player row → Studio → Ascolta. */
+  /** Legacy: click empty area of the top player row → Studio → Listen. */
   function openListenFromTopBar(event: MouseEvent) {
     if (isMobileLayout) return;
     const el = event.target as HTMLElement | null;
@@ -95,7 +95,7 @@
     openStudioListen();
   }
 
-  /** Su telefono le azioni secondarie stanno nel menu: eseguile e chiudilo. */
+  /** On the phone the secondary actions live in the menu: run them and close it. */
   function runFromMenu(fn: () => void) {
     menuOpen = false;
     fn();
@@ -108,7 +108,7 @@
     }),
   );
 
-  /** Il menu si chiude toccando fuori, con Esc o quando la finestra cambia taglia. */
+  /** The menu closes on an outside tap, on Esc or when the window changes size. */
   $effect(() => {
     if (!menuOpen) return;
 
@@ -133,7 +133,7 @@
     };
   });
 
-  /** Cambiando brano il menu resta aperto su dati vecchi: chiudilo. */
+  /** On a track change the menu would stay open on stale data: close it. */
   $effect(() => {
     void current?.id;
     menuOpen = false;
@@ -232,7 +232,7 @@
       </div>
 
       {#if isMobileLayout}
-        <!-- Telefono: solo play/pausa in chiaro, il resto nel menu; prev/next con swipe. -->
+        <!-- Phone: only play/pause in plain view, the rest in the menu; prev/next by swipe. -->
         <div class="mobile-transport">
           <div class="menu-wrap" bind:this={menuWrapEl}>
             <IconButton
@@ -570,7 +570,7 @@
     gap: var(--rk-space-2xs);
   }
 
-  /* Gli unici due comandi visibili sul telefono: target pieno da dito. */
+  /* The only two commands visible on the phone: full finger-sized target. */
   .mobile-transport :global(.rk-icon) {
     width: 2.75rem;
     height: 2.75rem;
@@ -604,7 +604,7 @@
     align-items: center;
     gap: var(--rk-space-md);
     width: 100%;
-    /* Voce alta come un target touch: il menu è la via mobile a queste azioni. */
+    /* Item as tall as a touch target: the menu is the mobile path to these actions. */
     min-height: 2.75rem;
     padding: var(--rk-space-sm) var(--rk-space-md);
     border: none;
@@ -689,8 +689,8 @@
   @media (max-width: 999.98px) {
     .dock {
       left: 0;
-      /* Il dock si appoggia sopra la nav mobile, che porta già l'inset in basso:
-         se lo aggiungesse anche lui resterebbe una fascia vuota fra i due. */
+      /* The dock rests on top of the mobile nav, which already carries the bottom inset:
+         if it added it too, an empty strip would remain between the two. */
       bottom: calc(var(--rk-mobile-nav-h) + env(safe-area-inset-bottom, 0px));
       padding-bottom: 0;
     }
@@ -702,27 +702,27 @@
       gap: var(--rk-space-3xs);
     }
 
-    /* Una riga sola: brano a sinistra, play e menu a destra. */
+    /* A single row: track on the left, play and menu on the right. */
     .row.top {
       grid-template-columns: minmax(0, 1fr) auto;
       column-gap: var(--rk-space-sm);
-      /* Lo swipe orizzontale è nostro, lo scorrimento verticale resta al browser. */
+      /* The horizontal swipe is ours, vertical scrolling stays with the browser. */
       touch-action: pan-y;
     }
 
     .identity {
       gap: var(--rk-space-sm);
-      /* Riempie la colonna invece di dimensionarsi sul contenuto: solo così i
-         nomi lunghi vengono troncati e non finiscono sotto play e menu. */
+      /* Fills the column instead of sizing to its content: only this way do
+         long names get truncated instead of ending up under play and menu. */
       justify-self: stretch;
     }
 
-    /* Il tocco sulla riga apre Ascolta: la selezione del testo darebbe fastidio. */
+    /* A tap on the row opens Listen: text selection would get in the way. */
     .meta {
       user-select: none;
     }
 
-    /* Artista e album su una riga sola: se vanno a capo il dock cresce di 20px. */
+    /* Artist and album on a single line: if they wrap the dock grows by 20px. */
     .byline {
       flex-wrap: nowrap;
       min-width: 0;
@@ -735,9 +735,9 @@
       white-space: nowrap;
     }
 
-    /* L'album cede per primo (si accorcia 6 volte più in fretta), l'artista
-       tiene almeno un terzo della riga: «Bring Me the Horizon · Album - Lo…»
-       invece di «Bring Me the … · Album - Lo-…». */
+    /* The album gives way first (it shrinks 6 times faster), the artist
+       keeps at least a third of the row: «Bring Me the Horizon · Album - Lo…»
+       instead of «Bring Me the … · Album - Lo-…». */
     .byline {
       gap: 0 0.3rem;
     }

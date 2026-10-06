@@ -11,8 +11,8 @@ release
 .git
 .github
 
-# Guscio Tauri: al container serve solo apps/client-shell/src-tauri/Cargo.toml
-# (e apps/client-shell/package.json per il workspace pnpm).
+# Tauri shell: the container only needs apps/client-shell/src-tauri/Cargo.toml
+# (and apps/client-shell/package.json for the pnpm workspace).
 apps/client-shell/src-tauri/gen
 apps/client-shell/src-tauri/target
 apps/client-shell/src-tauri/icons

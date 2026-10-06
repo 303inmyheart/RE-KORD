@@ -1,4 +1,4 @@
-/* Riga brano: liste di tracce in libreria, coda, playlist e pannelli Studio. */
+/* Track row: track lists in the library, queue, playlists and Studio panes. */
 .track-row {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr) auto;
@@ -312,7 +312,7 @@
   flex-shrink: 0;
 }
 
-/* Riordino: touch-action none sulla maniglia, così il dito trascina e non scrolla. */
+/* Reordering: touch-action none on the handle, so the finger drags instead of scrolling. */
 .track-row__grip {
   cursor: grab;
   touch-action: none;
@@ -406,7 +406,7 @@
   max-width: min(22rem, calc(100vw - 16px));
   max-height: 14rem;
   overflow: auto;
-  /* Il popover si scorre da sé: la lista di tracce sotto resta ferma. */
+  /* The popover scrolls by itself: the track list below stays still. */
   overscroll-behavior: contain;
   padding: var(--rk-space-xs);
   border-radius: var(--rk-radius);
@@ -576,7 +576,7 @@
   display: contents;
 }
 
-/* Desktop: titolo + stats su una riga; lyrics in meta, non in stats */
+/* Desktop: title + stats on one row; lyrics in meta, not in stats */
 @container track-list (min-width: 651px) {
   .track-row__tools--wide {
     display: contents;

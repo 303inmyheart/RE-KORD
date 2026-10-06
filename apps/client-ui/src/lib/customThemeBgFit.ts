@@ -58,7 +58,7 @@ export function clearCustomThemeBgImageCssVars(root: HTMLElement) {
   root.style.removeProperty("--page-bg-object-position");
 }
 
-/** Estensioni immagine sfondo tema custom (incluso GIF animato). */
+/** Image extensions for the custom theme background (animated GIF included). */
 export function isCustomThemeBgImageExt(ext: string | null | undefined): boolean {
   return ext === "jpg" || ext === "png" || ext === "webp" || ext === "gif";
 }

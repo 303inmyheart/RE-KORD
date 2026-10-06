@@ -33,7 +33,7 @@
   /** Sanitize preview rows rendered at once (the rest is counted). */
   const SANITIZE_SHOWN = 300;
 
-  /* Su telefono i due dialoghi sono fogli dal basso, spingibili giù per chiudere. */
+  /* On the phone both dialogs are bottom sheets, which can be pushed down to close. */
   let isSheet = $state(false);
 
   $effect(() => {

@@ -1,4 +1,4 @@
-/* Tile di libreria: righe artista / album / genere negli elenchi di navigazione. */
+/* Library tiles: artist / album / genre rows in the navigation lists. */
 .library-list-tile {
   display: flex;
   flex-direction: row;

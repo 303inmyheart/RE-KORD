@@ -9,8 +9,8 @@ export type AutoLrcResult = {
 };
 
 /**
- * Auto LRC quick-save: fetch LRCLIB e salva subito sul brano
- * (parity legacy `runAutoLrcQuickSaveForTrack`).
+ * Auto LRC quick-save: fetch from LRCLIB and save straight onto the track
+ * (legacy parity `runAutoLrcQuickSaveForTrack`).
  */
 export async function runAutoLrcQuickSaveForTrack(track: Track): Promise<AutoLrcResult> {
   const fetched = await api.trackLyricsFetch(track.rel_path);

@@ -1,12 +1,12 @@
 # Module: studio
 
-Download yt-dlp, Scopri Web (YouTube Music), metadati (Discogs/iTunes/MB/…), copertine e impostazioni correlate.
+yt-dlp downloads, web Discover (YouTube Music), metadata (Discogs/iTunes/MB/…), cover art and related settings.
 
-Abilitato di default nel hub next: le route Studio sono sempre registrate in `rekord-core` (`studio.rs`). Il flag `studio` nel manifest resta informativo per il registry moduli.
+Enabled by default in the next hub: the Studio routes are always registered in `rekord-core` (`studio.rs`). The `studio` flag in the manifest remains informational for the module registry.
 
 ## Runtime
 
-- Binario `yt-dlp` sul PATH o `YTDLP_PATH`
-- Cookie Netscape opzionali: Impostazioni → Libreria, o env `REKORD_YTDLP_COOKIES`
-- Token Discogs opzionale: Impostazioni o env `REKORD_DISCOGS_TOKEN`
-- Disabilita download: `ENABLE_YTDLP=0`
+- `yt-dlp` binary on the PATH or `YTDLP_PATH`
+- Optional Netscape cookies: Settings → Library, or env `REKORD_YTDLP_COOKIES`
+- Optional Discogs token: Settings or env `REKORD_DISCOGS_TOKEN`
+- Disable downloads: `ENABLE_YTDLP=0`

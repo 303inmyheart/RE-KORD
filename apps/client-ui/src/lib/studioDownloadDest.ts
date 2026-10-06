@@ -29,9 +29,9 @@ export function studioDownloadKindForScope(scope: StudioDownloadScope): string {
 }
 
 /**
- * Cartella di output per yt-dlp.
- * Playlist/album sotto cartella artista → sottocartella col titolo.
- * Singolo → destinazione scelta così com'è (cartella album).
+ * Output folder for yt-dlp.
+ * Playlist/album under an artist folder → subfolder named after the title.
+ * Single → chosen destination as is (album folder).
  */
 export function resolveStudioDownloadOutputDir(
   dlPath: string,

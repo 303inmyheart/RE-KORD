@@ -3,9 +3,9 @@
    * One KPI: a label in sentence case over a large tabular number.
    *
    * ```svelte
-   * <Metric label="Brani" value={stats.track_count} />
-   * <Metric label="Avvisi qualità" value={48} tone="warning" hint="12 senza copertina" />
-   * <Metric label="Album" loading />
+   * <Metric label="Tracks" value={stats.track_count} />
+   * <Metric label="Quality warnings" value={48} tone="warning" hint="12 without a cover" />
+   * <Metric label="Albums" loading />
    * ```
    */
   let {

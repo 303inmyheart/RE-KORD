@@ -1,8 +1,8 @@
-# Hash SHA-256 fissati per i binari di terze parti messi nei pacchetti RE-KORD.
-# Formato: <strumento> <versione> <nome asset> <sha256>
-# Una riga presente qui vince sul checksum pubblicato dal progetto: se non
-# combacia, fetch-ytdlp.sh / fetch-cloudflared.sh si fermano. Le righe si
-# aggiungono copiandole dall'output degli script al primo download verificato.
+# Pinned SHA-256 hashes for the third-party binaries shipped in RE-KORD packages.
+# Format: <tool> <version> <asset name> <sha256>
+# A line present here takes precedence over the checksum published by the project:
+# if it doesn't match, fetch-ytdlp.sh / fetch-cloudflared.sh stop. Lines are
+# added by copying them from the scripts' output on the first verified download.
 yt-dlp 2026.08.19 yt-dlp_linux 58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a
 yt-dlp 2026.08.19 yt-dlp.exe 66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a
 cloudflared 2026.9.3 cloudflared-linux-amd64 77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2

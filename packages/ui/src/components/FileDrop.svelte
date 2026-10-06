@@ -4,8 +4,8 @@
    * `<input type="file">` (which renders the browser's own, untranslated button).
    *
    * ```svelte
-   * <FileDrop accept="image/*" label="Trascina un'immagine o scegli un file"
-   *   hint="JPG o PNG, almeno 500×500" fileName={picked?.name}
+   * <FileDrop accept="image/*" label="Drag an image or choose a file"
+   *   hint="JPG or PNG, at least 500×500" fileName={picked?.name}
    *   onfiles={(files) => (picked = files[0])} />
    * ```
    */

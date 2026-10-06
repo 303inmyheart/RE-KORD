@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ActionRow, Button, QrCodeImg } from "@rekord/ui";
   import { t } from "../lib/i18n.svelte";
-  import type { RemoteAccessState } from "../lib/api";
+  import { translateHubError, type RemoteAccessState } from "../lib/api";
 
   let {
     remote,
@@ -41,14 +41,19 @@
     status === "running" ? remote?.publicUrl?.trim() || null : null,
   );
   /**
-   * Il QR mostra il tunnel quando c'e', altrimenti l'indirizzo in rete locale.
-   * Prima esisteva solo per il tunnel, e chi installava l'APK in casa — il caso
-   * normale — non aveva niente da inquadrare e doveva copiare l'IP a mano.
+   * The QR shows the tunnel when there is one, otherwise the local network address.
+   * It used to exist only for the tunnel, and whoever installed the APK at home — the
+   * normal case — had nothing to scan and had to copy the IP by hand.
    */
   const qrUrl = $derived(publicUrl ?? lanUrl);
   const qrIsPublic = $derived(Boolean(publicUrl));
   const loggedIn = $derived(Boolean(remote?.cloudflareLoggedIn));
-  const errText = $derived(error || remote?.error || "");
+  const errText = $derived(
+    error ||
+      (remote?.error || remote?.errorCode
+        ? translateHubError(remote?.errorCode, remote?.error)
+        : ""),
+  );
   const cloudflaredOk = $derived(remote?.cloudflaredAvailable !== false);
 
   const loginLabel = $derived(

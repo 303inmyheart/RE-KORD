@@ -1,12 +1,12 @@
 /**
- * PWA per il client servito dall'hub (browser): manifest in `public/`, service
- * worker generato in build (`vite.config.ts`). Mai nei gusci Tauri, che hanno
- * l'interfaccia gia' in locale e un'origine (`tauri://`) dove i service worker
- * non servono; mai in sviluppo, dove una cache confonderebbe l'HMR.
+ * PWA for the client served by the hub (browser): manifest in `public/`, service
+ * worker generated at build time (`vite.config.ts`). Never in the Tauri shells, which have
+ * the UI already local and an origin (`tauri://`) where service workers
+ * are not needed; never in development, where a cache would confuse HMR.
  *
- * I service worker esistono solo in contesti sicuri: HTTPS (tunnel Cloudflare,
- * reverse proxy) e localhost. Su `http://192.168.x.x:7420` il browser non li
- * offre: l'app funziona uguale, solo senza installazione/avvio offline.
+ * Service workers exist only in secure contexts: HTTPS (Cloudflare tunnel,
+ * reverse proxy) and localhost. On `http://192.168.x.x:7420` the browser does not
+ * offer them: the app works the same, just without install/offline startup.
  */
 
 import { isTauri } from "./env";
@@ -26,14 +26,14 @@ export function registerServiceWorker(): void {
   const register = () => {
     navigator.serviceWorker
       .register("/sw.js", { scope: "/" })
-      .catch((e) => console.warn("[rekord] service worker non registrato", e));
+      .catch((e) => console.warn("[rekord] service worker not registered", e));
   };
-  // Dopo il load: la registrazione non deve contendere la rete al primo avvio.
+  // After load: registration must not compete for the network on first startup.
   if (document.readyState === "complete") register();
   else window.addEventListener("load", register, { once: true });
 }
 
-/** Chiede al service worker di riscaricare il guscio, poi ricarica la pagina. */
+/** Asks the service worker to re-download the shell, then reloads the page. */
 export async function reloadWithFreshShell(): Promise<void> {
   try {
     if (pwaSupported()) {
@@ -41,7 +41,7 @@ export async function reloadWithFreshShell(): Promise<void> {
       await reg?.update();
     }
   } catch {
-    /* si ricarica comunque */
+    /* reload anyway */
   }
   location.reload();
 }

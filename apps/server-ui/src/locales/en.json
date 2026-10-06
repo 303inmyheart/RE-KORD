@@ -348,5 +348,10 @@
   "hub.kind.account": "Account",
   "hub.kind.download": "Download",
   "hub.kind.settings": "Settings",
-  "hub.kind.restore": "Restore"
+  "hub.kind.restore": "Restore",
+  "network.remote.errorCode.cloudflared_not_found": "cloudflared not found: reinstall RE-KORD Server or set REKORD_CLOUDFLARED_BIN.",
+  "network.remote.errorCode.tunnel_start_timeout": "Tunnel start timed out: cloudflared did not return a public URL.",
+  "network.remote.errorCode.tunnel_exited_early": "The tunnel closed before it was ready.",
+  "network.remote.errorCode.tunnel_exited": "The tunnel closed.",
+  "network.remote.errorCode.tunnel_failed": "The tunnel failed to start."
 }

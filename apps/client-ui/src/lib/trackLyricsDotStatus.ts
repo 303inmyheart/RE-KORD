@@ -15,7 +15,7 @@ export type TrackLyricsEphemeralAutoStatus =
   | "missing"
   | "error";
 
-/** Pallino stato Auto LRC — parity legacy `resolveTrackLyricsDotStatus`. */
+/** Auto LRC status dot — legacy parity `resolveTrackLyricsDotStatus`. */
 export function resolveTrackLyricsDotStatus(opts: {
   lyricsText?: string | null;
   fetchBusy?: boolean;

@@ -1896,9 +1896,9 @@ class PlayerController {
   }
 
   /**
-   * Sostituisce la coda e avvia da startIndex.
-   * - preserveQueueOrder: ordine invariato anche con shuffle ON (album / playlist).
-   * - shuffle ON senza preserve: tiene il prefisso fino al brano e mescola solo il resto.
+   * Replaces the queue and starts from startIndex.
+   * - preserveQueueOrder: order unchanged even with shuffle ON (album / playlist).
+   * - shuffle ON without preserve: keeps the prefix up to the track and shuffles only the rest.
    */
   playTracks(
     tracks: Track[],
@@ -1915,7 +1915,7 @@ class PlayerController {
       this.shuffle && tracks.length > 1 && !opts?.preserveQueueOrder;
     if (shouldShuffleTail) {
       const start = tracks[idx]!;
-      // Avvio immediato sul brano cliccato; coda completa al frame successivo.
+      // Start the clicked track immediately; full queue on the next frame.
       this.queue = [start];
       this.queueDirty = true;
       this.index = 0;
@@ -1951,12 +1951,12 @@ class PlayerController {
     this.playTracks(context, idx >= 0 ? idx : 0, opts);
   }
 
-  /** Album / playlist / coda ordinata: non rimescola anche se shuffle è ON. */
+  /** Album / playlist / ordered queue: does not reshuffle even if shuffle is ON. */
   playSequence(tracks: Track[], startIndex = 0) {
     this.playTracks(tracks, startIndex, { preserveQueueOrder: true });
   }
 
-  /** Salta a un indice della coda corrente senza ricostruirla. */
+  /** Jumps to an index of the current queue without rebuilding it. */
   playQueueIndex(index: number) {
     if (index < 0 || index >= this.queue.length) return;
     this.cancelPendingLoad();
@@ -1966,9 +1966,9 @@ class PlayerController {
   }
 
   /**
-   * Shuffle intelligente di un pool.
-   * Con seed: seed primo + resto smart (collezione / genere / mood).
-   * Senza seed: tutto smart-random (Ascolta / Riproduci tutto).
+   * Smart shuffle of a pool.
+   * With seed: seed first + smart rest (collection / genre / mood).
+   * Without seed: all smart-random (Listen / Play all).
    */
   playShuffled(tracks: Track[], start?: Track) {
     if (!tracks.length) return;
@@ -1994,7 +1994,7 @@ class PlayerController {
 
     if (!full.length) return;
     const first = full[0]!;
-    // privateQueue = ordine sorgente (per restore quando si spegne shuffle).
+    // privateQueue = source order (to restore when shuffle is turned off).
     this.privateQueue = seed ? [...tracks] : [...pool];
     this.queue = [first];
     this.queueDirty = true;
@@ -2083,8 +2083,8 @@ class PlayerController {
   }
 
   /**
-   * Radio dal brano corrente: mantiene il prefisso già ascoltato e
-   * sostituisce solo la coda futura (legacy playRadioFromCurrent).
+   * Radio from the current track: keeps the already-played prefix and
+   * replaces only the upcoming queue (legacy playRadioFromCurrent).
    */
   playRadioFromCurrent(library: Track[], respectExclusions = true) {
     const cur = this.current;

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Controlli comuni ai comandi Android (init, build). Da usare con `source`.
-# Ogni messaggio dice cosa manca e cosa installare: la catena Android e' lunga
-# (SDK, NDK, JDK, target Rust) e un errore di Gradle a meta' build non lo spiega.
+# Checks shared by the Android commands (init, build). Meant to be used with `source`.
+# Every message says what is missing and what to install: the Android chain is long
+# (SDK, NDK, JDK, Rust targets) and a Gradle error halfway through a build doesn't explain it.
 
 RK_ANDROID_DOCS="docs/ANDROID.md"
 
 rk_die() {
-  echo "ERRORE: $*" >&2
-  echo "Vedi $RK_ANDROID_DOCS" >&2
+  echo "ERROR: $*" >&2
+  echo "See $RK_ANDROID_DOCS" >&2
   exit 1
 }
 
@@ -28,16 +28,16 @@ rk_android_sdk() {
       return 0
     fi
   done
-  rk_die "Android SDK non trovato. Installa i command line tools e esporta ANDROID_HOME."
+  rk_die "Android SDK not found. Install the command line tools and export ANDROID_HOME."
 }
 
 rk_android_ndk() {
   if [[ -n "${NDK_HOME:-}" && -d "$NDK_HOME" ]]; then
-    echo "NDK:  $NDK_HOME (da NDK_HOME)"
+    echo "NDK:  $NDK_HOME (from NDK_HOME)"
     return 0
   fi
-  # Piu' versioni installate: si prende la piu' alta, con l'ordinamento per numero
-  # (con quello alfabetico la 9 batterebbe la 28).
+  # Several versions installed: take the highest, sorting numerically
+  # (alphabetically, 9 would beat 28).
   local newest
   newest="$(ls -1 "$ANDROID_HOME/ndk" 2>/dev/null | sort -V | tail -1 || true)"
   if [[ -n "$newest" ]]; then
@@ -50,7 +50,7 @@ rk_android_ndk() {
     echo "NDK:  $NDK_HOME"
     return 0
   fi
-  rk_die "NDK non trovato. Installalo con: sdkmanager 'ndk;28.2.13676358'"
+  rk_die "NDK not found. Install it with: sdkmanager 'ndk;28.2.13676358'"
 }
 
 rk_android_jdk() {
@@ -64,18 +64,18 @@ rk_android_jdk() {
     done
   fi
   local javac="${JAVA_HOME:+$JAVA_HOME/bin/}javac"
-  command -v "$javac" >/dev/null 2>&1 || rk_die "JDK non trovato (serve 17 o superiore). Su Ubuntu: apt install openjdk-17-jdk"
+  command -v "$javac" >/dev/null 2>&1 || rk_die "JDK not found (17 or newer required). On Ubuntu: apt install openjdk-17-jdk"
   local major
   major="$("$javac" -version 2>&1 | sed -E 's/^javac ([0-9]+).*/\1/')"
-  [[ "$major" =~ ^[0-9]+$ ]] || rk_die "Versione JDK illeggibile: $("$javac" -version 2>&1)"
-  (( major >= 17 )) || rk_die "JDK $major troppo vecchio: Gradle 8 e AGP chiedono almeno il 17."
-  echo "JDK:  ${JAVA_HOME:-di sistema} (javac $major)"
+  [[ "$major" =~ ^[0-9]+$ ]] || rk_die "Unreadable JDK version: $("$javac" -version 2>&1)"
+  (( major >= 17 )) || rk_die "JDK $major is too old: Gradle 8 and AGP require at least 17."
+  echo "JDK:  ${JAVA_HOME:-system} (javac $major)"
 }
 
-# I target Rust servono per la libreria nativa dentro l'APK: senza, cargo fallisce
-# a build avviata. Si aggiungono da soli, e' un comando idempotente.
+# The Rust targets are needed for the native library inside the APK: without them, cargo
+# fails mid-build. They are added automatically; the command is idempotent.
 rk_android_rust_targets() {
-  command -v rustup >/dev/null 2>&1 || rk_die "rustup non trovato: serve per i target Android di Rust."
+  command -v rustup >/dev/null 2>&1 || rk_die "rustup not found: it is needed for the Rust Android targets."
   local installed missing=()
   installed="$(rustup target list --installed)"
   local target
@@ -83,7 +83,7 @@ rk_android_rust_targets() {
     grep -qx "$target" <<<"$installed" || missing+=("$target")
   done
   if (( ${#missing[@]} )); then
-    echo "==> Aggiungo i target Rust mancanti: ${missing[*]}"
+    echo "==> Adding missing Rust targets: ${missing[*]}"
     rustup target add "${missing[@]}"
   fi
 }
@@ -93,6 +93,6 @@ rk_android_preflight() {
   rk_android_sdk
   rk_android_ndk
   rk_android_jdk
-  command -v pnpm >/dev/null 2>&1 || rk_die "pnpm non trovato: corepack enable oppure npm i -g pnpm"
+  command -v pnpm >/dev/null 2>&1 || rk_die "pnpm not found: corepack enable or npm i -g pnpm"
   rk_android_rust_targets "$@"
 }

@@ -20,7 +20,7 @@ function isYoutubeDlHost(u: URL): boolean {
   );
 }
 
-/** Video singolo: niente playlist/list, niente radio, niente release/browse. */
+/** Single video: no playlist/list, no radio, no release/browse. */
 export function urlMatchesVideoSingle(raw: string): boolean {
   const u = tryParseYoutubeUrl(raw);
   if (!u || !isYoutubeDlHost(u)) return false;
@@ -44,7 +44,7 @@ export function urlMatchesVideoSingle(raw: string): boolean {
   return false;
 }
 
-/** Playlist: param list= valorizzato oppure percorso /playlist. */
+/** Playlist: list= param set or /playlist path. */
 export function urlMatchesVideoPlaylist(raw: string): boolean {
   const u = tryParseYoutubeUrl(raw);
   if (!u || !isYoutubeDlHost(u)) return false;
@@ -54,14 +54,14 @@ export function urlMatchesVideoPlaylist(raw: string): boolean {
   return p.includes("/playlist");
 }
 
-/** Tab release (YouTube / YouTube Music): segmento releases nell’URL. */
+/** Releases tab (YouTube / YouTube Music): releases segment in the URL. */
 export function urlMatchesVideoReleases(raw: string): boolean {
   const u = tryParseYoutubeUrl(raw);
   if (!u || !isYoutubeDlHost(u)) return false;
   return u.pathname.toLowerCase().includes("releases");
 }
 
-/** Pagina album artista su YouTube Music: solo host music + browse/channel. */
+/** Artist album page on YouTube Music: music host + browse/channel only. */
 export function urlMatchesYtMusicBrowse(raw: string): boolean {
   const u = tryParseYoutubeUrl(raw);
   if (!u) return false;
@@ -71,7 +71,7 @@ export function urlMatchesYtMusicBrowse(raw: string): boolean {
   return p.includes("/browse") || p.includes("/channel/");
 }
 
-/** Allineato al tipo selezionato nei pulsanti Studio Download (mutualmente esclusivo). */
+/** Aligned with the type selected in the Studio Download buttons (mutually exclusive). */
 export function urlMatchesStudioDlMode(
   raw: string,
   videoMode: DlVideoMode,
@@ -85,7 +85,7 @@ export function urlMatchesStudioDlMode(
   return false;
 }
 
-/** Inferisce la modalità Classico più adatta all’URL incollato. */
+/** Infers the Classic mode best suited to the pasted URL. */
 export function detectStudioDlMode(raw: string): DlVideoMode | null {
   const t = String(raw ?? "").trim();
   if (!t) return null;

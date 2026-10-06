@@ -1,20 +1,20 @@
 /**
- * Download generati nella pagina (`<a download href="blob:...">`) nei gusci Tauri.
+ * Downloads generated in the page (`<a download href="blob:...">`) in the Tauri shells.
  *
- * Il client costruisce in memoria backup, profilo e pacchetto tema e li "scarica"
- * con un click programmatico su un `<a download>` (vedi `api.ts`). Nel browser
- * funziona; nelle webview di sistema no: WebKitGTK e WKWebView ignorano il click,
- * la WebView di Android non sa scaricare un `blob:`. Qui, solo dentro Tauri:
+ * The client builds backups, profiles and theme packages in memory and "downloads" them
+ * with a programmatic click on an `<a download>` (see `api.ts`). In the browser
+ * it works; in the system webviews it does not: WebKitGTK and WKWebView ignore the click,
+ * Android's WebView cannot download a `blob:`. Here, only inside Tauri:
  *
- * - si ricorda quale Blob sta dietro ogni `blob:` creato (il chiamante lo revoca
- *   subito dopo il click, quando la lettura non e' ancora partita);
- * - si intercettano il click programmatico (`HTMLAnchorElement.prototype.click`)
- *   e quello dell'utente su un `<a download>` nella pagina;
- * - desktop: i byte vanno al comando Rust `save_download`, che apre «Salva con
- *   nome»; Android: al ponte Kotlin `RekordFilesNative`, che scrive in Download.
+ * - we remember which Blob is behind every `blob:` created (the caller revokes it
+ *   right after the click, when the read has not started yet);
+ * - we intercept the programmatic click (`HTMLAnchorElement.prototype.click`)
+ *   and the user's click on an `<a download>` in the page;
+ * - desktop: the bytes go to the Rust command `save_download`, which opens «Save
+ *   As»; Android: to the Kotlin bridge `RekordFilesNative`, which writes to Download.
  *
- * Limiti: iOS non e' coperto (il guscio iOS non esiste ancora); su Android il file
- * va sempre in Download senza chiedere dove.
+ * Limits: iOS is not covered (the iOS shell does not exist yet); on Android the file
+ * always goes to Download without asking where.
  */
 
 import { isAndroidShell, isTauri } from "./env";
@@ -33,14 +33,14 @@ export type SaveOutcome =
 
 type SaveListener = (outcome: SaveOutcome, name: string) => void;
 
-/** 384 KiB per pezzo: multiplo di 3, quindi il base64 dei pezzi si concatena. */
+/** 384 KiB per chunk: a multiple of 3, so the chunks' base64 concatenates. */
 const CHUNK = 3 * 128 * 1024;
 
 const blobs = new Map<string, Blob>();
 let listener: SaveListener | null = null;
 let installed = false;
 
-/** Chi vuole mostrare un esito (toast) si registra qui. */
+/** Whoever wants to show an outcome (toast) registers here. */
 export function onDownloadSaved(fn: SaveListener | null): void {
   listener = fn;
 }
@@ -88,7 +88,7 @@ async function saveOnDesktop(blob: Blob, name: string): Promise<SaveOutcome> {
   return path ? { status: "saved", path } : { status: "cancelled" };
 }
 
-/** Salva un Blob come file; fuori da Tauri ripiega sul download del browser. */
+/** Saves a Blob as a file; outside Tauri it falls back to the browser download. */
 export async function saveBlob(blob: Blob, name: string): Promise<SaveOutcome> {
   const fileName = name.trim() || "rekord-download";
   let outcome: SaveOutcome;
@@ -124,8 +124,8 @@ function nameFor(anchor: HTMLAnchorElement): string {
 }
 
 /**
- * Prova a gestire un `<a download>`; vero se l'ha preso in carico (il chiamante
- * allora non deve lasciar fare alla webview).
+ * Tries to handle an `<a download>`; true if it took charge of it (the caller
+ * then must not let the webview do it).
  */
 function handleAnchor(anchor: HTMLAnchorElement): boolean {
   if (!anchor.hasAttribute("download")) return false;

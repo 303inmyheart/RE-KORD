@@ -37,7 +37,7 @@
 
   let panelEl: HTMLDivElement | undefined = $state();
   let fileInput: HTMLInputElement | undefined = $state();
-  /* Su telefono il dialogo è un foglio dal basso, spingibile giù per chiudere. */
+  /* On the phone the dialog is a bottom sheet, which can be pushed down to close. */
   let isSheet = $state(false);
   let bgBusy = $state(false);
   let bgError = $state<string | null>(null);
@@ -512,7 +512,7 @@
 
 <style>
   /* Modal-aligned chrome; backdrop stays transparent (live preview behind).
-     Forma in `:where()`: sul telefono è styles/sheet.css a rifarla come foglio. */
+     Shape in `:where()`: on the phone styles/sheet.css redoes it as a sheet. */
   :where(.custom-theme-dialog-backdrop) {
     position: fixed;
     inset: 0;
@@ -531,7 +531,7 @@
 
   :where(.custom-theme-dialog) {
     width: min(28rem, 100%);
-    /* Come Modal: --rk-app-vh sta sopra la tastiera, dvh no. */
+    /* Like Modal: --rk-app-vh sits above the keyboard, dvh does not. */
     max-height: min(calc(var(--rk-app-vh) * 0.9), 900px);
     overflow: auto;
     overscroll-behavior: contain;

@@ -218,8 +218,8 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Telefono: barra più sottile e pomello più grande, perché è l'unico modo per
-     cercare un punto nel brano. */
+  /* Phone: thinner bar and bigger knob, because it is the only way to
+     seek to a point in the track. */
   @media (max-width: 999.98px) {
     .slot {
       height: 12px;
@@ -235,10 +235,10 @@
     }
   }
 
-  /* Col dito la fascia sensibile si alza: la barra resta sottile ma prenderla non
-     richiede precisione. Non arriva ai 44px pieni di proposito — un seek così
-     alto mangerebbe il dock e si prenderebbe lo scorrimento della pagina. Dopo il
-     blocco telefono, perché su telefono valgono entrambi. */
+  /* With a finger the hit strip grows taller: the bar stays thin but grabbing it does not
+     take precision. It deliberately stops short of the full 44px — a seek that
+     tall would eat the dock and steal the page's scrolling. After the
+     phone block, because on a phone both apply. */
   @media (pointer: coarse) {
     .progress2 {
       padding-block: var(--rk-space-md);

@@ -1,14 +1,14 @@
 /**
- * Link esterni nel guscio Tauri.
+ * External links in the Tauri shell.
  *
- * Nella finestra dell'app un `<a href="https://...">` o un `window.open(...)`
- * aprirebbero la pagina *dentro* l'app (o niente, secondo la webview), senza
- * barra degli indirizzi ne' modo di tornare indietro. Qui si intercettano e si
- * passano al browser di sistema col plugin opener. Nel browser non si tocca nulla.
+ * In the app window an `<a href="https://...">` or a `window.open(...)` would
+ * open the page *inside* the app (or nothing, depending on the webview), with no
+ * address bar nor a way to go back. Here they are intercepted and
+ * handed to the system browser with the opener plugin. In the browser nothing is touched.
  *
- * "Esterno" = http/https verso un'origine diversa da quella della pagina, piu'
- * mailto: e tel:. Il pannello admin dell'hub (`http://hub:7420/admin`) e' esterno
- * per l'app, e si apre infatti nel browser.
+ * "External" = http/https towards an origin other than the page's, plus
+ * mailto: and tel:. The hub's admin panel (`http://hub:7420/admin`) is external
+ * for the app, and indeed opens in the browser.
  */
 
 import { isTauri } from "./env";
@@ -30,7 +30,7 @@ export function externalUrl(raw: string | URL | null | undefined): string | null
   return url.href;
 }
 
-/** Apre `url` nel browser (o nell'app di posta/telefono) del sistema. */
+/** Opens `url` in the system browser (or mail/phone app). */
 export async function openExternal(url: string): Promise<void> {
   if (!isTauri()) {
     window.open(url, "_blank", "noopener,noreferrer");
@@ -47,7 +47,7 @@ export function installExternalLinkHandler(): void {
   installed = true;
 
   const onClick = (ev: MouseEvent) => {
-    // Chi ha gia' gestito il click (router, menu) ha la precedenza.
+    // Whoever already handled the click (router, menu) takes precedence.
     if (ev.defaultPrevented) return;
     if (ev.type === "click" && ev.button !== 0) return;
     if (ev.type === "auxclick" && ev.button !== 1) return;
@@ -59,8 +59,8 @@ export function installExternalLinkHandler(): void {
     ev.preventDefault();
     void openExternal(url).catch((e) => console.warn("[rekord] open external link", e));
   };
-  // Fase di bubbling su window: i gestori di Svelte (delegati sulla radice)
-  // girano prima e possono chiamare preventDefault.
+  // Bubbling phase on window: Svelte's handlers (delegated on the root)
+  // run first and can call preventDefault.
   window.addEventListener("click", onClick);
   window.addEventListener("auxclick", onClick);
 

@@ -1,10 +1,10 @@
-//! Guscio Tauri del client RE-KORD.
+//! Tauri shell of the RE-KORD client.
 //!
-//! L'interfaccia e' `apps/client-ui` impacchettata nell'app; l'hub e' un indirizzo
-//! HTTP(S) scelto al primo avvio. Qui stanno solo le cose che la pagina non sa
-//! fare da sola: aprire i link nel browser di sistema (plugin opener), salvare un
-//! file generato nella pagina (desktop), tenere una sola istanza aperta (desktop),
-//! leggere un QR (telefono) e — con la feature `hub` — far girare l'hub stesso.
+//! The UI is `apps/client-ui` bundled into the app; the hub is an HTTP(S)
+//! address chosen on first launch. Only what the page can't do on its own lives
+//! here: opening links in the system browser (opener plugin), saving a file
+//! generated in the page (desktop), keeping a single instance open (desktop),
+//! reading a QR code (phone) and — with the `hub` feature — running the hub itself.
 
 #[cfg(desktop)]
 mod downloads;
@@ -15,8 +15,8 @@ mod embedded_hub;
 pub fn run() {
     let builder = tauri::Builder::default();
 
-    // Va registrato per primo: il secondo processo deve uscire prima di
-    // inizializzare il resto (e, con l'hub incorporato, prima di tentare la porta).
+    // Must be registered first: the second process has to exit before
+    // initializing the rest (and, with the embedded hub, before trying the port).
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
         focus_main_window(app);
@@ -29,8 +29,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![downloads::save_download]);
 
-    // La fotocamera serve solo per leggere il QR dell'hub al primo avvio, e solo
-    // dove una fotocamera c'e': sul desktop l'indirizzo si scrive con la tastiera.
+    // The camera is only needed to read the hub's QR code on first launch, and only
+    // where there is a camera: on desktop the address is typed on the keyboard.
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
 

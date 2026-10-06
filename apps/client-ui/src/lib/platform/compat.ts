@@ -1,21 +1,21 @@
 /**
- * Il client e l'hub vanno d'accordo?
+ * Do the client and the hub get along?
  *
- * Con la 5.0 l'interfaccia arrivava sempre dall'hub: aggiornato l'hub, ogni
- * client si aggiornava al primo ricaricamento. I gusci Tauri (desktop, Android)
- * invece impacchettano l'interfaccia, quindi un telefono puo' restare indietro
- * rispetto all'hub — o l'hub rispetto al telefono. L'hub dichiara in
- * `/api/v1/health` la sua versione, la versione dell'API e il client piu' vecchio
- * che accetta; qui si decide che cosa dire all'utente. Funzione pura: i test la
- * chiamano senza browser (`src/lib/semver.test.mjs`).
+ * With 5.0 the UI always came from the hub: once the hub was updated, every
+ * client updated on the next reload. The Tauri shells (desktop, Android)
+ * instead bundle the UI, so a phone can fall behind
+ * the hub — or the hub behind the phone. The hub declares in
+ * `/api/v1/health` its version, the API version and the oldest client
+ * it accepts; here we decide what to tell the user. Pure function: the tests
+ * call it without a browser (`src/lib/semver.test.mjs`).
  */
 
 import { compareSemver, diffLevel, parseSemver, satisfiesMin } from "./semver";
 
-/** Versione dell'API `/api/v1` che questo client sa parlare. */
+/** `/api/v1` API version this client speaks. */
 export const SUPPORTED_API_VERSION = 1;
 
-/** Dove si scaricano i client aggiornati. */
+/** Where updated clients are downloaded from. */
 export const DOWNLOAD_URL = "https://re-kord.com";
 
 export type HealthInfo = {
@@ -26,18 +26,18 @@ export type HealthInfo = {
 
 export type CompatVerdict =
   | { kind: "ok" }
-  /** Il client e' sotto il minimo dell'hub: molte cose potrebbero non funzionare. */
+  /** The client is below the hub's minimum: many things might not work. */
   | { kind: "client-too-old"; hubVersion: string; minClientVersion: string }
-  /** C'e' un client piu' nuovo (l'hub e' avanti di almeno una minor). */
+  /** A newer client exists (the hub is ahead by at least one minor). */
   | { kind: "hub-newer"; hubVersion: string }
-  /** L'hub e' indietro di almeno una minor: conviene aggiornare l'hub. */
+  /** The hub is behind by at least one minor: updating the hub is advisable. */
   | { kind: "hub-older"; hubVersion: string }
-  /** Pagina servita dall'hub ma di un'altra versione: cache vecchia, basta ricaricare. */
+  /** Page served by the hub but of another version: stale cache, a reload is enough. */
   | { kind: "reload"; hubVersion: string };
 
 export function evaluateCompat(input: {
   clientVersion: string;
-  /** Vero nei gusci nativi, che portano l'interfaccia con se'. */
+  /** True in the native shells, which carry the UI with them. */
   bundled: boolean;
   health: HealthInfo | null | undefined;
 }): CompatVerdict {
@@ -51,8 +51,8 @@ export function evaluateCompat(input: {
   const belowMin = minClient !== "" && !satisfiesMin(input.clientVersion, minClient);
 
   if (!input.bundled) {
-    // Nel browser la pagina e' dell'hub: se le versioni non tornano e' la cache
-    // (service worker o browser) che serve ancora quella vecchia.
+    // In the browser the page belongs to the hub: if the versions don't match it is the cache
+    // (service worker or browser) still serving the old one.
     if (apiTooNew || belowMin) return { kind: "reload", hubVersion };
     if (parseSemver(hubVersion) && compareSemver(hubVersion, input.clientVersion) === 1) {
       return { kind: "reload", hubVersion };

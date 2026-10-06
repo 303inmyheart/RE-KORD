@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# Funzioni comuni a fetch-ytdlp.sh e fetch-cloudflared.sh. Da usare con `source`.
+# Functions shared by fetch-ytdlp.sh and fetch-cloudflared.sh. Meant to be used with `source`.
 #
-# Ogni binario di terze parti si scarica da una release GitHub ufficiale, a una
-# versione fissata, e si verifica con SHA-256 prima di metterlo nel pacchetto:
-#   1. se scripts/third-party.sha256 ha una riga per (strumento, versione, file),
-#      l'hash DEVE combaciare (fiducia fissata nel repo);
-#   2. altrimenti si usa il checksum pubblicato dal progetto stesso (yt-dlp:
-#      SHA2-256SUMS; cloudflared: campo `digest` dell'asset nell'API GitHub) e si
-#      stampa la riga da aggiungere al file, per fissarla dalla volta dopo;
-#   3. senza nessun checksum il download si scarta.
-# Servono curl e sha256sum (o shasum); per leggere l'API GitHub python3 o node.
+# Every third-party binary is downloaded from an official GitHub release, at a
+# pinned version, and verified with SHA-256 before it goes into the package:
+#   1. if scripts/third-party.sha256 has a line for (tool, version, file),
+#      the hash MUST match (trust pinned in the repo);
+#   2. otherwise the checksum published by the project itself is used (yt-dlp:
+#      SHA2-256SUMS; cloudflared: the asset's `digest` field in the GitHub API) and
+#      the line to add to the file is printed, to pin it from the next time on;
+#   3. with no checksum at all, the download is discarded.
+# Requires curl and sha256sum (or shasum); python3 or node to read the GitHub API.
 
 RK_FETCH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RK_PINNED_SUMS="$RK_FETCH_ROOT/scripts/third-party.sha256"
 
 rk_fetch_die() {
-  echo "ERRORE: $*" >&2
+  echo "ERROR: $*" >&2
   exit 1
 }
 
 rk_need() {
   local cmd
   for cmd in "$@"; do
-    command -v "$cmd" >/dev/null 2>&1 || rk_fetch_die "serve '$cmd' (non trovato nel PATH)"
+    command -v "$cmd" >/dev/null 2>&1 || rk_fetch_die "'$cmd' is required (not found in PATH)"
   done
 }
 
@@ -32,11 +32,11 @@ rk_sha256() {
   elif command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'
   else
-    rk_fetch_die "serve sha256sum o shasum"
+    rk_fetch_die "sha256sum or shasum is required"
   fi
 }
 
-# Piattaforma predefinita: quella della macchina che lancia lo script.
+# Default platform: that of the machine running the script.
 rk_default_platform() {
   local os arch
   os="$(uname -s)"
@@ -45,11 +45,11 @@ rk_default_platform() {
     Linux) [[ "$arch" == aarch64 || "$arch" == arm64 ]] && echo linux-arm64 || echo linux-x64 ;;
     Darwin) [[ "$arch" == arm64 ]] && echo macos-arm64 || echo macos-x64 ;;
     MINGW*|MSYS*|CYGWIN*) echo windows-x64 ;;
-    *) rk_fetch_die "piattaforma non riconosciuta: $os/$arch" ;;
+    *) rk_fetch_die "unrecognized platform: $os/$arch" ;;
   esac
 }
 
-# rk_pinned_sum <tool> <version> <asset>  → hash o stringa vuota
+# rk_pinned_sum <tool> <version> <asset>  → hash or empty string
 rk_pinned_sum() {
   [[ -f "$RK_PINNED_SUMS" ]] || return 0
   awk -v t="$1" -v v="$2" -v a="$3" '$1==t && $2==v && $3==a {print $4; exit}' "$RK_PINNED_SUMS"
@@ -61,7 +61,7 @@ rk_download() {
     -H "User-Agent: rekord-pack" -o "$2" "$1"
 }
 
-# rk_json_asset_digest <release-json-file> <asset-name>  → sha256 o vuoto
+# rk_json_asset_digest <release-json-file> <asset-name>  → sha256 or empty
 rk_json_asset_digest() {
   local script='
 import json,sys
@@ -80,7 +80,7 @@ const fs=require("fs");const [f,n]=process.argv.slice(1);
 const a=(JSON.parse(fs.readFileSync(f,"utf8")).assets||[]).find(x=>x.name===n);
 const d=(a&&a.digest)||"";console.log(d.startsWith("sha256:")?d.slice(7):"");' "$1" "$2"
   else
-    rk_fetch_die "serve python3 o node per leggere l'API GitHub"
+    rk_fetch_die "python3 or node is required to read the GitHub API"
   fi
 }
 
@@ -91,12 +91,12 @@ rk_verify() {
   actual="$(rk_sha256 "$file")"
   pinned="$(rk_pinned_sum "$tool" "$version" "$asset")"
   if [[ -n "$pinned" ]]; then
-    [[ "$actual" == "$pinned" ]] || rk_fetch_die "$asset: SHA-256 $actual diverso da quello fissato in third-party.sha256 ($pinned)"
-    echo "  sha256 ok (fissato nel repo)"
+    [[ "$actual" == "$pinned" ]] || rk_fetch_die "$asset: SHA-256 $actual differs from the one pinned in third-party.sha256 ($pinned)"
+    echo "  sha256 ok (pinned in the repo)"
     return 0
   fi
-  [[ -n "$upstream" ]] || rk_fetch_die "$asset: nessun checksum disponibile (ne' fissato ne' pubblicato): scarto il file"
-  [[ "$actual" == "$upstream" ]] || rk_fetch_die "$asset: SHA-256 $actual diverso da quello pubblicato ($upstream)"
-  echo "  sha256 ok (pubblicato dal progetto). Per fissarlo aggiungi a scripts/third-party.sha256:"
+  [[ -n "$upstream" ]] || rk_fetch_die "$asset: no checksum available (neither pinned nor published): discarding the file"
+  [[ "$actual" == "$upstream" ]] || rk_fetch_die "$asset: SHA-256 $actual differs from the published one ($upstream)"
+  echo "  sha256 ok (published by the project). To pin it, add to scripts/third-party.sha256:"
   echo "    $tool $version $asset $actual"
 }

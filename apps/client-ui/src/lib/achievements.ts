@@ -1,4 +1,4 @@
-/** Achievement / XP — port leggero da src/lib/achievements.ts per next client-ui.
+/** Achievement / XP — lightweight port of src/lib/achievements.ts for the next client-ui.
  *  Badge texts are i18n keys (`achievements.badge.<id>.title|desc`, locales/plectr). */
 
 import { normalizeGenreKey } from "./genres";
@@ -283,7 +283,7 @@ export type TrackLike = {
   album_id: number | null;
   album_name: string;
   rel_path: string;
-  /** Serve a chi passa `genreForTrack`: il genere arriva dal brano, non dai segnali. */
+  /** For callers passing `genreForTrack`: the genre comes from the track, not from the signals. */
   genre?: string | null;
 };
 

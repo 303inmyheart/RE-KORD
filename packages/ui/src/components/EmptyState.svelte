@@ -5,9 +5,9 @@
    * Empty / zero-data state: icon, title, one line of body, one call to action.
    *
    * ```svelte
-   * <EmptyState title="Nessun preferito" body="Tocca il cuore su un brano per salvarlo qui.">
+   * <EmptyState title="No favourites" body="Tap the heart on a track to save it here.">
    *   {#snippet icon()}<UiIcon name="favorite" />{/snippet}
-   *   {#snippet action()}<Button onclick={goLibrary}>Apri la libreria</Button>{/snippet}
+   *   {#snippet action()}<Button onclick={goLibrary}>Open the library</Button>{/snippet}
    * </EmptyState>
    * ```
    *

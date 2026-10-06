@@ -1,17 +1,17 @@
 <script lang="ts">
   /**
-   * Icona "equalizzatore" (barre centrate).
+   * "Equalizer" icon (centred bars).
    *
-   * - `animated`: si sta ascoltando. Da solo dà una posa statica "in ascolto"
-   *   (barre ad altezze diverse), senza nessuna animazione.
-   * - `live`: questa è l'unica istanza autorizzata a muoversi (la voce Studio
-   *   della barra laterale). Si anima a scatti (`steps()`, ~7 fps), si ferma
-   *   quando la finestra è nascosta, e mai su WebKitGTK / Tauri-Linux né con
-   *   «riduci movimento» (lib/platformCaps.ts).
+   * - `animated`: something is playing. On its own it gives a static "listening" pose
+   *   (bars at different heights), with no animation at all.
+   * - `live`: this is the only instance allowed to move (the Studio entry
+   *   of the sidebar). It animates in steps (`steps()`, ~7 fps), stops
+   *   when the window is hidden, and never on WebKitGTK / Tauri-Linux nor with
+   *   «reduce motion» (lib/platformCaps.ts).
    *
-   * Motivo: un'animazione infinita, anche solo di un'icona, tiene WebKitGTK a
-   * ricomporre la pagina a 60 fps (report perf: coda in riproduzione 34% CPU,
-   * 0.1% con l'icona ferma). Righe, dashboard e nav mobile restano statiche.
+   * Reason: an infinite animation, even of just an icon, keeps WebKitGTK
+   * recompositing the page at 60 fps (perf report: queue playing 34% CPU,
+   * 0.1% with the icon still). Rows, dashboard and mobile nav stay static.
    */
   import { onMount } from "svelte";
   import { canAnimateLiveIndicators } from "../../lib/platformCaps";
@@ -26,8 +26,8 @@
     class?: string;
   } = $props();
 
-  // Da sinistra a destra, in ventiquattresimi del lato (come il vecchio viewBox).
-  // `pose`: scala della posa statica "in ascolto" (altezze 10/16/12/20/8 su 24).
+  // Left to right, in twenty-fourths of the side (like the old viewBox).
+  // `pose`: scale of the static "listening" pose (heights 10/16/12/20/8 out of 24).
   const BARS = [
     { h: 4, min: 0.35, dur: 0.9, delay: -0.2, pose: 2.5 },
     { h: 12, min: 0.4, dur: 0.75, delay: 0, pose: 1.333 },
@@ -75,7 +75,7 @@
     justify-content: center;
     gap: calc(100% / 12);
     flex-shrink: 0;
-    /* L'icona non influenza mai il layout o il paint di chi la contiene. */
+    /* The icon never affects the layout or paint of its container. */
     contain: strict;
   }
 
@@ -86,7 +86,7 @@
     transform-origin: center;
   }
 
-  /* Posa statica "in ascolto": profilo irregolare, riconoscibile da fermo. */
+  /* Static "listening" pose: irregular profile, recognizable when still. */
   .posed .bar {
     transform: scaleY(var(--geq-pose));
   }
@@ -95,8 +95,8 @@
     animation-name: geq-pulse;
     animation-iteration-count: infinite;
     animation-direction: alternate;
-    /* 4 scatti per mezzo ciclo: ≤ 7 fotogrammi al secondo. L'effetto resta,
-       il compositore riposa. */
+    /* 4 steps per half cycle: ≤ 7 frames per second. The effect remains,
+       the compositor rests. */
     animation-timing-function: steps(4, jump-none);
   }
 

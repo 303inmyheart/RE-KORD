@@ -17,8 +17,8 @@
 @import "./styles/achievements.css";
 @import "./styles/settings.css";
 @import "./styles/glass-surfaces.css";
-/* Ultimi due: rimodellano quello che i fogli di dominio hanno già scritto — il
-   dialogo diventa foglio dal basso sul telefono, i bersagli crescono col dito. */
+/* Last two: they reshape what the domain sheets have already written — the
+   dialog becomes a bottom sheet on the phone, targets grow for touch. */
 @import "@rekord/ui/styles/sheet.css";
 @import "./styles/touch.css";
 
@@ -36,8 +36,8 @@ body,
 }
 
 html {
-  /* Android WebView e Safari ingrandiscono i testi da soli quando lo schermo
-     ruota: la scala tipografica è già nostra, non serve il loro aiuto. */
+  /* Android WebView and Safari enlarge text on their own when the screen
+     rotates: the type scale is already ours, we don't need their help. */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
@@ -52,8 +52,8 @@ body {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   scrollbar-gutter: stable;
-  /* La shell è fissa e non scorre: il rimbalzo elastico su di essa scollerebbe
-     solo la cromatura. Scorrono i pannelli interni, che si fermano da sé. */
+  /* The shell is fixed and does not scroll: elastic bounce on it would only
+     detach the chrome. The inner panels scroll, and they stop on their own. */
   overscroll-behavior: none;
 }
 
@@ -95,7 +95,7 @@ html[data-custom-bg-gif="1"]:not([data-custom-bg-gif-repeat="1"])::before {
   background-image: none;
 }
 
-/* Overlay scuro leggero (legacy page-lg) — default senza wash accent. */
+/* Light dark overlay (legacy page-lg) — default without accent wash. */
 html[data-custom-bg-image="1"]::after {
   content: "";
   position: fixed;
@@ -169,10 +169,10 @@ select {
   border: 0;
 }
 
-/* Chi ha chiesto meno movimento lo ottiene su tutto: transizioni e animazioni
-   arrivano subito a destinazione invece di essere disattivate, così gli stati
-   finali restano quelli giusti. Lo scorrimento morbido e i canvas del
-   visualizzatore hanno controlli propri in JS. */
+/* Whoever asked for reduced motion gets it everywhere: transitions and animations
+   reach their end state immediately instead of being disabled, so the final
+   states stay correct. Smooth scrolling and the visualizer canvases have
+   their own controls in JS. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

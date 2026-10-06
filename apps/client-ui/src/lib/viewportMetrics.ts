@@ -1,13 +1,13 @@
 /**
- * Tiene `--rk-app-vh` allineata all'altezza davvero visibile della finestra.
+ * Keeps `--rk-app-vh` aligned with the window's actually visible height.
  *
- * Con `interactive-widget=overlays-content` la tastiera virtuale copre la pagina
- * senza rimpicciolire il viewport: `dvh` continua a valere tutto lo schermo e un
- * dialogo alto 90dvh finisce sotto i tasti. Il visual viewport invece si accorcia,
- * quindi lo leggiamo da qui e lo passiamo al CSS.
+ * With `interactive-widget=overlays-content` the virtual keyboard covers the page
+ * without shrinking the viewport: `dvh` still spans the whole screen and a
+ * 90dvh-tall dialog ends up under the keys. The visual viewport does shrink instead,
+ * so we read it from here and pass it to the CSS.
  */
 
-/** Sopra questo ingrandimento il visual viewport è la lente, non la finestra. */
+/** Above this zoom level the visual viewport is the lens, not the window. */
 const PINCH_ZOOM_LIMIT = 1.01;
 
 export function trackViewportMetrics(): () => void {
@@ -17,8 +17,8 @@ export function trackViewportMetrics(): () => void {
   const vv = window.visualViewport;
 
   const apply = () => {
-    // Durante un pinch-zoom l'altezza è quella della porzione ingrandita: se la
-    // usassimo, i dialoghi si accorcerebbero solo perché l'utente ha zoomato.
+    // During a pinch-zoom the height is that of the zoomed portion: if we
+    // used it, dialogs would shrink just because the user zoomed in.
     if (vv && vv.scale > PINCH_ZOOM_LIMIT) return;
     const h = Math.round(vv?.height ?? window.innerHeight);
     if (h > 0) root.style.setProperty("--rk-app-vh", `${h}px`);

@@ -20,8 +20,8 @@ applyTheme(prefs.theme, prefs.customTheme, {
   glassOpacity: prefs.glassOpacity,
 });
 
-// Solo nei gusci Tauri (le funzioni lo controllano da sole): link esterni nel
-// browser di sistema, download generati nella pagina salvati come file veri.
+// Only in the Tauri shells (the functions check this themselves): external links in the
+// system browser, downloads generated in the page saved as real files.
 installExternalLinkHandler();
 installDownloadBridge();
 onDownloadSaved((outcome) => {
@@ -31,16 +31,16 @@ onDownloadSaved((outcome) => {
   }
 });
 
-// Solo nel browser servito dall'hub, in contesto sicuro.
+// Only in the browser served by the hub, in a secure context.
 registerServiceWorker();
 
 mount(App, { target: document.getElementById("app")! });
 
-// Avviso di compatibilita' client/hub in una radice sua, sopra qualunque schermata.
+// Client/hub compatibility notice in its own root, above any screen.
 const bannerHost = document.createElement("div");
 bannerHost.id = "rk-update-root";
 document.body.appendChild(bannerHost);
 mount(UpdateBanner, { target: bannerHost });
-// Il primo controllo lo fa la procedura di connessione (connect.svelte.ts); qui
-// solo i successivi, perche' l'hub puo' essere aggiornato con l'app aperta.
+// The first check is done by the connection flow (connect.svelte.ts); here
+// only the following ones, because the hub can be updated while the app is open.
 watchHubCompat();

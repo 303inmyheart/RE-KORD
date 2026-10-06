@@ -88,8 +88,8 @@ function clamp(n: number, lo: number, hi: number): number {
 
 type Cluster = { rgb: Rgb; count: number; hsl: Hsl };
 
-/** Istogramma 32 livelli/canale con colore medio reale per bucket (non il centro
- *  del bucket): preserva le tinte effettive dell'immagine. */
+/** 32-level/channel histogram with the real average colour per bucket (not the centre
+ *  of the bucket): preserves the image's actual hues. */
 function buildClusters(pixels: Rgb[]): Cluster[] {
   const buckets = new Map<
     number,
@@ -115,7 +115,7 @@ function buildClusters(pixels: Rgb[]): Cluster[] {
     .sort((a, b) => b.count - a.count);
 }
 
-/** Regola solo la luminosità (hue/sat conservati) fino al contrasto richiesto. */
+/** Adjusts only the lightness (hue/sat preserved) up to the required contrast. */
 function ensureContrastOnSection(seed: Hsl, section: Rgb, minRatio: number): Rgb {
   const direct = hslToRgb(seed);
   if (contrastRatio(direct, section) >= minRatio) return direct;
@@ -132,8 +132,8 @@ function ensureContrastOnSection(seed: Hsl, section: Rgb, minRatio: number): Rgb
 
 type HueBin = { score: number; r: number; g: number; b: number; w: number };
 
-/** Raggruppa i cluster saturi in bin di tonalità da 15°: molto più stabile dei
- *  singoli bucket contro il rumore/gradienti (specie nelle GIF). */
+/** Groups saturated clusters into 15° hue bins: much more stable than
+ *  single buckets against noise/gradients (especially in GIFs). */
 function buildAccentHueBins(clusters: Cluster[]): Map<number, HueBin> {
   const bins = new Map<number, HueBin>();
   for (const c of clusters) {
@@ -158,7 +158,7 @@ function binColor(bin: HueBin): Rgb {
   return { r: bin.r / bin.w, g: bin.g / bin.w, b: bin.b / bin.w };
 }
 
-/** Rende l'accent vivido senza stravolgerne la tinta. */
+/** Makes the accent vivid without distorting its hue. */
 function vivify(rgb: Rgb): Hsl {
   const hsl = rgbToHsl(rgb);
   return {
@@ -168,7 +168,7 @@ function vivify(rgb: Rgb): Hsl {
   };
 }
 
-/** Estrae quattro colori tema coerenti da un campione di pixel (funzione pura). */
+/** Extracts four coherent theme colours from a pixel sample (pure function). */
 export function extractThemeColorsFromPixels(
   pixels: Rgb[],
 ): ExtractedThemeColors | null {
@@ -181,7 +181,7 @@ export function extractThemeColorsFromPixels(
   for (const c of clusters) lumSum += c.hsl.l * c.count;
   const darkMood = lumSum / total < 0.5;
 
-  // Sfondo: il colore quieto più diffuso, portato a luminosità "da tema".
+  // Background: the most common quiet colour, brought to a "theme" lightness.
   const bgSeed =
     clusters.find((c) => c.hsl.s <= 0.45 && c.count >= total * 0.03)?.hsl ??
     clusters[0].hsl;
@@ -192,8 +192,8 @@ export function extractThemeColorsFromPixels(
   };
   const bgRgb = hslToRgb(bgHsl);
 
-  // Sezioni: stessa famiglia dello sfondo con offset di luminosità costante,
-  // come i temi del catalogo (superfici leggibili e coese).
+  // Sections: same family as the background with a constant lightness offset,
+  // like the catalog themes (readable, cohesive surfaces).
   const sectionSeed =
     clusters.find(
       (c) =>
@@ -208,7 +208,7 @@ export function extractThemeColorsFromPixels(
   };
   const sectionRgb = hslToRgb(sectionHsl);
 
-  // Accent: tonalità dominanti tra i colori saturi.
+  // Accent: dominant hues among the saturated colours.
   const bins = buildAccentHueBins(clusters);
   const rankedBins = [...bins.entries()].sort((a, b) => b[1].score - a[1].score);
 
@@ -286,9 +286,9 @@ interface ImageDecoderCtor {
   new (init: { data: ArrayBuffer; type: string }): ImageDecoderLike;
 }
 
-/** GIF animate: campiona fino a 5 frame distribuiti sull'intera animazione
- *  (WebCodecs, dove disponibile), così la palette riflette tutta la GIF e non
- *  solo il primo frame. */
+/** Animated GIFs: samples up to 5 frames spread across the whole animation
+ *  (WebCodecs, where available), so the palette reflects the whole GIF and not
+ *  just the first frame. */
 async function sampleGifPixels(blob: Blob, maxFrames = 5): Promise<Rgb[]> {
   const ImageDecoderClass = (
     globalThis as { ImageDecoder?: ImageDecoderCtor }
@@ -341,7 +341,7 @@ async function sampleStaticPixels(blob: Blob): Promise<Rgb[]> {
         bitmap.close();
       }
     } catch {
-      /* fallback all'elemento <img> sotto */
+      /* fall back to the <img> element below */
     }
   }
   const objectUrl = URL.createObjectURL(blob);
@@ -358,8 +358,8 @@ async function sampleStaticPixels(blob: Blob): Promise<Rgb[]> {
   }
 }
 
-/** Analizza foto o GIF (multi-frame quando possibile) e restituisce i quattro
- *  colori del tema custom. */
+/** Analyses a photo or GIF (multi-frame when possible) and returns the four
+ *  custom theme colours. */
 export async function extractThemeColorsFromImageUrl(
   imageUrl: string,
 ): Promise<ExtractedThemeColors> {

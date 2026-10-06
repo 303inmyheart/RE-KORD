@@ -1,17 +1,17 @@
 /**
- * Ponte verso la notifica media del guscio Android.
+ * Bridge to the Android shell's media notification.
  *
- * La WebView di Android non ha la Media Session API: `navigator.mediaSession`
- * non esiste, quindi nulla di quello che scrive `mediaSession.ts` arriva al
- * sistema. Il guscio espone allora `window.RekordMediaNative`, e da qui gli si
- * racconta lo stesso stato che gli altri client mandano al sistema operativo.
- * L'audio resta nella pagina: di la' si disegna solo la notifica, che rimanda i
- * comandi indietro con l'evento `rekord:media-action`.
+ * Android's WebView has no Media Session API: `navigator.mediaSession`
+ * does not exist, so nothing that `mediaSession.ts` writes reaches the
+ * system. The shell therefore exposes `window.RekordMediaNative`, and from here we
+ * tell it the same state the other clients send to the operating system.
+ * The audio stays in the page: over there only the notification is drawn, which sends the
+ * commands back with the `rekord:media-action` event.
  *
- * Fuori da Android il ponte non c'e' e ogni funzione qui non fa niente.
+ * Outside Android the bridge is absent and every function here does nothing.
  */
 
-/** Stato che il lato Kotlin sa leggere (`NowPlaying.fromJson`). */
+/** State the Kotlin side can read (`NowPlaying.fromJson`). */
 type NativeSnapshot = {
   title: string;
   artist: string;
@@ -28,8 +28,8 @@ type NativeMediaBridge = {
 };
 
 /**
- * Metadati, stato e posizione arrivano da tre chiamate separate a ogni cambio di
- * brano: si aspetta un attimo e si attraversa il ponte una volta sola.
+ * Metadata, state and position arrive from three separate calls on every
+ * track change: wait a moment and cross the bridge only once.
  */
 const PUSH_DELAY_MS = 80;
 
@@ -55,7 +55,7 @@ function flush(): void {
     try {
       target.stop();
     } catch {
-      /* Il guscio se ne e' andato: non c'e' niente da recuperare. */
+      /* The shell has gone away: there is nothing to recover. */
     }
     return;
   }
@@ -64,9 +64,9 @@ function flush(): void {
   lastSent = json;
   try {
     target.update(json);
-    // Il guscio consegna i comandi della notifica solo quando questo flag c'e':
-    // vuol dire che il lettore e' montato e ascolta `rekord:media-action`
-    // (vedi RekordMediaBridge in MainActivity/RekordMedia.kt).
+    // The shell delivers the notification's commands only when this flag is present:
+    // it means the player is mounted and listening for `rekord:media-action`
+    // (see RekordMediaBridge in MainActivity/RekordMedia.kt).
     (window as unknown as { __rekordNativeMediaReady?: boolean }).__rekordNativeMediaReady = true;
   } catch {
     /* */
@@ -94,8 +94,8 @@ export function pushNativeMetadata(
     artist: track.artist,
     album: track.album,
     artworkUrl,
-    // Metadati nuovi senza uno stato ancora noto: si tiene quello di prima,
-    // altrimenti il cambio brano farebbe lampeggiare la notifica su "in pausa".
+    // New metadata without a known state yet: keep the previous one,
+    // otherwise the track change would make the notification flash to "paused".
     playing: snapshot?.playing ?? false,
     durationMs: 0,
     positionMs: 0,

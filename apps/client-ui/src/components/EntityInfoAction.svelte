@@ -21,12 +21,12 @@
     lang,
     loose = false,
   }: {
-    /** Cartella artista (= nome cartella in libreria). */
+    /** Artist folder (= folder name in the library). */
     artistDir: string;
-    /** Cartella album; assente = info dell'artista. */
+    /** Album folder; absent = artist info. */
     albumDir?: string | null;
     title: string;
-    /** Lingua UI: default = locale app. Mostra solo le voci corrispondenti. */
+    /** UI language: default = app locale. Shows only the matching entries. */
     lang?: string;
     /** Album made of loose tracks (no album folder): never asks the hub. */
     loose?: boolean;
@@ -208,7 +208,7 @@
     width: min(35rem, 100%);
   }
 
-  /* Conteggio voci: tipografia UI, non path mono del lede generico */
+  /* Entry count: UI typography, not the generic lede's mono path */
   :global(.rk-modal.entity-info-modal .lede) {
     font-family: inherit;
     word-break: normal;

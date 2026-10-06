@@ -9,11 +9,11 @@ import android.webkit.WebView
 import org.json.JSONObject
 
 /**
- * Brano in riproduzione, cosi' come lo racconta il lettore nella WebView.
+ * The track now playing, as reported by the player in the WebView.
  *
- * L'audio suona dentro la pagina: qui non si riproduce niente, si ripete al
- * sistema cosa sta suonando perche' possa disegnare la notifica e la schermata
- * di blocco.
+ * The audio plays inside the page: nothing is played here, we just tell the
+ * system what is playing so it can draw the notification and the lock
+ * screen.
  */
 data class NowPlaying(
     val title: String,
@@ -40,7 +40,7 @@ data class NowPlaying(
                     positionMs = o.optLong("positionMs", 0L).coerceAtLeast(0L),
                 )
             } catch (e: Exception) {
-                Logger.warn("RekordMedia: stato non leggibile: ${e.message}")
+                Logger.warn("RekordMedia: unreadable state: ${e.message}")
                 null
             }
         }
@@ -48,16 +48,16 @@ data class NowPlaying(
 }
 
 /**
- * I comandi della notifica tornano al lettore per la strada che il client ha
- * gia' pronta per i gusci nativi: un evento nel DOM, gli stessi nomi di azione
- * della Media Session (vedi `src/lib/mediaSession.ts`).
+ * Notification commands travel back to the player along the path the client
+ * already has for native shells: a DOM event, with the same action names as the
+ * Media Session (see `src/lib/mediaSession.ts`).
  *
- * A schermo spento la consegna non e' scontata: la WebView puo' essere sospesa,
- * la CPU puo' riaddormentarsi prima che lo script giri, la pagina puo' essere
- * ancora in caricamento. Come nella 5.0: un wake lock di pochi secondi, la
- * WebView risvegliata, e lo script che risponde `true` solo se il lettore c'e'
- * (`window.__rekordNativeMediaReady`, alzata da `nativeMedia.ts` al primo stato
- * inviato). Altrimenti si riprova qualche volta, poi si lascia perdere.
+ * With the screen off, delivery is not guaranteed: the WebView may be suspended,
+ * the CPU may fall back asleep before the script runs, the page may still be
+ * loading. As in 5.0: a wake lock of a few seconds, the WebView woken up, and a
+ * script that answers `true` only if the player is there
+ * (`window.__rekordNativeMediaReady`, set by `nativeMedia.ts` on the first state
+ * sent). Otherwise it retries a few times, then gives up.
  */
 object RekordMediaBridge {
     @Volatile
@@ -70,7 +70,7 @@ object RekordMediaBridge {
     private val main = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
 
-    /** Un solo comando in volo: un «play» seguito da «pause» vale come «pause». */
+    /** Only one command in flight: a "play" followed by "pause" counts as "pause". */
     private var pending: Pair<String, Double?>? = null
     private var attempts = 0
     private val retry = Runnable { deliver() }
@@ -91,7 +91,7 @@ object RekordMediaBridge {
             try {
                 wakeLock?.acquire(WAKE_MS)
             } catch (e: Exception) {
-                Logger.warn("RekordMedia: wake lock non disponibile: ${e.message}")
+                Logger.warn("RekordMedia: wake lock unavailable: ${e.message}")
             }
             deliver()
         }
@@ -113,9 +113,9 @@ object RekordMediaBridge {
         val script = "(function(){if(!window.__rekordNativeMediaReady)return false;" +
             "window.dispatchEvent(new CustomEvent('rekord:media-action',{detail:$detail}));" +
             "return true})()"
-        // Con l'app in secondo piano e la musica in pausa la WebView e' sospesa:
-        // un play dalla notifica parlerebbe a un lettore addormentato. Prima si
-        // riaccende, poi le si dice cosa fare.
+        // With the app in the background and the music paused, the WebView is suspended:
+        // a play from the notification would talk to a sleeping player. Wake it up
+        // first, then tell it what to do.
         view.onResume()
         view.resumeTimers()
         view.evaluateJavascript(script) { result ->
@@ -131,7 +131,7 @@ object RekordMediaBridge {
     private fun scheduleRetry() {
         attempts += 1
         if (attempts >= MAX_ATTEMPTS) {
-            Logger.warn("RekordMedia: comando ${pending?.first} non consegnato")
+            Logger.warn("RekordMedia: command ${pending?.first} not delivered")
             done()
             return
         }
@@ -146,23 +146,23 @@ object RekordMediaBridge {
         try {
             if (wakeLock?.isHeld == true) wakeLock?.release()
         } catch (e: Exception) {
-            Logger.warn("RekordMedia: wake lock non rilasciato: ${e.message}")
+            Logger.warn("RekordMedia: wake lock not released: ${e.message}")
         }
     }
 }
 
 /**
- * Superficie esposta alla pagina come `window.RekordMediaNative`. La WebView
- * carica solo il nostro bundle locale, quindi non c'e' pagina di terzi che possa
- * chiamarla.
+ * Surface exposed to the page as `window.RekordMediaNative`. The WebView
+ * loads only our local bundle, so no third-party page can
+ * call it.
  */
 class RekordMedia(private val activity: MainActivity) {
     @JavascriptInterface
     fun update(json: String) {
         val state = NowPlaying.fromJson(json) ?: return
         activity.runOnUiThread {
-            // Il permesso si chiede al primo brano, non all'avvio: prima c'e'
-            // qualcosa da mostrare, poi si chiede di poterlo mostrare.
+            // The permission is requested on the first track, not at startup: first
+            // there is something to show, then we ask to be allowed to show it.
             if (state.playing) activity.ensureNotificationPermission()
             RekordMediaService.publish(activity, state)
         }

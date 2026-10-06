@@ -133,8 +133,8 @@
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     flex-shrink: 0;
-    /* Stesso canale orizzontale di .content → .inner: gutter di pagina, tacca
-       inclusa (vedi styles/responsive.css). */
+    /* Same horizontal channel as .content → .inner: page gutter, notch
+       included (see styles/responsive.css). */
     padding-left: var(--rk-page-pad-l);
     padding-right: var(--rk-page-pad-r);
     scrollbar-gutter: stable;

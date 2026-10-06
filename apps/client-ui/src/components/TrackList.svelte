@@ -165,7 +165,7 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    /* Parità React: .list-stack { gap: var(--space-4) } = 0.875rem */
+    /* React parity: .list-stack { gap: var(--space-4) } = 0.875rem */
     gap: var(--rk-space-lg);
     /* Rows pick inline actions vs overflow menu from this width (track-row.css). */
     container: track-list / inline-size;

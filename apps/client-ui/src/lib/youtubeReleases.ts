@@ -28,7 +28,7 @@ function releaseTypeToDiscoverKind(raw: string): YoutubeReleaseKind {
   return "album";
 }
 
-/** Come Scopri web: album/EP vs singoli da titolo, URL e conteggio brani. */
+/** Like web Discover: albums/EPs vs singles from title, URL and track count. */
 export function classifyYoutubeReleaseEntry(
   entry: YoutubeReleaseClassifyInput,
 ): YoutubeReleaseKind {

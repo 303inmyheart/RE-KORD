@@ -149,7 +149,7 @@ class ClientSession {
   moodFilterIds = $state<string[]>([]);
   moodMatchAll = $state(false);
   /**
-   * Cache catalogo per filtri mood / mix dashboard.
+   * Catalog cache for mood filters / dashboard mix.
    * Big lists are `$state.raw`: replace them (never mutate in place) — see
    * `patchTrack` for edits to a single track.
    */
@@ -719,7 +719,7 @@ class ClientSession {
     };
   }
 
-  /** Parity legacy: cover mancante solo su album non-loose. */
+  /** Legacy parity: missing cover only on non-loose albums. */
   readonly albumsWithoutCover = $derived(
     this.stats?.albums_without_cover ??
       this.allAlbums.filter((a) => !a.has_cover && !a.loose).length,
@@ -2301,7 +2301,7 @@ class ClientSession {
     player.playTrack(track, list, opts);
   }
 
-  /** Album / playlist: coda ordinata dal brano (o dall'inizio). */
+  /** Album / playlist: queue ordered from the track (or from the start). */
   playSequence(list: Track[], startIndex = 0) {
     if (!list.length) return;
     player.playSequence(list, startIndex);
@@ -2323,7 +2323,7 @@ class ClientSession {
     player.playPoolShuffle(pool, true);
   }
 
-  /** Smart radio da seed sulla libreria (o pool passato). */
+  /** Smart radio from a seed over the library (or a given pool). */
   async playGlobalRadio(seed: Track, library?: Track[]) {
     const pool = library?.length ? library : await this.ensureCatalogTracks();
     if (!pool.length) {

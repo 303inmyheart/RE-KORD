@@ -7,7 +7,7 @@
   }: {
     eyebrow?: string;
     title?: string;
-    /** Icona flat come old (default). false = soft badge. */
+    /** Flat icon like old (default). false = soft badge. */
     flatIcon?: boolean;
     children?: import("svelte").Snippet;
   } = $props();

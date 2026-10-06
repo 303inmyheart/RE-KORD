@@ -348,7 +348,7 @@
     flex-shrink: 0;
   }
 
-  /* Annulla margin dei componenti UI: il ritmo verticale è solo il gap della pagina. */
+  /* Cancels the UI components' margin: the vertical rhythm is only the page's gap. */
   .dashboard-page > :global(.rk-hero),
   .dashboard-page__main > :global(.rk-panel) {
     margin-bottom: 0;

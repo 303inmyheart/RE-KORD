@@ -1,16 +1,16 @@
 /**
- * Lettura del QR dell'hub con la fotocamera.
+ * Reading the hub's QR with the camera.
  *
- * Esiste solo dentro il guscio nativo su telefono: nel browser e sul desktop il
- * plugin non e' registrato, quindi il bottone «inquadra il QR» non si mostra
- * affatto invece di comparire e poi fallire (vedi `qrScannerAvailable`).
+ * It exists only inside the native shell on a phone: in the browser and on desktop the
+ * plugin is not registered, so the «scan the QR» button is not shown
+ * at all instead of appearing and then failing (see `qrScannerAvailable`).
  */
 
 type ScannerModule = typeof import("@tauri-apps/plugin-barcode-scanner");
 
 export type QrScanOutcome =
   | { status: "ok"; text: string }
-  /** L'utente ha chiuso la fotocamera: nessun messaggio da mostrare. */
+  /** The user closed the camera: no message to show. */
   | { status: "cancelled" }
   | { status: "denied" }
   | { status: "error"; message: string };
@@ -21,7 +21,7 @@ function inNativeShell(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-/** Il modulo si carica a richiesta: nel build per il browser resta un chunk mai chiesto. */
+/** The module loads on demand: in the browser build it stays a chunk never requested. */
 async function loadScanner(): Promise<ScannerModule | null> {
   if (!inNativeShell()) return null;
   if (!modulePromise) {
@@ -31,9 +31,9 @@ async function loadScanner(): Promise<ScannerModule | null> {
 }
 
 /**
- * Vero solo dove la fotocamera si puo' davvero aprire. Il controllo dei permessi
- * fa da sonda: sul desktop il plugin non c'e' e la chiamata fallisce subito,
- * senza chiedere niente all'utente.
+ * True only where the camera can actually be opened. The permission check
+ * acts as a probe: on desktop the plugin is absent and the call fails immediately,
+ * without asking the user anything.
  */
 export async function qrScannerAvailable(): Promise<boolean> {
   const mod = await loadScanner();
@@ -47,24 +47,24 @@ export async function qrScannerAvailable(): Promise<boolean> {
 }
 
 /**
- * Apre la fotocamera a tutto schermo e torna il contenuto del primo QR letto.
- * Il permesso si chiede solo qui, quando l'utente ha toccato il bottone: una
- * richiesta all'avvio, prima di spiegare a cosa serve, si nega per riflesso.
+ * Opens the camera full screen and returns the content of the first QR read.
+ * Permission is asked only here, when the user has tapped the button: a
+ * request at startup, before explaining what it is for, gets denied by reflex.
  */
 export async function scanQrCode(): Promise<QrScanOutcome> {
   const mod = await loadScanner();
   if (!mod) return { status: "error", message: "scanner-unavailable" };
   try {
-    // Il valore si confronta come stringa: fra le versioni del plugin l'insieme
-    // degli stati cambia («prompt», «prompt-with-rationale»), e l'unico che qui
-    // conta e' «granted».
+    // The value is compared as a string: across plugin versions the set
+    // of states changes («prompt», «prompt-with-rationale»), and the only one that
+    // matters here is «granted».
     let permission = String(await mod.checkPermissions());
     if (permission !== "granted") permission = String(await mod.requestPermissions());
     if (permission !== "granted") return { status: "denied" };
     const result = await mod.scan({
-      // A tutto schermo: la modalita' «windowed» disegna la fotocamera dietro la
-      // webview e vorrebbe la pagina trasparente, cioe' tutta l'interfaccia da
-      // rifare per un bottone.
+      // Full screen: «windowed» mode draws the camera behind the
+      // webview and wants the page transparent, i.e. the whole UI to
+      // redo for one button.
       windowed: false,
       formats: [mod.Format.QRCode],
     });
@@ -73,7 +73,7 @@ export async function scanQrCode(): Promise<QrScanOutcome> {
     return { status: "ok", text };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    // Chiudere la fotocamera col tasto indietro arriva qui come errore.
+    // Closing the camera with the back button arrives here as an error.
     if (/cancel/i.test(message)) return { status: "cancelled" };
     if (/permission|denied/i.test(message)) return { status: "denied" };
     return { status: "error", message };
