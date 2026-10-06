@@ -1,6 +1,6 @@
 # RE-KORD API (`/api/v1`)
 
-Base URL default: `http://127.0.0.1:7420` (il processo ascolta su `0.0.0.0:7420` per LAN / tunnel)
+Default base URL: `http://127.0.0.1:7420`. The hub listens on `0.0.0.0:7420`, so the same API is reachable on the LAN and through the remote-access tunnel.
 
 Envelope (JSON):
 
@@ -29,7 +29,7 @@ Envelope (JSON):
 | GET | `/api/v1/library/tracks/{id}` | Track by id |
 | GET/PUT | `/api/v1/library/path` | Music root path |
 | POST | `/api/v1/library/scan?mode=incremental\|full` | Scan library (default incremental: upsert by path, skip unchanged size+mtime, prune missing files/albums/artists; `full` re-reads every tag). Curated values (see below) are never replaced by tags. After the scan: the one-time legacy import when pending (see [Legacy import](#legacy-import)), else sidecar values for fields nobody curated yet. Personal data is never re-imported by scans. Report includes `indexEpoch` |
-| POST | `/api/v1/library/sync-legacy-meta` | Explicit merge: curated metadata from `music_root/.kord/rekord.db` (wins over tags, never over what a person typed in next) then sidecars; merge personal moods/excludes/settings/playCounts/recent, Plectr records, favorites, playlists (matched by legacy playlist id), library selection + accounts registry from `.kord` into what the hub already has (nothing on the hub is deleted) |
+| POST | `/api/v1/library/sync-legacy-meta` | Explicit merge: curated metadata from `music_root/.kord/rekord.db` (wins over tags, never over what a person typed in RE-KORD 5) then sidecars; merge personal moods/excludes/settings/playCounts/recent, Plectr records, favorites, playlists (matched by legacy playlist id), library selection + accounts registry from `.kord` into what the hub already has (nothing on the hub is deleted) |
 | GET | `/api/v1/library/tracks-page` | Paginated personal library (`limit`, `offset`) → `{ items, total, revision }` |
 | GET | `/api/v1/library/artists-page` | Paginated artists (`limit`, `offset`) → `{ items, total }` |
 | GET | `/api/v1/library/changes?revision=` | Delta since a revision: `{ revision, updated, removed, full }` (`full: true` → page again) |
@@ -88,7 +88,7 @@ Envelope (JSON):
 | GET/POST/DELETE | `/api/v1/user-state/custom-theme-bg` | Serve / upload (`multipart` field `file`) / clear custom theme background (JPEG/PNG/WebP/GIF, max 32 MiB) |
 | GET | `/api/v1/diagnostics` | Version, uptime, DB counts, scanning, jobs, watcher, recent errors, disk space, library layout, and `binaries.{ytdlp,ffmpeg,ffprobe,cloudflared}`: `{ available, path, source, version, candidates[] }` (+ `releaseDate`, `ageDays`, `stale` — older than 60 days — for yt-dlp). Versions are cached 10 min (`versionCacheTtlSecs`) |
 | GET | `/api/v1/activity-log` | Activity JSONL entries (`ts`, `kind`, `message`, optional `accountId` / `accountName`). Query: `day=YYYY-MM-DD` (Default only, local calendar day), `since` (RFC3339), `scope=all\|system\|user` + `filterAccountId` (Default only; ignored for others → `scope=all`), `limit` (max 2000). Non-default callers are always clamped to the last 24h server-side (`canSelectDay: false`). Response includes `window`, `scope`, `canSelectDay`. |
-| GET | `/api/v1/remote-access` | LAN URL, tunnel status, Cloudflare login flag, `cloudflaredAvailable` (cached, never runs a subprocess; LAN addresses cached 10 s) |
+| GET | `/api/v1/remote-access` | LAN URL, tunnel status (`stopped` / `starting` / `running` / `error`), `publicUrl`, `error` (English detail) and `errorCode` (`cloudflared_not_found`, `tunnel_start_timeout`, `tunnel_exited_early`, `tunnel_exited`, `tunnel_failed`), Cloudflare login flag, `cloudflaredAvailable` (cached, never runs a subprocess; LAN addresses cached 10 s) |
 | POST | `/api/v1/remote-access/start` | Start temporary cloudflared quick tunnel (or use `REKORD_PUBLIC_URL`) |
 | POST | `/api/v1/remote-access/stop` | Stop tunnel / clear public URL |
 | POST | `/api/v1/remote-access/login` | Mark Cloudflare login + return dashboard URL |
@@ -106,7 +106,7 @@ Track/Album JSON may include `genre`, `release_date`, `lyrics` (tracks) and `gen
 
 ### Legacy import
 
-On the first scan of a library that has a legacy `.kord` folder (and on the first start of a hub that already indexed one) the hub imports it **once**: curated metadata (titles, full dates, genres, track/disc numbers, `user_edited`, added/updated times), the accounts registry (legacy names, `default` stays "Default"), and per account settings, favorites, playlists (keyed by legacy playlist id, legacy order), library selections, play counts, recents, moods, exclusions, theme backgrounds and Plectr records (`plectrBests` → `settings.plectr`). Accounts already used in next (favorites, playlists or settings) are left alone; folders of accounts missing from the legacy registry are skipped (no state files). The outcome is recorded in `<data_dir>/legacy-import.json`; afterwards scans and restarts never import again, so data cleared in next stays cleared. `REKORD_SKIP_LEGACY_IMPORT=1` disables it; `POST /library/sync-legacy-meta` stays available as an explicit merge.
+On the first scan of a library that has a legacy `.kord` folder (and on the first start of a hub that already indexed one) the hub imports it **once**: curated metadata (titles, full dates, genres, track/disc numbers, `user_edited`, added/updated times), the accounts registry (legacy names, `default` stays "Default"), and per account settings, favorites, playlists (keyed by legacy playlist id, legacy order), library selections, play counts, recents, moods, exclusions, theme backgrounds and Plectr records (`plectrBests` → `settings.plectr`). Accounts already used on the new hub (favorites, playlists or settings) are left alone; folders of accounts missing from the legacy registry are skipped (no state files). The outcome is recorded in `<data_dir>/legacy-import.json`; afterwards scans and restarts never import again, so data cleared after the import stays cleared. `REKORD_SKIP_LEGACY_IMPORT=1` disables it; `POST /library/sync-legacy-meta` stays available as an explicit merge.
 
 Responses with JSON / JS / CSS / HTML / SVG bodies over 1 KiB are compressed (br / gzip per `Accept-Encoding`); media and images never are. Served UIs: hashed `/assets/*` get `Cache-Control: public, max-age=31536000, immutable`, `index.html` (SPA fallbacks) and `sw.js` get `no-cache`. Albums may also expose read-only Discogs fields when present: `discogs_release_id`, `discogs_uri`, and `discogs_extra` (`formatSummary`, `catalogNo`, `discogsUri`, `masterId` — camelCase, legacy parity).
 
@@ -177,10 +177,10 @@ Native clients (Tauri desktop / Android) bundle the UI, so they no longer update
 
 ### Transcode
 
-`GET /api/v1/transcode/{relPath}?format=mp3|aac[&bitrate=64..320]` — on-the-fly transcode for cast receivers (Chromecast / Google Home) that can't decode FLAC/OGG/Opus/WAV.
+`GET /api/v1/transcode/{relPath}?format=mp3|aac|flac[&bitrate=64..320]` — on-the-fly transcode for cast receivers (Chromecast / Google Home) that can't decode FLAC/OGG/Opus/WAV, and cached FLAC copies for players that can't decode WMA/AIFF/ALAC.
 
 - `relPath`: same library-relative path as `/api/v1/media/{relPath}`, same validation (no `..`, reserved or hidden segments, must resolve inside the music root).
-- `format`: `mp3` (default, 320 kbps, `audio/mpeg`) or `aac` (256 kbps ADTS, `audio/aac`).
+- `format`: `mp3` (default, 320 kbps, `audio/mpeg`) or `aac` (256 kbps ADTS, `audio/aac`) for live streams; `flac` for a lossless copy (see below).
 - Response: 200 chunked stream of ffmpeg stdout; no `Content-Length`, `Accept-Ranges: none`, `Cache-Control: no-store`. `HEAD` returns the headers only. ffmpeg is killed when the client disconnects.
 - Errors: 404 track not found / invalid path; 400 `unsupported_format`; 503 `ffmpeg_unavailable` (ffmpeg not installed); 503 `transcode_busy` (4 transcodes already running).
 - Check `GET /api/v1/health` → `"transcode": true` before offering it.
@@ -193,7 +193,7 @@ Each tool is looked up in these places, in order; when several exist the **newes
 
 1. yt-dlp only: config `ytdlp_path` (settings), `YTDLP_PATH`; then the copy installed by the update below, `<data_dir>/tools/yt-dlp`
 2. ffmpeg: `REKORD_FFMPEG`, `FFMPEG_PATH`, `REKORD_FFMPEG_BIN`; ffprobe: `REKORD_FFPROBE`, `FFPROBE_PATH`; cloudflared: `REKORD_CLOUDFLARED_BIN`
-3. bundled: `<exe dir>/`, `<exe dir>/bin/`, `<exe dir>/../resources/bin/`, `<exe dir>/resources/bin/`, `<exe dir>/../Resources/bin/` (macOS), `REKORD_TOOLS_DIR`; in development `next/release/bin/<platform>/`
+3. bundled: `<exe dir>/`, `<exe dir>/bin/`, `<exe dir>/../resources/bin/`, `<exe dir>/resources/bin/`, `<exe dir>/../Resources/bin/` (macOS), `REKORD_TOOLS_DIR`; in debug builds `release/bin/<platform>/` of the repository
 4. `PATH`
 
 Probes run off the async workers and are cached for 10 minutes (an update invalidates the cache). `GET /api/v1/diagnostics` shows the choice and every candidate.
@@ -232,12 +232,12 @@ Probes run off the async workers and are cached for 10 minutes (an update invali
 - `GET /api/v1/download/active` lists this hub's running and finished (kept 15 min) downloads: `{ downloadId, kind, outputDir, accountId, background, status: running|indexing|done|failed|cancelled, startedAt, finishedAt, progress, counts, items, logTail (last 80 lines), canCancel, attachedStreams, cancelReason, done }`. `?downloadId=…` returns one; with `&stream=1` the response is an NDJSON stream starting with `{ type: "snapshot", download: {…} }` followed by live events up to `done` (immediately when already finished) — a client returning to the pane re-attaches this way (or polls).
 - Start errors: 403 `ytdlp_disabled`, 400 `url_not_allowed` / `invalid_download_id` / `invalid_output_dir` / `music_root_not_set`, 409 `download_id_active`.
 
-Library scan is **folder-first**: `Music/Artist/Album/track`. Tags are used only for title/duration/track number.
+Library scan is **folder-first**: `Music/Artist/Album/track` (other layouts are detected, see [supported-formats.md](supported-formats.md#library-layout)). Embedded tags supply title, album name, genres, dates, track/disc numbers, BPM and lyrics; curated values always win over them.
 
 ### Backup / restore
 
-- **v3 (next):** ZIP includes `config/manifest.json` (`kordBackup: 3`), `config/settings.json`, `config/accounts.json`, `hub/accounts/{id}/favorites.json|playlists.json|library-selection.json|user-state.json` (+ optional `theme-bg.jpg`), library sidecars under `libraries/shared/`, and `kord-db/` (mirror of `music_root/.kord`). Also `config/youtube-cookies.txt` / activity when present.
-- **v2 (legacy):** ZIP from the React hub. Restore reads `config/music-root.config.json` + `config/manifest.json`, extracts `kord-db/` → `music_root/.kord`, imports registry from `kord-db/global_info/accounts.json` (or manifest `accounts`), and for each `{id}_info/user-state.json` migrates favorites/playlists into SQLite **and** full prefs into `{data_dir}/accounts/{id}_info/user-state.json` (playCounts, recent, moods, excludes, settings, optional `legacyQueue`). After the library scan, album/track studio metadata is merged from restored sidecars (`kord-albuminfo.json` / `kord-trackinfo.json`) and from `music_root/.kord/rekord.db` into the next hub DB (fill-empty). Audio files are **not** in the ZIP — `libraryRoot` must already exist on disk.
+- **v3 (RE-KORD 5):** ZIP includes `config/manifest.json` (`kordBackup: 3`), `config/settings.json`, `config/accounts.json`, `hub/accounts/{id}/favorites.json|playlists.json|library-selection.json|user-state.json` (+ optional `theme-bg.jpg`), library sidecars under `libraries/shared/`, and `kord-db/` (mirror of `music_root/.kord`). Also `config/youtube-cookies.txt` / activity when present.
+- **v2 (legacy):** ZIP from the React hub. Restore reads `config/music-root.config.json` + `config/manifest.json`, extracts `kord-db/` → `music_root/.kord`, imports registry from `kord-db/global_info/accounts.json` (or manifest `accounts`), and for each `{id}_info/user-state.json` migrates favorites/playlists into SQLite **and** full prefs into `{data_dir}/accounts/{id}_info/user-state.json` (playCounts, recent, moods, excludes, settings, optional `legacyQueue`). After the library scan, album/track studio metadata is merged from restored sidecars (`kord-albuminfo.json` / `kord-trackinfo.json`) and from `music_root/.kord/rekord.db` into the hub DB (fill-empty). Audio files are **not** in the ZIP — `libraryRoot` must already exist on disk.
 - **Account overwrite-by-name:** before writing personal data, restore matches backup accounts to existing hub accounts with the same display name (case-insensitive). Matching accounts keep the hub id and have favorites/playlists/selection/user-state/theme overwritten; unmatched backup accounts are added with their backup id. `default` always maps to `default`.
 - **Theme package:** ZIP with `rekord-theme/rekord-theme.json` (`kind: "rekord-theme"`) + optional background image. `POST …/kord-restore` detects it and applies only theme settings (preset/custom, glass, background) to the current account — no user data. `GET …/theme-export` builds the same format.
 - CLI: `rekord-server --restore-zip /path/to.zip [--restore-exit]` restores without HTTP multipart.
@@ -256,5 +256,6 @@ Studio, downloads, tools and permissions answer `{ ok: false, error: "<code>", m
 - per-item (`failedItems[].code`, preview): `no_audio_format`, `video_unavailable`, `private_video`, `age_restricted`, `members_only`, `geo_blocked`, `sign_in_required`, `http_forbidden`, `postprocess_failed`, `network_error`, `unknown` (skipped: `already_downloaded`)
 - YouTube / catalog: `query_too_short`, `youtube_search_failed`, `invalid_releases_url`, `youtube_releases_failed`, `invalid_catalog_url`, `no_tracks_found`, `track_list_failed`, `preview_resolve_failed`, `preview_timeout`, `preview_expired`, `preview_failed`, `preview_upstream_unreachable`, `preview_upstream_forbidden`, `preview_upstream_error`, `preview_range_invalid`, discover feeds `upstream_rejected` / `upstream_unavailable` / `upstream_timeout` / `upstream_failed`
 - metadata (codes of `metadata::error::classify` pass through with their status: `album_not_found`, `no_match` (404, track fetch without a close match), `no_metadata_found`, `discogs_rate_limited`, `discogs_unauthorized`, `upstream_unavailable`, …), otherwise: `album_ref_required`, `invalid_album_path`, `track_ref_required`, `track_not_found`, `invalid_patch`, `db_error`, `artwork_search_failed`, `artwork_apply_failed`, `artwork_upload_failed`, `album_info_fetch_failed`, `album_info_save_failed`, `track_info_fetch_failed`, `track_info_save_failed`, `lyrics_missing_artist`, `lyrics_not_found`, `lyrics_fetch_failed`, `prune_failed`, `sanitize_failed`, `discogs_search_failed`, `discogs_apply_failed`, `entity_info_search_failed`, `entity_info_save_failed`, `entity_info_batch_failed`, `invalid_scope`, `upstream_rate_limited`, `upstream_timeout`
+- remote access (`errorCode` of `GET /remote-access`): `cloudflared_not_found`, `tunnel_start_timeout`, `tunnel_exited_early`, `tunnel_exited`, `tunnel_failed`
 - tools: `ytdlp_update_in_progress`, `ytdlp_platform_unsupported`, `ytdlp_release_lookup_failed`, `ytdlp_asset_missing`, `ytdlp_download_failed`, `ytdlp_checksum_missing`, `ytdlp_checksum_mismatch`, `ytdlp_install_failed`, `cloudflared_not_found`
 - accounts: `account_create_failed`, `account_update_failed`, `account_delete_failed`, `cannot_delete_default_account`, `last_account`

@@ -4,7 +4,7 @@
 #   open http://<host>:7420  (admin panel: http://<host>:7420/admin)
 #
 # Coming from 5.0: the port moves from 3001 to 7420 and the volumes change (/config → /data).
-# See docs/UPGRADE-FROM-5.0.md.
+# See docs/upgrading-from-legacy.md.
 services:
   rekord:
     build:

@@ -5,7 +5,7 @@ It does **not** load the server SPA in a WebView.
 
 ## Architecture
 
-1. Run **rekord-server** on LAN (or tunnel via Settings → Rete / `REKORD_PUBLIC_URL`).
+1. Run **rekord-server** on LAN (or through the tunnel: *Settings › Network › Remote access*, or `REKORD_PUBLIC_URL`).
 2. Install the RE-KORD client APK.
 3. First launch asks for the hub: type `192.168.x.x` + port, or scan the QR shown by the
    hub panel (see below).
@@ -20,8 +20,8 @@ The screen only appears when nobody answers. On startup the gate probes, in orde
 saved base URL (kept as is: an unreachable saved hub is the session's reconnect loop to
 handle, with the UI up), the page origin, and `http://127.0.0.1:7420`. A browser served by
 the hub therefore never sees it, and a desktop shell running next to its hub connects on
-its own. Only the APK, where the origin is the app itself, lands on the form. `Settings →
-Rete → Change hub` reopens it by hand, which is the way back when the hub's IP changes.
+its own. Only the APK, where the origin is the app itself, lands on the form. *Settings ›
+Network › Change hub* reopens it by hand, which is the way back when the hub's IP changes.
 
 The probe is `GET /api/v1/health` followed by `GET /api/v1/accounts`, and it insists on
 `service: "RE-KORD"`: a captive portal or another server on port 7420 answers 200 to
@@ -35,8 +35,8 @@ down to the origin.
 
 The hub draws the QR, the phone reads it.
 
-- **Hub side**: `/admin` → *Accesso in rete locale* shows a QR of the LAN URL, and *Accesso
-  da fuori casa* one of the tunnel URL while it runs. The client's Settings → Rete panel
+- **Hub side**: `/admin` › *Network › Local network access* shows a QR of the LAN URL, and
+  *Access from outside* one of the tunnel URL while it runs. The client's *Settings › Network* panel
   shows the same code (tunnel when up, LAN otherwise). Payload is the plain URL, no token.
 - **Phone side**: `@tauri-apps/plugin-barcode-scanner` (`tauri-plugin-barcode-scanner` under
   `cfg(any(target_os = "android", target_os = "ios"))` in `src-tauri/Cargo.toml`, plugin
@@ -64,7 +64,6 @@ targets. Every check fails with what to install, before Gradle starts.
 ## Build
 
 ```bash
-cd next
 pnpm pack:android               # release/android/RE-KORD-Client-<v>-android-arm64.apk
                                 # (optimized; your keystore if present, else the debug key)
 pnpm android:build              # debug APK, arm64, signed with the debug key
@@ -82,7 +81,7 @@ Rust compile. Artifacts land in
 
 ## The native project is versioned
 
-`apps/client-shell/src-tauri/gen/android` is **in git** (the `next/.gitignore` entry is
+`apps/client-shell/src-tauri/gen/android` is **in git** (the root `.gitignore` entry is
 `gen/*` plus a `!gen/android/` exception — with a trailing slash git would not descend
 into `gen/` and the exception would never be read). We patch that project, and
 `tauri android init` rewrites it from scratch on every machine:
@@ -93,7 +92,7 @@ into `gen/` and the exception would never be read). We patch that project, and
   APK unable to reach any hub.
 - **Release signing** from `gen/android/keystore.properties`, absent from git. If the
   file is missing the release is signed with the SDK debug key: still optimized and
-  installable (like the 5.0 APK), but not publishable, and moving to the real key later
+  installable (like the legacy APK), but not publishable, and moving to the real key later
   means uninstalling once.
 
 The Tauri-generated pieces stay out of git thanks to the `.gitignore` files inside
@@ -106,7 +105,7 @@ every build, so a fresh clone builds without running `android init`.
 One keystore, kept forever: updates only install over the same key.
 
 ```bash
-cd next/apps/client-shell/src-tauri/gen/android
+cd apps/client-shell/src-tauri/gen/android
 keytool -genkey -v -keystore rekord.jks -keyalg RSA -keysize 2048 -validity 10000 -alias rekord
 cat > keystore.properties <<'PROPS'
 storeFile=rekord.jks
@@ -118,10 +117,10 @@ PROPS
 
 `*.jks`, `*.keystore` and `keystore.properties` are ignored inside `gen/android`.
 
-### Coming from the 5.0 APK: uninstall first
+### Coming from the legacy APK: uninstall first
 
-The 5.0 (Capacitor) APKs were distributed **signed with the debug key**. Android only
-installs an update over an app signed with the *same* key, so the first next-release APK
+The legacy (Capacitor) APKs were distributed **signed with the debug key**. Android only
+installs an update over an app signed with the *same* key, so the first RE-KORD 5 release APK
 (signed with `rekord.jks`) is refused with `INSTALL_FAILED_UPDATE_INCOMPATIBLE` / "App not
 installed". Uninstall the old RE-KORD first (`adb uninstall app.rekord.client`, or from the
 launcher). Nothing is lost that matters: favourites, playlists and preferences live on the
@@ -212,7 +211,7 @@ gone. Configuration changes do not destroy it (`configChanges` in the manifest).
 
 ### Orientation
 
-Phones (`smallestScreenWidthDp < 600`) are locked to portrait, as in 5.0; tablets and TVs
+Phones (`smallestScreenWidthDp < 600`) are locked to portrait, as in the legacy app; tablets and TVs
 rotate freely. Decided in `MainActivity.applyOrientationPolicy()` before `super.onCreate`, so
 there is no rotate-then-snap on startup.
 
@@ -236,7 +235,7 @@ notification buttons. `RekordMediaBridge` delivers each command with a 5 s parti
 (`WAKE_LOCK` permission) and retries every 250 ms, up to 12 times, until the page answers:
 the injected script returns `true` only when `window.__rekordNativeMediaReady` is set
 (`nativeMedia.ts` raises it after the first state reaches the shell, i.e. the player is
-mounted and listening). A newer command replaces a pending one. Same approach as the 5.0
+mounted and listening). A newer command replaces a pending one. Same approach as the legacy
 `MainActivity.java`.
 
 ### Files saved from the page
@@ -251,10 +250,10 @@ through `MediaStore` (no permission), on 8–9 to the app's private
 ### Google Cast
 
 The WebView has no Cast extension, so the web sender (`src/lib/cast/googleCast.ts`) stays
-hidden in the app. The shell carries a native sender instead, ported from the 5.0
+hidden in the app. The shell carries a native sender instead, ported from the legacy
 `RekordCastManager`:
 
-- `RekordCast.kt`: Google Cast SDK (`play-services-cast-framework` 22.0.0, the 5.0 version,
+- `RekordCast.kt`: Google Cast SDK (`play-services-cast-framework` 22.0.0, the legacy app's version,
   plus `androidx.mediarouter` 1.6.0). `RekordCastOptionsProvider`, declared in the manifest
   with the `OPTIONS_PROVIDER_CLASS_NAME` meta-data and kept by `proguard-rekord.pro`, selects
   the **Default Media Receiver** and turns off the Cast SDK's own notification and
@@ -325,7 +324,7 @@ adb logcat | grep -iE "RekordCast|CastContext|MediaRouter"
 On device, still to be checked by hand (no emulator on the build machine):
 
 ```bash
-adb shell dumpsys media_session | grep -A6 rekord     # sessione e stato
+adb shell dumpsys media_session | grep -A6 rekord     # session and state
 adb shell dumpsys activity services app.rekord.client # servizio in foreground
 ```
 
@@ -350,6 +349,6 @@ WebView resume in `MainActivity.onPause` is the place to look.
   the hub's CORS policy explicitly allows `tauri://localhost` and `http(s)://tauri.localhost`
   (see [API.md](API.md#cors)), which is what lets the APK call it at all. A reverse proxy in
   front of the hub must not strip those headers.
-- Optional modules (Plectr, Nebula, DiscoWall) stay deferred.
-- **Cast**: native Google Cast is back (it was in the 5.0 APK as `RekordCastManager`); see
+- Plectr, Sonic Nebula and DiscoWall are part of the client and work in the app.
+- **Cast**: native Google Cast is back (it was in the legacy APK as `RekordCastManager`); see
   [Google Cast](#google-cast).
