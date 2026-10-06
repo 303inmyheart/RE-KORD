@@ -216,17 +216,67 @@ export type ScanReport = {
   unreadableDirs?: string[];
 };
 
-/** `POST /library/sync-legacy-meta` (hub `LegacySyncReport`, camelCase). */
-export type LegacySyncReport = {
-  albumMetaMerged?: number;
-  trackMetaMerged?: number;
-  accountsMoodsSynced?: number;
-  moodsImported?: number;
-  favoritesLinked?: number;
-  playlistsImported?: number;
-  playlistTracksLinked?: number;
-  selectionsImported?: number;
-  accountsRegistry?: number;
+/** Per-category counts of a legacy import (hub `LegacyImportCounts`). */
+export type LegacyImportCounts = {
+  favorites: number;
+  /** Of `favorites`, those whose file is not indexed yet. */
+  favoritesParked: number;
+  playlists: number;
+  playlistTracks: number;
+  playlistTracksParked: number;
+  moods: number;
+  excludedTracks: number;
+  excludedAlbums: number;
+  playCounts: number;
+  recent: number;
+  settings: number;
+  plectrBests: number;
+  selections: number;
+  themeBackgrounds: number;
+};
+
+export type LegacyAccountStatus = "imported" | "unchanged" | "skipped";
+
+/** One legacy account (`.kord/<id>_info`) in a report. */
+export type LegacyAccountReport = {
+  legacyId: string;
+  legacyName?: string;
+  hubId: string;
+  hubName?: string;
+  status: LegacyAccountStatus;
+  /** `not_registered`, `no_data`, `already_imported`, `read_error`. */
+  reason?: string;
+  created: boolean;
+  counts: LegacyImportCounts;
+  unmatchedPaths: string[];
+  unmatchedCount: number;
+  unmatchedAlbumKeys: string[];
+};
+
+/** `POST /legacy-import` (hub `LegacyImportReport`). */
+export type LegacyImportReport = {
+  trigger: "auto" | "manual" | "cli";
+  dryRun: boolean;
+  ranAt: string;
+  musicRoot: string;
+  kordFound: boolean;
+  albumMetaMerged: number;
+  trackMetaMerged: number;
+  metadataError?: string;
+  accountsAdded: number;
+  totals: LegacyImportCounts;
+  unmatchedCount: number;
+  accounts: LegacyAccountReport[];
+};
+
+/** `GET /legacy-import`. */
+export type LegacyImportStatus = {
+  musicRoot: string | null;
+  kordFound: boolean;
+  pending: boolean;
+  optedOut: boolean;
+  importedAt?: string;
+  lastReport?: LegacyImportReport;
 };
 
 export type PreferredLayout = "artist/album/track" | "artist/track" | "flat" | "tags";
@@ -453,11 +503,17 @@ export const api = {
   rebuildThumbnails: () =>
     request<{ started: boolean }>("/api/v1/library/thumbnails", { method: "POST" }),
 
-  syncLegacyMeta: () =>
-    request<LegacySyncReport>("/api/v1/library/sync-legacy-meta", {
+  legacyImportStatus: () => request<LegacyImportStatus>("/api/v1/legacy-import"),
+  legacyImport: (opts: { dryRun?: boolean; force?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.dryRun) q.set("dryRun", "true");
+    if (opts.force) q.set("force", "true");
+    const qs = q.toString();
+    return request<LegacyImportReport>(`/api/v1/legacy-import${qs ? `?${qs}` : ""}`, {
       method: "POST",
       timeoutMs: UPLOAD_TIMEOUT_MS,
-    }),
+    });
+  },
 
   jobs: () => request<JobEntry[]>("/api/v1/jobs"),
   cancelJob: (id: string) =>

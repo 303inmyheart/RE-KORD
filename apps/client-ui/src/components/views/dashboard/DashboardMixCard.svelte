@@ -191,7 +191,6 @@
               onclick={() => toggleMood(id)}
             >
               <TrackMoodGlyph mood={id} />
-              <span>{moodLabel(id)}</span>
               <UiIcon name="close" class="dashboard-mix-pill__x" />
             </button>
           {/each}

@@ -53,6 +53,10 @@ pub fn routes() -> Router<AppState> {
             get(get_machine_access).put(set_machine_access),
         )
         .route("/api/v1/library/sync-legacy-meta", post(sync_legacy_meta))
+        .route(
+            "/api/v1/legacy-import",
+            get(get_legacy_import).post(sync_legacy_meta),
+        )
         .route("/api/v1/favorites", get(list_favorites).post(add_favorite))
         .route("/api/v1/favorites/{id}", delete(remove_favorite))
         .route(
@@ -1025,16 +1029,48 @@ async fn get_public_ip() -> impl IntoResponse {
     }
 }
 
-/// One-shot fill-empty sync from `music_root/.kord/rekord.db` + sidecars + per-account moods.
-async fn sync_legacy_meta(
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct LegacyImportQuery {
+    /// Compute the report only.
+    dry_run: bool,
+    /// Merge again accounts already imported from the same legacy files.
+    force: bool,
+}
+
+/// `GET /api/v1/legacy-import`: is there legacy data, was it imported, and
+/// the report of the last import.
+async fn get_legacy_import(
     State(state): State<AppState>,
     headers: HeaderMap,
     PeerAddr(peer): PeerAddr,
 ) -> Response {
     let _op = machine_op_or_err!(&state, &headers, peer);
-    if state.is_scanning() {
-        return err(StatusCode::CONFLICT, "scan already in progress");
+    let (data_dir, root) = {
+        let cfg = state.config.lock().unwrap();
+        (cfg.data_dir.clone(), cfg.music_root.clone())
+    };
+    let status = tokio::task::spawn_blocking(move || {
+        backup::legacy_import_status(&data_dir, root.as_deref())
+    })
+    .await;
+    match status {
+        Ok(s) => ok(s).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+/// `POST /api/v1/legacy-import` (and the older `/library/sync-legacy-meta`):
+/// merge `music_root/.kord` (library metadata and every account's personal
+/// data) into the hub. `?dryRun=true` previews, `?force=true` re-merges
+/// accounts imported before. Returns the `LegacyImportReport`.
+async fn sync_legacy_meta(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    PeerAddr(peer): PeerAddr,
+    Query(q): Query<LegacyImportQuery>,
+) -> Response {
+    let _op = machine_op_or_err!(&state, &headers, peer);
     let (data_dir, root) = {
         let cfg = state.config.lock().unwrap();
         (cfg.data_dir.clone(), cfg.music_root.clone())
@@ -1042,35 +1078,61 @@ async fn sync_legacy_meta(
     let Some(root) = root else {
         return err(StatusCode::BAD_REQUEST, "music_root not set");
     };
+    if !root.join(".kord").is_dir() {
+        return err(StatusCode::NOT_FOUND, "legacy_data_not_found");
+    }
+    // Under the scan lock: a scan rewrites the catalog the import links to.
+    if !state.try_begin_scan() {
+        return err(StatusCode::CONFLICT, crate::state::SCAN_BUSY);
+    }
     let db = state.db.clone();
-    let job = state.jobs.start_coded(
-        "legacy-sync",
-        "Sync metadati legacy",
-        "legacySync.title",
-        serde_json::Value::Null,
-        false,
-    );
-    match tokio::task::spawn_blocking(move || {
-        let out = backup::sync_legacy_library_data(&db, &data_dir, &root);
-        match &out {
-            Ok(report) => job.finish_coded(
-                "legacySync.done",
-                json!({
-                    "albums": report.album_meta_merged,
-                    "tracks": report.track_meta_merged,
-                    "favorites": report.favorites_linked,
-                }),
-                format!(
-                    "{} album, {} tracce, {} preferiti",
-                    report.album_meta_merged, report.track_meta_merged, report.favorites_linked
-                ),
-            ),
-            Err(e) => job.fail(e.to_string()),
+    let job = (!q.dry_run).then(|| {
+        state.jobs.start_coded(
+            "legacy-sync",
+            "Import dalla versione precedente",
+            "legacySync.title",
+            serde_json::Value::Null,
+            false,
+        )
+    });
+    let opts = backup::LegacyImportOptions {
+        trigger: backup::LegacyImportTrigger::Manual,
+        dry_run: q.dry_run,
+        force: q.force,
+        ..Default::default()
+    };
+    let out = tokio::task::spawn_blocking(move || {
+        let out = backup::run_legacy_import(&db, &data_dir, &root, opts);
+        if let Some(job) = job {
+            match &out {
+                Ok(report) => {
+                    let t = &report.totals;
+                    job.finish_coded(
+                        "legacySync.done",
+                        json!({
+                            "accounts": report.imported_accounts(),
+                            "favorites": t.favorites,
+                            "playlists": t.playlists,
+                            "moods": t.moods,
+                            "blocked": t.excluded_tracks + t.excluded_albums,
+                        }),
+                        format!(
+                            "{} account, {} preferiti, {} playlist, {} mood",
+                            report.imported_accounts(),
+                            t.favorites,
+                            t.playlists,
+                            t.moods
+                        ),
+                    )
+                }
+                Err(e) => job.fail(e.to_string()),
+            }
         }
         out
     })
-    .await
-    {
+    .await;
+    state.end_scan();
+    match out {
         Ok(Ok(report)) => ok(report).into_response(),
         Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),

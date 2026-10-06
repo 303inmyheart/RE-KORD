@@ -52,6 +52,7 @@ export function hubErrorKey(
   if (text.includes("already in progress")) return { key: "errors.scanBusy" };
   if (text.includes("music_root not set")) return { key: "errors.musicRootNotSet" };
   if (text.includes("music root is not a directory")) return { key: "errors.musicRootMissing" };
+  if (text === "legacy_data_not_found") return { key: "errors.legacyDataNotFound" };
   if (text === "account not found" || text === "account_not_found") {
     return { key: "errors.accountNotFound" };
   }

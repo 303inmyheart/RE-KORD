@@ -172,7 +172,7 @@ export function normalizeGlassOpacity(raw: unknown): number {
 
 function probeGlassBackdropWorks(): boolean {
   if (typeof document === "undefined" || typeof CSS === "undefined") return true;
-  // WebKitGTK (Tauri on Linux) composites in software: glass costs too much.
+  // The engine cannot blur at all (see lib/platformCaps.ts): opaque glass fallback.
   if (!platformCaps.backdropFilter) return false;
   const supportsBlur =
     CSS.supports("backdrop-filter", "blur(2px)") ||
@@ -330,17 +330,37 @@ const prefsCache = new Map<string, UserPrefs>();
 /** Bumps on every change of any account's prefs (cheap staleness check). */
 let prefsVersion = 0;
 
+/*
+ * Collections are frozen on our own plain copies, never on what the caller
+ * handed in: a caller may pass live UI state (a Svelte `$state` array or
+ * object), and freezing a `$state` proxy throws `state_descriptors_fixed`
+ * (Object.freeze redefines every property as non-writable). Already-frozen
+ * collections (the cached ones, reused by a patch) are kept as they are.
+ */
+function frozenList<T>(list: readonly T[] | null | undefined): readonly T[] {
+  if (!Array.isArray(list)) return Object.freeze([]) as readonly T[];
+  return Object.isFrozen(list) ? list : Object.freeze([...list]);
+}
+
+function frozenRecord<V>(rec: Record<string, V> | null | undefined): Record<string, V> {
+  if (!rec || typeof rec !== "object") return Object.freeze({}) as Record<string, V>;
+  return Object.isFrozen(rec) ? rec : Object.freeze({ ...rec });
+}
+
 function freezeCollections(p: UserPrefs): UserPrefs {
-  Object.freeze(p.playCounts);
-  Object.freeze(p.trackMoods);
-  for (const list of Object.values(p.trackMoods)) {
-    if (Array.isArray(list)) Object.freeze(list);
+  p.playCounts = frozenRecord(p.playCounts);
+  if (!Object.isFrozen(p.trackMoods)) {
+    const moods: Record<string, string[]> = {};
+    for (const [key, list] of Object.entries(p.trackMoods ?? {})) {
+      moods[key] = (Array.isArray(list) ? frozenList(list) : list) as string[];
+    }
+    p.trackMoods = Object.freeze(moods);
   }
-  Object.freeze(p.recentRelPaths);
-  Object.freeze(p.recentTrackIds);
-  Object.freeze(p.excludedRelPaths);
-  Object.freeze(p.excludedTrackIds);
-  Object.freeze(p.excludedAlbumIds);
+  p.recentRelPaths = frozenList(p.recentRelPaths) as string[];
+  p.recentTrackIds = frozenList(p.recentTrackIds) as number[];
+  p.excludedRelPaths = frozenList(p.excludedRelPaths) as string[];
+  p.excludedTrackIds = frozenList(p.excludedTrackIds) as number[];
+  p.excludedAlbumIds = frozenList(p.excludedAlbumIds) as number[];
   return p;
 }
 

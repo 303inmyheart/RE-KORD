@@ -1,0 +1,6 @@
+{
+  "rowBadges.gapOnTitle": "Brano senza data o genere nei metadati",
+  "rowBadges.gapOffTitle": "Data o genere presenti nei metadati brano",
+  "rowBadges.moodOffTitle": "Nessun mood impostato",
+  "rowBadges.moodOnTitle": "Mood: {{labels}}"
+}

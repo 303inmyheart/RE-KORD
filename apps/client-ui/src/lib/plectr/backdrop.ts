@@ -3,10 +3,11 @@
  *
  * It sits under a dark veil, so rendering it at full resolution every frame
  * would only steal budget from the notes (legacy measured half the frames lost
- * on mobile): it renders to a reduced offscreen canvas at ~20-30 fps and each
- * game frame just blits it.
+ * on mobile): it renders to a reduced offscreen canvas at 15-25 fps, composed into the
+ * stage's static layer only when a new frame comes.
  */
 import { VizCanvasEngine, type VizMode } from "../visualizer/vizCanvasEngine";
+import { platformCaps } from "../platformCaps";
 import { isCompactRenderTarget, prefersReducedMotion } from "../visualizer/renderQuality";
 
 export type BackdropInput = {
@@ -35,8 +36,8 @@ export function plectrBackdropMode(mode: string | null | undefined): VizMode {
 
 export function backdropCadence(): { scale: number; intervalMs: number } {
   if (prefersReducedMotion()) return { scale: 0.35, intervalMs: 120 };
-  if (isCompactRenderTarget()) return { scale: 0.4, intervalMs: 48 };
-  return { scale: 0.5, intervalMs: 32 };
+  if (isCompactRenderTarget() || platformCaps.webkitGtk) return { scale: 0.4, intervalMs: 66 };
+  return { scale: 0.5, intervalMs: 40 };
 }
 
 export class PlectrBackdrop {
@@ -92,8 +93,14 @@ export class PlectrBackdrop {
     octx.fillRect(0, 0, width, height);
   }
 
-  /** Paints the backdrop over the whole stage (`bg` = stage colour, "#rrggbb"). */
-  draw(ctx: CanvasRenderingContext2D, width: number, height: number, rawInput: BackdropInput, bg: string) {
+  private stamp = 0;
+
+  /**
+   * The backdrop frame for this moment (reduced-size canvas: bg colour, viz,
+   * veil) and a stamp that changes when it was re-rendered — the caller
+   * composes it into its static layer only then, not every game frame.
+   */
+  frame(width: number, height: number, rawInput: BackdropInput, bg: string): { canvas: HTMLCanvasElement; stamp: number } | null {
     const input = { ...rawInput, mode: plectrBackdropMode(rawInput.mode) };
     if (input.mode !== this.lastMode) {
       this.viz.resetForMode(input.mode);
@@ -105,11 +112,20 @@ export class PlectrBackdrop {
     const targetW = Math.max(1, Math.round(width * scale));
     const targetH = Math.max(1, Math.round(height * scale));
     const sizeChanged = !this.off || this.off.width !== targetW || this.off.height !== targetH;
-    if (sizeChanged || now - this.lastRenderAt >= intervalMs) {
+    // Paused: one frame, then the stage keeps the last one.
+    const due = input.isPlaying ? now - this.lastRenderAt >= intervalMs : this.lastRenderAt === 0;
+    if (sizeChanged || due) {
       this.renderOffscreen(width, height, input, scale, bg);
       this.lastRenderAt = now;
+      this.stamp += 1;
     }
-    if (this.off) ctx.drawImage(this.off, 0, 0, width, height);
+    return this.off ? { canvas: this.off, stamp: this.stamp } : null;
+  }
+
+  /** Paints the backdrop over the whole stage (`bg` = stage colour, "#rrggbb"). */
+  draw(ctx: CanvasRenderingContext2D, width: number, height: number, rawInput: BackdropInput, bg: string) {
+    const f = this.frame(width, height, rawInput, bg);
+    if (f) ctx.drawImage(f.canvas, 0, 0, width, height);
   }
 
   dispose() {

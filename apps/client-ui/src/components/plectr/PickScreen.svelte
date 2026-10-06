@@ -30,6 +30,7 @@
     ondifficulty,
     onrecords,
     onsettings,
+    onback,
   }: {
     store: PlectrStore;
     selected: Track | null;
@@ -40,6 +41,8 @@
     ondifficulty: (id: DifficultyId) => void;
     onrecords: () => void;
     onsettings: () => void;
+    /** Back to the game running on the player's song (opened via "Change song"). */
+    onback?: () => void;
   } = $props();
 
   const ROW_LIMIT = 12;
@@ -167,6 +170,11 @@
   <header class="plectr-pick__head">
     <span class="plectr-brand"><UiIcon name="plectrum" /> {t("plectr.title")}</span>
     <div class="plectr-pick__tools">
+      {#if onback}
+        <button type="button" class="plectr-icon-btn" onclick={onback} aria-label={t("plectr.backToGame")} title={t("plectr.backToGame")}>
+          <UiIcon name="close" />
+        </button>
+      {/if}
       <button type="button" class="plectr-icon-btn" onclick={onrecords} aria-label={t("plectr.records.open")} title={t("plectr.records.open")}>
         <UiIcon name="trophy" />
       </button>

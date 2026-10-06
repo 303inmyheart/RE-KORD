@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "accounts": [
+    {
+      "id": "default",
+      "name": "Default"
+    },
+    {
+      "id": "0b6d1c52-3f7e-4c1a-9d2e-5a8b7c6d4e3f",
+      "name": "Alice"
+    },
+    {
+      "id": "7f3e2a1b-8c9d-4e5f-a6b7-c8d9e0f1a2b3",
+      "name": "Tester"
+    }
+  ]
+}

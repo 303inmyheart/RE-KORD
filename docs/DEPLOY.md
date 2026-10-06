@@ -22,8 +22,10 @@ with its environment variable.
 | `--modules-manifest` | `REKORD_MODULES_MANIFEST` | `<data dir>/modules.manifest.toml` | Module manifest (see [MODULES.md](MODULES.md)) |
 | `--restore-zip <zip>` | `REKORD_RESTORE_ZIP` | | Restore a backup ZIP (v2 legacy or v3) before serving |
 | `--restore-exit` | | | Exit after `--restore-zip` |
-| `--sync-legacy-meta` | | | Merge data from a legacy `<music root>/.kord` folder before serving |
-| `--sync-legacy-exit` | | | Exit after `--sync-legacy-meta` |
+| `--legacy-import` (`--sync-legacy-meta`) | | | Merge data from a legacy `<music root>/.kord` folder before serving; prints the report |
+| `--legacy-import-dry-run` | | | With `--legacy-import`: print what would be imported, write nothing, exit |
+| `--legacy-import-force` | | | With `--legacy-import`: merge again accounts already imported from the same files |
+| `--legacy-import-exit` (`--sync-legacy-exit`) | | | Exit after `--legacy-import` |
 
 The default data directory is `RE-KORD` inside the platform's data folder:
 `~/.local/share/RE-KORD` on Linux, `%APPDATA%\RE-KORD` on Windows,

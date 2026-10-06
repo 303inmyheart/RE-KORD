@@ -11,7 +11,7 @@
 
 <script lang="ts">
   import { onMount } from "svelte";
-  import { modalSurface, Segmented, sheetDrag, SHEET_MEDIA_QUERY } from "@rekord/ui";
+  import { Button, Modal, Segmented } from "@rekord/ui";
   import UiIcon from "../icons/UiIcon.svelte";
   import { api, type DiscogsCandidate, type Track } from "../../lib/api";
   import { confirmDialog } from "../../lib/confirm.svelte";
@@ -32,19 +32,6 @@
   const LOG_MAX = 400;
   /** Sanitize preview rows rendered at once (the rest is counted). */
   const SANITIZE_SHOWN = 300;
-
-  /* On the phone both dialogs are bottom sheets, which can be pushed down to close. */
-  let isSheet = $state(false);
-
-  $effect(() => {
-    const mq = window.matchMedia(SHEET_MEDIA_QUERY);
-    const sync = () => {
-      isSheet = mq.matches;
-    };
-    sync();
-    mq.addEventListener("change", sync);
-    return () => mq.removeEventListener("change", sync);
-  });
 
   let metaArtistId = $state<number | null>(null);
   let metaAlbumId = $state<number | null>(null);
@@ -225,7 +212,8 @@
           : t("ui.studioMeta.log.albumFetchOkBare"),
       );
       reportAlbumFetch(r);
-      await session.loadAllAlbums();
+      // Albums (name, cover) and tracks (titles, genre) → views and player bar.
+      await Promise.all([session.loadAllAlbums(), session.syncCatalogDelta()]);
     } catch (e) {
       fail(e);
     } finally {
@@ -294,7 +282,7 @@
       );
       appendLog("ok", t("ui.studioMeta.log.discogsApplied", { id: c.releaseId, title: c.title }));
       candidates = [];
-      await session.loadAllAlbums();
+      await Promise.all([session.loadAllAlbums(), session.syncCatalogDelta()]);
     } catch (e) {
       fail(e, "ui.studioMeta.log.applyError");
     } finally {
@@ -954,128 +942,90 @@
   </section>
 </div>
 
-{#if discogsOpen && candidates.length}
-  <div
-    class="meta-edit-backdrop rk-sheet-back"
-    role="presentation"
-    onmousedown={(e) => {
-      if (e.target === e.currentTarget) discogsOpen = false;
-    }}
-  >
-    <div
-      class="meta-edit-dialog rk-sheet surface-card studio-discogs-picker"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      aria-labelledby="discogs-picker-title"
-      onmousedown={(e) => e.stopPropagation()}
-      use:modalSurface={{ onclose: () => (discogsOpen = false), focusPanelOnly: isSheet }}
-      use:sheetDrag={{
-        enabled: isSheet,
-        gripSelector: "[data-sheet-grip]",
-        onclose: () => (discogsOpen = false),
-      }}
-    >
-      <div class="rk-sheet__grip" data-sheet-grip aria-hidden="true"></div>
-      <div class="section-head" data-sheet-grip>
-        <div>
-          <h2 id="discogs-picker-title">{t("ui.studioMeta.discogsTitle")}</h2>
-          <p class="subtle sm">{t("ui.studioMeta.discogsHint")}</p>
-        </div>
-        <button type="button" class="text-btn" onclick={() => (discogsOpen = false)}>
-          {t("ui.confirm.cancel")}
+<!-- Both dialogs use the design-system Modal (header + close, scrolling
+     body, action bar; a bottom sheet on the phone). -->
+<Modal
+  open={discogsOpen && candidates.length > 0}
+  eyebrow="Discogs"
+  title={t("ui.studioMeta.discogsTitle")}
+  lede={t("ui.studioMeta.discogsHint")}
+  panelClass="studio-discogs-picker"
+  onclose={() => (discogsOpen = false)}
+>
+  <ul class="studio-discogs-picker__list" aria-busy={busy}>
+    {#each candidates as c, i (`${c.releaseId}:${i}`)}
+      <li>
+        <button
+          type="button"
+          class="studio-discogs-picker__item"
+          disabled={busy || !canWrite}
+          onclick={() => void applyDiscogs(c)}
+        >
+          {#if c.thumb}
+            <img src={c.thumb} alt="" class="studio-discogs-picker__thumb" loading="lazy" />
+          {:else}
+            <span class="studio-discogs-picker__thumb studio-discogs-picker__thumb--empty" aria-hidden="true">
+              <UiIcon name="album" />
+            </span>
+          {/if}
+          <span class="studio-discogs-picker__body">
+            <span class="studio-discogs-picker__title">{c.title}</span>
+            <span class="studio-discogs-picker__meta">
+              {[c.year, c.country, c.label].filter(Boolean).join(" · ")}
+            </span>
+          </span>
+          {#if c.score != null}
+            <span class="studio-discogs-picker__score" title={t("studio.meta.discogsScore", { n: Math.round(c.score) })}>
+              {Math.round(c.score)}
+            </span>
+          {/if}
         </button>
-      </div>
-      <ul class="studio-discogs-picker__list rk-scroll" data-sheet-body>
-        {#each candidates as c, i (`${c.releaseId}:${i}`)}
-          <li>
-            <button
-              type="button"
-              class="studio-discogs-picker__item"
-              disabled={busy || !canWrite}
-              onclick={() => void applyDiscogs(c)}
-            >
-              {#if c.thumb}
-                <img src={c.thumb} alt="" class="studio-discogs-picker__thumb" />
-              {/if}
-              <span class="studio-discogs-picker__body">
-                <span class="studio-discogs-picker__title">{c.title}</span>
-                <span class="subtle sm">
-                  {[c.year, c.country, c.label, c.score != null ? t("studio.meta.discogsScore", { n: Math.round(c.score) }) : null]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </span>
-              </span>
-            </button>
-          </li>
-        {/each}
-      </ul>
-    </div>
-  </div>
-{/if}
+      </li>
+    {/each}
+  </ul>
+  {#snippet footer()}
+    <span class="rk-modal-foot-spacer" aria-hidden="true"></span>
+    <Button variant="ghost" onclick={() => (discogsOpen = false)}>{t("ui.confirm.cancel")}</Button>
+  {/snippet}
+</Modal>
 
-{#if scanChoice}
-  <div
-    class="meta-edit-backdrop rk-sheet-back"
-    role="presentation"
-    onmousedown={(e) => {
-      if (e.target === e.currentTarget) scanChoice = null;
-    }}
-  >
-    <div
-      class="meta-edit-dialog rk-sheet surface-card studio-scan-choice"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      aria-labelledby="scan-choice-title"
-      onmousedown={(e) => e.stopPropagation()}
-      use:modalSurface={{ onclose: () => (scanChoice = null), focusPanelOnly: isSheet }}
-      use:sheetDrag={{
-        enabled: isSheet,
-        gripSelector: "[data-sheet-grip]",
-        onclose: () => (scanChoice = null),
+<Modal
+  open={scanChoice != null}
+  eyebrow={t("studio.header.meta")}
+  title={scanChoice === "album"
+    ? t("ui.studioMeta.scanChoiceAlbumTitle")
+    : t("ui.studioMeta.scanChoiceTrackTitle")}
+  panelClass="studio-scan-choice"
+  onclose={() => (scanChoice = null)}
+>
+  <p class="studio-scan-choice__hint">
+    {scanChoice === "album"
+      ? t("ui.studioMeta.scanChoiceAlbumHint")
+      : t("ui.studioMeta.scanChoiceTrackHint")}
+  </p>
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (scanChoice = null)}>{t("ui.confirm.cancel")}</Button>
+    <span class="rk-modal-foot-spacer" aria-hidden="true"></span>
+    <Button
+      variant="ghost"
+      onclick={() => {
+        const k = scanChoice;
+        scanChoice = null;
+        if (k === "album") void runMetaScanAll(true);
+        else void runTrackScanAll(true);
       }}
     >
-      <div class="rk-sheet__grip" data-sheet-grip aria-hidden="true"></div>
-      <h4 class="studio-scan-choice__title" id="scan-choice-title" data-sheet-grip>
-        {scanChoice === "album"
-          ? t("ui.studioMeta.scanChoiceAlbumTitle")
-          : t("ui.studioMeta.scanChoiceTrackTitle")}
-      </h4>
-      <p class="subtle sm studio-scan-choice__hint">
-        {scanChoice === "album"
-          ? t("ui.studioMeta.scanChoiceAlbumHint")
-          : t("ui.studioMeta.scanChoiceTrackHint")}
-      </p>
-      <div class="studio-scan-choice__actions">
-        <button
-          type="button"
-          class="ghost-btn"
-          onclick={() => {
-            const k = scanChoice;
-            scanChoice = null;
-            if (k === "album") void runMetaScanAll(true);
-            else void runTrackScanAll(true);
-          }}
-        >
-          {t("ui.studioMeta.rescanAll")}
-        </button>
-        <button
-          type="button"
-          class="primary-btn"
-          onclick={() => {
-            const k = scanChoice;
-            scanChoice = null;
-            if (k === "album") void runMetaScanAll(false);
-            else void runTrackScanAll(false);
-          }}
-        >
-          {t("ui.studioMeta.onlyMissing")}
-        </button>
-        <button type="button" class="ghost-btn" onclick={() => (scanChoice = null)}>
-          {t("ui.confirm.cancel")}
-        </button>
-      </div>
-    </div>
-  </div>
-{/if}
+      {t("ui.studioMeta.rescanAll")}
+    </Button>
+    <Button
+      onclick={() => {
+        const k = scanChoice;
+        scanChoice = null;
+        if (k === "album") void runMetaScanAll(false);
+        else void runTrackScanAll(false);
+      }}
+    >
+      {t("ui.studioMeta.onlyMissing")}
+    </Button>
+  {/snippet}
+</Modal>

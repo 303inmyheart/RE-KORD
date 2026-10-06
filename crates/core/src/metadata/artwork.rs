@@ -572,13 +572,16 @@ fn write_cover(dir: &Path, bytes: &[u8], ext: &str) -> Result<PathBuf> {
     Ok(dest)
 }
 
-fn cover_response(rel: &str, ext: &str) -> serde_json::Value {
-    // Never the absolute server path.
+fn cover_response(rel: &str, ext: &str, version: Option<String>) -> serde_json::Value {
+    // Never the absolute server path. `coverVersion` is the album's new
+    // `cover_version` (what `/albums` and `/tracks` report from now on), so a
+    // client can patch its lists and cover URLs right away.
+    let version = version.unwrap_or_else(|| chrono::Utc::now().timestamp_millis().to_string());
     serde_json::json!({
         "saved": true,
         "albumPath": rel,
         "coverRelPath": format!("{rel}/cover.{ext}"),
-        "coverVersion": chrono::Utc::now().timestamp_millis(),
+        "coverVersion": version,
     })
 }
 
@@ -592,8 +595,8 @@ pub async fn apply_artwork_url(
     let (bytes, ext) = download_image(image_url).await?;
     let dest = write_cover(&dir, &bytes, ext)?;
     let rel = safe_rel_path(album_path)?;
-    db.set_album_cover_path(&rel, &dest)?;
-    Ok(cover_response(&rel, ext))
+    let version = db.set_album_cover_path(&rel, &dest)?;
+    Ok(cover_response(&rel, ext, version))
 }
 
 pub async fn upload_artwork(
@@ -610,8 +613,8 @@ pub async fn upload_artwork(
     let (bytes, ext) = normalize_cover(bytes.to_vec())?;
     let dest = write_cover(&dir, &bytes, ext)?;
     let rel = safe_rel_path(album_path)?;
-    db.set_album_cover_path(&rel, &dest)?;
-    Ok(cover_response(&rel, ext))
+    let version = db.set_album_cover_path(&rel, &dest)?;
+    Ok(cover_response(&rel, ext, version))
 }
 
 #[cfg(test)]
@@ -674,8 +677,13 @@ mod tests {
         let mut png = vec![0x89, b'P', b'N', b'G'];
         png.resize(100, 0);
         assert_eq!(normalize_cover(png).unwrap().1, "png");
-        let v = cover_response("A/B", "jpg");
+        let v = cover_response("A/B", "jpg", Some("18f-2a".into()));
         assert!(v.get("abs").is_none());
+        assert_eq!(v["coverVersion"], "18f-2a");
+        let fallback = cover_response("A/B", "jpg", None);
+        assert!(fallback["coverVersion"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()));
     }
 
     #[tokio::test]

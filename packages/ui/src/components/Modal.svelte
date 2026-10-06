@@ -124,7 +124,7 @@
           </svg>
         </button>
       </header>
-      <div class="body" data-sheet-body>{@render children()}</div>
+      <div class="body rk-scroll" data-sheet-body>{@render children()}</div>
       {#if footer}
         <footer class="foot" data-sheet-foot>{@render footer()}</footer>
       {/if}
@@ -154,8 +154,10 @@
     /* --rk-app-vh, not dvh: the on-screen keyboard overlays the page instead of
        shrinking it, and a dialog with a field in it has to stay above the keys. */
     max-height: min(calc(var(--rk-app-vh) * 0.9), 900px);
-    overflow: auto;
-    overscroll-behavior: contain;
+    /* Header and action bar stay put; only the body scrolls. */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     background: var(--rk-surface);
     border: 1px solid var(--rk-line);
     border-radius: var(--rk-radius-sheet);
@@ -164,6 +166,7 @@
   }
 
   .head {
+    flex: 0 0 auto;
     display: flex;
     justify-content: space-between;
     gap: 0.75rem;
@@ -236,8 +239,13 @@
   }
 
   .body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
     padding: 0.7rem 0.85rem;
     display: grid;
+    align-content: start;
     gap: 0.55rem;
   }
 
@@ -253,6 +261,7 @@
   }
 
   .foot {
+    flex: 0 0 auto;
     padding: 0.55rem 0.85rem 0.7rem;
     border-top: 1px solid var(--rk-line);
     display: flex;

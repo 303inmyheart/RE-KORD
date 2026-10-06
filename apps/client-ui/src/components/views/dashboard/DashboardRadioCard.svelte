@@ -213,6 +213,8 @@
                     class="dash-radio-mood"
                     style="--mood-c: {TRACK_MOOD_COLORS[m]}"
                     title={t(trackMoodLabelKey(m))}
+                    role="img"
+                    aria-label={t(trackMoodLabelKey(m))}
                   >
                     <TrackMoodGlyph mood={m} class="track-meta-mood-chip__glyph" />
                   </span>
@@ -283,7 +285,8 @@
     place-items: center;
     width: 1.35rem;
     height: 1.35rem;
-    border-radius: 999px;
+    /* Legacy chip: rounded square, not a dot. */
+    border-radius: var(--rk-radius, 6px);
     color: color-mix(in srgb, var(--mood-c) 88%, var(--rk-ink));
     background: color-mix(in srgb, var(--mood-c) 18%, var(--rk-surface-2) 82%);
     border: 1px solid color-mix(in srgb, var(--mood-c) 42%, var(--rk-line) 58%);

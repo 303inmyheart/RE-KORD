@@ -680,7 +680,7 @@ async fn legacy_library_is_imported_once_and_never_resurrected() {
 }
 
 #[tokio::test]
-async fn accounts_already_used_in_next_are_not_overwritten() {
+async fn accounts_already_used_in_next_are_merged_not_overwritten() {
     let hub = Hub::new("legacy-used");
     hub.file("Artist/Album/01.mp3", b"audio");
     write_legacy_personal(&hub.root);
@@ -694,13 +694,22 @@ async fn accounts_already_used_in_next_are_not_overwritten() {
         .await
         .unwrap();
     let marker = rekord_core::backup::read_legacy_import_marker(&hub.data).unwrap();
-    assert_eq!(
-        marker.accounts["default"].reason.as_deref(),
-        Some("hub_account_in_use")
-    );
+    assert!(marker.accounts["default"].imported);
     let state = rekord_core::user_state::load_user_state(&hub.data, "default");
     assert_eq!(state.settings["theme"], serde_json::json!("light"));
-    assert!(hub.state.db.list_favorites("default").unwrap().is_empty());
+    assert_eq!(
+        state.track_moods["Artist/Album/01.mp3"],
+        serde_json::json!(["chill_relax"])
+    );
+    let favs: Vec<String> = hub
+        .state
+        .db
+        .list_favorites("default")
+        .unwrap()
+        .into_iter()
+        .map(|t| t.rel_path.clone())
+        .collect();
+    assert_eq!(favs, vec!["Artist/Album/01.mp3"]);
 }
 
 // ---------------------------------------------------------------- search

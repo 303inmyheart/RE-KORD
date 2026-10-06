@@ -29,7 +29,7 @@
   );
 </script>
 
-<aside class="rail" aria-label={t("nav.aria")}>
+<aside class="rail rekord-icon-rail" aria-label={t("nav.aria")}>
   <div class="logo">
     <BrandLogo size="md" />
   </div>

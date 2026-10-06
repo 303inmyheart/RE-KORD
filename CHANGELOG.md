@@ -118,7 +118,8 @@ The legacy app, last released as 5.0, is preserved at the tag `legacy-5.0`. Read
 - New design system: self-hosted fonts (no Google Fonts requests), consistent type scale,
   accessible dialogs, skeletons and empty states.
 - History-based navigation: Back closes dialogs first, then returns to the previous view.
-- Faster on Linux (WebKitGTK): no continuous animations, capped canvases, no glass blur.
+- Faster on Linux (WebKitGTK): no animated icons in lists, capped canvases, glass blur only on
+  the few fixed surfaces (top bar, player bar, sidebar, first card).
 - **German translation** by @knoellix (PR #93), alongside Italian and English, with tests
   that keep the three languages in sync.
 - Update banners when the app and the hub are out of step.

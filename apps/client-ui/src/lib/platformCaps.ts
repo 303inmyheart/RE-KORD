@@ -1,14 +1,20 @@
 /**
  * Rendering capabilities of the engine the UI runs in.
  *
- * WebKitGTK (the Tauri webview on Linux) composites in software: every
- * infinite CSS animation keeps it repainting at 60 fps and `backdrop-filter`
- * makes each scrolled frame re-blur what is behind it (QA perf report: queue
- * playing 34% CPU with the equaliser icon animating, 0.1% without; glass on
- * pushes scroll frames from 28 to 34 ms). There the UI drops those effects:
+ * WebKitGTK (the Tauri webview on Linux) is the costly engine: every infinite
+ * CSS animation keeps it repainting and every `backdrop-filter` re-blurs what
+ * is behind it on each scrolled frame (QA perf report: queue playing 34% CPU
+ * with an equaliser icon animating in every row, 0.1% without). There the UI
+ * drops the effects that multiply with the content:
  *
- * - `lowEffects`: static equaliser icons, static skeletons.
- * - `backdropFilter`: false → the opaque glass fallback (`data-glass-backdrop="0"`).
+ * - `lowEffects`: static equaliser icons in rows and cards, static skeletons,
+ *   no blur on the page body or under the live visualizer.
+ * - `backdropFilter`: whether the engine can blur at all. When it can, the few
+ *   fixed glass surfaces (top bar, player bar, sidebar, mobile nav, the first
+ *   card of the page) keep their legacy blur on every engine, WebKitGTK
+ *   included: that is what the Glass theme is, and a handful of large static
+ *   layers is cheap. `false` → the opaque glass fallback
+ *   (`data-glass-backdrop="0"`).
  *
  * The flags are computed once at startup. `applyPlatformCapsToDom()` mirrors
  * them on <html> as `data-rk-lowfx` / `data-rk-engine` so CSS can follow.
@@ -75,10 +81,10 @@ function compute() {
     linux,
     /** The engine is WebKitGTK (Tauri on Linux, or Epiphany). */
     webkitGtk: softwareCompositor,
-    /** Drop always-on animations and blur. */
+    /** Drop always-on animations and blur on the page body. */
     lowEffects: softwareCompositor,
-    /** `backdrop-filter` works and is cheap enough to use. */
-    backdropFilter: !softwareCompositor && detectBackdropSupport(),
+    /** `backdrop-filter` works (used only on the few fixed glass surfaces). */
+    backdropFilter: detectBackdropSupport(),
     /** The user asked for less motion (read once; CSS handles live changes). */
     reducedMotion: detectReducedMotion(),
   } as const;
@@ -97,9 +103,12 @@ export function applyPlatformCapsToDom(root: HTMLElement | null = typeof documen
 }
 
 /**
- * Whether the one "live" equaliser icon (the nav rail's Studio entry) may
- * animate. Everything else shows a static "playing" pose.
+ * Whether the one "live" equaliser icon (the Studio entry of the sidebar /
+ * mobile nav) may animate. Everything else shows a static "playing" pose.
+ * Allowed on WebKitGTK too, like legacy: it is five tiny bars animating
+ * `transform` only, inside a `contain: strict` box. Only «reduce motion»
+ * stops it.
  */
 export function canAnimateLiveIndicators(): boolean {
-  return !platformCaps.lowEffects && !platformCaps.reducedMotion;
+  return !platformCaps.reducedMotion;
 }

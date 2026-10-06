@@ -2,8 +2,13 @@
   import type { DifficultyId, GameResult } from "../../lib/plectr/types";
 
   export type RunEndReason = "end" | "interrupted";
-  export type StagePhase = "countdown" | "play" | "paused" | "done";
-  export type PauseReason = "user" | "background" | "device" | "external" | "blocked";
+  /**
+   * loading: no chart yet · live: the song plays, notes fall · paused: the
+   * song is paused (notes frozen on it) · done: the chart is over.
+   */
+  export type StagePhase = "loading" | "live" | "paused" | "done";
+  /** user: our pause button / key · external: dock, media keys… · idle: never started. */
+  export type PauseReason = "user" | "external" | "idle";
 
   export type RunReport = {
     result: GameResult;
@@ -48,13 +53,19 @@
 
 <script lang="ts">
   /**
-   * Plectr stage for one run: countdown with a note lead-in at the chart
-   * tempo, the highway synced to the global player clock, real pause (input
-   * ignored, loop stopped), grace period after joining / resuming, HUD strip,
-   * judgements, pads. The stage drives the player only to start / pause the
-   * song; the view owns the flow around it (pick, results, exit).
+   * Plectr stage, legacy dock behaviour: the run follows the song the global
+   * player is playing, from wherever it is — no seek, no restart, no
+   * countdown. Pausing pauses the song (the notes freeze on it), resuming
+   * plays it again at once. A difficulty change starts a new run from the
+   * current position. The stage never stops or restarts the song by itself.
+   *
+   * Performance (WebKitGTK): one requestAnimationFrame loop that sleeps while
+   * the song is paused, a pre-composed static layer + note sprites, HUD text
+   * written straight to the DOM on change (no Svelte state per frame).
    */
-  import { onMount, untrack } from "svelte";
+  import { onMount, untrack, type Snippet } from "svelte";
+  import { pushBackLayer } from "@rekord/ui";
+  import UiIcon from "../icons/UiIcon.svelte";
   import { fmtNumber, t } from "../../lib/i18n.svelte";
   import { player } from "../../lib/player";
   import { SHORTCUTS_OFF_ATTR } from "../../lib/shortcutList";
@@ -62,14 +73,15 @@
   import {
     CHALLENGE_FAIL_ACCURACY,
     CHALLENGE_MIN_JUDGED,
+    DIFFICULTIES,
     GRACE_SECONDS,
     HIT_WINDOWS,
     LANES,
+    STAGE_BG,
   } from "../../lib/plectr/config";
   import {
     activeFlash,
     applyMisses,
-    comboMultiplier,
     completeHeldNotes,
     initialRunState,
     isChartRunComplete,
@@ -86,31 +98,11 @@
   } from "../../lib/plectr/engine";
   import { COMBO_LABEL_FROM, feedbackView } from "../../lib/plectr/feedback";
   import { createPlayerBridge, type PlectrPlayerBridge } from "../../lib/plectr/playerBridge";
-  import { END_GUARD_SECONDS } from "../../lib/plectr/playerHold";
   import type { StageBackdrop } from "../../lib/plectr/records";
-  import {
-    StageBackground,
-    drawAccuracyMeter,
-    drawNotes,
-    drawParticles,
-    drawStage,
-    drawTopFade,
-    hitLineY,
-    topFadeGradient,
-    type DrawContext,
-    type StageArt,
-  } from "../../lib/plectr/renderer";
-  import { resolveRunEndTime } from "../../lib/plectr/runResult";
+  import { NoteSprites, StageLayer, drawLanes, drawNotes, hitLineY, type DrawContext, type StageArt } from "../../lib/plectr/renderer";
   import { resetSongClock, resolveSmoothSongTime } from "../../lib/plectr/smoothSongClock";
   import { FpsWatch } from "../../lib/plectr/stageQuality";
-  import {
-    countdownLabelAt,
-    countdownPlan,
-    gameTimeFromAudio,
-    pxPerSecond,
-    type CountdownLabel,
-    type CountdownPlan,
-  } from "../../lib/plectr/timing";
+  import { gameTimeFromAudio, pxPerSecond } from "../../lib/plectr/timing";
   import type { Chart } from "../../lib/plectr/types";
   import { canvasDprCap, prefersReducedMotion } from "../../lib/visualizer/renderQuality";
   import type { VizMode } from "../../lib/visualizer/vizCanvasEngine";
@@ -119,9 +111,7 @@
     chart,
     relPath,
     title = "",
-    /** Song time the run starts from (0 = top of the song). */
-    startAt = 0,
-    /** Bump to start a new run (restart, difficulty change, next song). */
+    /** Bump to start a new run on the same chart (replay). */
     startToken = 0,
     leadTime = 1.6,
     latencyMs = 0,
@@ -133,21 +123,28 @@
     backdrop = "art",
     art = { image: null, tint: null },
     vizMode = "bars",
-    /** Phone immersive layout (strip with title, no accuracy meter). */
+    difficulty,
+    playable = [],
+    best = null,
+    lastRun = null,
+    /** Phone immersive layout. */
     compact = false,
-    /** An overlay (pause menu, results) covers the stage. */
+    /** A dialog (settings, results) covers the stage: no judging, no misses. */
     covered = false,
     /** Watch the frame rate and report a slow device once. */
     watchFps = false,
+    overlay,
     onphase,
     onfinish,
     onstats,
     onlowfps,
+    ondifficulty,
+    onsettings,
+    onexit,
   }: {
-    chart: Chart;
+    chart: Chart | null;
     relPath: string;
     title?: string;
-    startAt?: number;
     startToken?: number;
     leadTime?: number;
     latencyMs?: number;
@@ -159,63 +156,80 @@
     backdrop?: StageBackdrop;
     art?: StageArt;
     vizMode?: VizMode;
+    difficulty: DifficultyId;
+    playable?: DifficultyId[];
+    best?: { score: number; grade: string } | null;
+    lastRun?: { score: number; grade: string } | null;
     compact?: boolean;
     covered?: boolean;
     watchFps?: boolean;
+    /** Status / pause / results layer drawn over the lanes (header stays usable). */
+    overlay?: Snippet;
     onphase?: (phase: StagePhase, reason?: PauseReason) => void;
     onfinish?: (report: RunReport) => void;
     onstats?: (stats: LiveStats) => void;
     onlowfps?: () => void;
+    ondifficulty?: (id: DifficultyId) => void;
+    onsettings?: () => void;
+    onexit?: () => void;
   } = $props();
 
+  let rootEl = $state<HTMLElement | null>(null);
   let lanesEl = $state<HTMLElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
+  let scoreEl = $state<HTMLElement | null>(null);
+  let comboEl = $state<HTMLElement | null>(null);
+  let progressEl = $state<HTMLElement | null>(null);
   let padEls: HTMLElement[] = [];
 
-  let phase = $state<StagePhase>("countdown");
-  let hud = $state({
-    score: 0,
-    combo: 0,
-    feedback: "ready" as FeedbackCode,
+  let phase = $state<StagePhase>("loading");
+  /** The song plays (drives the pause / play button, also after the chart ends). */
+  let songPlaying = $state(false);
+  /** Event-rate HUD state (changes on judgements, never per frame). */
+  let judge = $state<{ code: FeedbackCode; pulse: number; combo: number; milestone: number; milestonePulse: number }>({
+    code: "ready",
     pulse: 0,
-    progress: 0,
+    combo: 0,
     milestone: 0,
     milestonePulse: 0,
   });
-  let countdown = $state<CountdownLabel | null>(null);
-  const fb = $derived(feedbackView(hud.feedback));
-  const multiplier = $derived(comboMultiplier(hud.combo));
+  /** Difficulty name flashed in the centre after a live switch. */
+  let diffFlash = $state<{ id: DifficultyId; n: number } | null>(null);
+  const fb = $derived(feedbackView(judge.code));
   const keyLabels = $derived(keys.map(keyLabel));
+  const record = $derived(lastRun ? { last: true, r: lastRun } : best ? { last: false, r: best } : null);
 
   /* ── Non-reactive game state (touched every frame) ── */
   let run: RunState | null = null;
+  let idleState: RunState = initialRunState([]);
   let bridge: PlectrPlayerBridge | null = null;
   let runChart: Chart | null = null;
   let runRelPath = "";
   let runFromStart = false;
   let raf = 0;
+  let mounted = false;
+  let ctx2d: CanvasRenderingContext2D | null = null;
   let lastAudioTime = 0;
   /** performance.now() of `lastAudioTime` (seek detection vs a slow frame). */
   let lastAudioPerf = 0;
-  let shownScore = 0;
-  let lastFrameAt = 0;
-  let hudSyncAt = 0;
+  /** The song played at least once during this run (else a pause is "idle"). */
+  let runHeardAudio = false;
+  /** The song played on the previous frame (resume detection). */
+  let wasPlaying = false;
+  let pauseRequestedAt = 0;
+  /** Skip what scrolled by unseen (tab hidden, stage covered) on the next frame. */
+  let resyncPending = false;
+  let watchedAudio: HTMLAudioElement | null = null;
+  let hudScore = -1;
+  let hudCombo = -1;
+  let hudPulse = -1;
+  let hudMilestone = -1;
+  let progressAt = 0;
   let statsAt = 0;
-  let padSignature = "";
+  let padMask = -1;
   let layout = { width: 0, height: 0, dpr: 1, hitY: 0, speed: 1 };
-  let fade: CanvasGradient | null = null;
-  /** Countdown: plan, start (performance.now), target song time (game clock). */
-  let plan: CountdownPlan | null = null;
-  let countdownStart = 0;
-  let countdownTarget = 0;
-  let audioRequested = false;
-  let audioRequestedAt = 0;
-  /** Game clock runs on the audio (vs the countdown's virtual clock). */
-  let onAudioClock = false;
-  /** We paused the player ourselves (not an external pause). */
-  let selfPausing = false;
-  let finishedReason: RunEndReason | null = null;
-  const background = new StageBackground();
+  const layer = new StageLayer();
+  const sprites = new NoteSprites();
   const backdropViz = new PlectrBackdrop();
   const fps = new FpsWatch();
   /** The analyser only while a spectrum backdrop is drawn for a playing song. */
@@ -224,6 +238,20 @@
   const pointerLanes = new Map<number, number>();
   const keyLanes = new Set<number>();
   const reducedMotion = prefersReducedMotion();
+  const judgeEnv: JudgeEnv = { now: 0, onMiss: () => vibrate(45), onMilestone: () => vibrate(12) };
+  const drawCtx: DrawContext = {
+    cssWidth: 0,
+    cssHeight: 0,
+    dpr: 1,
+    hitY: 0,
+    laneWidth: 0,
+    speed: 1,
+    songTime: 0,
+    state: idleState,
+    now: 0,
+    light: false,
+    vizUnderlay: false,
+  };
 
   function keyLabel(key: string): string {
     switch (key) {
@@ -252,40 +280,41 @@
   }
 
   function env(now = performance.now()): JudgeEnv {
-    return { now, onMiss: () => vibrate(45), onMilestone: () => vibrate(12) };
-  }
-
-  function setPhase(next: StagePhase, reason?: PauseReason) {
-    if (phase === next) return;
-    phase = next;
-    onphase?.(next, reason);
+    judgeEnv.now = now;
+    return judgeEnv;
   }
 
   /* ── Clock ── */
-
-  function audioGameTime(now: number): number {
-    const s = run;
-    const b = bridge;
-    if (!s || !b) return 0;
-    return gameTimeFromAudio(resolveSmoothSongTime(s, now, b), latencyMs);
-  }
 
   function isAudioPlaying(): boolean {
     const audio = bridge?.getAudio();
     return Boolean(audio && !audio.paused && !audio.ended);
   }
 
-  /** Current game-clock time (countdown virtual clock, then the audio). */
   function clockNow(now: number): number {
     const s = run;
-    if (!s) return 0;
-    if (phase === "countdown" && plan && !onAudioClock) {
-      const elapsed = (now - countdownStart) / 1000;
-      // Freeze on "VIA!" until the audio really runs: no jump back.
-      return Math.min(countdownTarget, countdownTarget - (plan.total - elapsed));
+    const b = bridge;
+    if (!s || !b) return 0;
+    return gameTimeFromAudio(resolveSmoothSongTime(s, now, b), latencyMs);
+  }
+
+  /** Keep the smooth clock on the player across seeks / play / pause (legacy). */
+  function onAudioEvent() {
+    const s = run;
+    const b = bridge;
+    if (s && b) resetSongClock(s, b.getCurrentTime(), performance.now());
+    schedule();
+  }
+
+  function watchAudio() {
+    const el = bridge?.getAudio();
+    const next = el instanceof HTMLAudioElement ? el : null;
+    if (next === watchedAudio) return;
+    for (const type of ["play", "pause", "seeking", "seeked", "ratechange"] as const) {
+      watchedAudio?.removeEventListener(type, onAudioEvent);
+      next?.addEventListener(type, onAudioEvent);
     }
-    if (phase === "play" || (phase === "countdown" && onAudioClock)) return audioGameTime(now);
-    return s.songTime;
+    watchedAudio = next;
   }
 
   /* ── Run lifecycle ── */
@@ -326,93 +355,96 @@
     const s = run;
     if (!s || s.finished) return;
     s.finished = true;
-    finishedReason = reason;
     releaseAll();
-    analyserLease.set(false);
     const r = report(reason, failed);
-    if (reason === "end") setPhase("done");
+    syncHud(true);
     if (r && (judgedNotes(s) > 0 || reason === "end")) onfinish?.(r);
+    updatePhase(performance.now());
   }
 
-  function startRun(nextChart: Chart, nextRelPath: string, from: number) {
-    if (run && !run.finished) finishRun("interrupted");
+  /** The run being left (track change, repeat): did it get to the end of the song? */
+  function reachedEnd(s: RunState): boolean {
+    const d = bridge?.getDuration() || runChart?.duration || 0;
+    return s.songTime >= s.lastEnd - 1 || (d > 0 && d - s.songTime <= 15);
+  }
+
+  function startRun(nextChart: Chart, nextRelPath: string) {
+    if (run && !run.finished) finishRun(runRelPath !== nextRelPath && reachedEnd(run) ? "end" : "interrupted");
     runChart = nextChart;
     runRelPath = nextRelPath;
-    run = initialRunState(nextChart.notes);
     bridge = createPlayerBridge(nextRelPath);
-    finishedReason = null;
-    shownScore = 0;
-    padSignature = "";
+    const now = performance.now();
+    const from = bridge.isOnTrack() ? bridge.getCurrentTime() : 0;
+    const s = initialRunState(nextChart.notes);
+    run = s;
     const target = gameTimeFromAudio(from, latencyMs);
     runFromStart = from < 0.5;
     if (!runFromStart) {
-      // Joining mid-song (difficulty change, resume after a seek): what is
-      // behind is not a miss, and the next 1.5 s are on the house.
-      skipNotesBefore(run, target);
-      startGrace(run, target, GRACE_SECONDS);
+      // Joining mid-song (opening Plectr on a playing song, difficulty
+      // change): what is behind is not a miss, the first notes are on the house.
+      skipNotesBefore(s, target);
+      startGrace(s, target, GRACE_SECONDS);
     }
-    run.started = true;
-    run.songTime = target;
+    s.started = true;
+    s.songTime = target;
+    resetSongClock(s, from, now);
     lastAudioTime = from;
     lastAudioPerf = 0;
-    for (const lane of keyLanes) run.pressedLanes[lane] = true;
-    beginCountdown(from);
-  }
-
-  function beginCountdown(from: number) {
-    const s = run;
-    if (!s || !runChart) return;
-    if (player.playing) {
-      selfPausing = true;
-      player.pause();
-    }
-    plan = countdownPlan(runChart.stats.bpm);
-    countdownStart = performance.now();
-    countdownTarget = gameTimeFromAudio(from, latencyMs);
-    audioRequested = false;
-    onAudioClock = false;
-    s.songTime = countdownTarget - plan.total;
-    countdown = null;
-    fps.reset(performance.now());
-    setPhase("countdown");
+    runHeardAudio = isAudioPlaying();
+    wasPlaying = runHeardAudio;
+    resyncPending = false;
+    for (const lane of keyLanes) s.pressedLanes[lane] = true;
+    fps.reset(now);
+    watchAudio();
     syncHud(true);
+    updatePhase(now);
     schedule();
   }
 
-  /** Pause: audio stops, input ignored, one static frame. */
-  export function pause(reason: PauseReason = "user") {
-    const s = run;
-    if (!s || s.finished || phase === "paused" || phase === "done") return;
-    if (player.playing) {
-      selfPausing = true;
-      player.pause();
-    }
+  /** Pause = pause the song (the notes freeze on it). */
+  export function pause() {
+    pauseRequestedAt = performance.now();
     releaseAll();
-    countdown = null;
-    analyserLease.set(false);
-    if (onAudioClock || phase === "play") {
-      const b = bridge;
-      if (b) s.songTime = gameTimeFromAudio(b.getCurrentTime(), latencyMs);
-    }
-    setPhase("paused", reason);
-    drawOnce();
+    if (player.playing) player.pause();
+    schedule();
   }
 
-  /** Resume with the countdown from where the song stopped; grace after it. */
+  /** Resume = play the song again, right away (no countdown). */
   export function resume() {
-    const s = run;
-    const b = bridge;
-    if (!s || !b || s.finished || phase !== "paused") return;
-    const from = b.getCurrentTime();
-    startGrace(s, gameTimeFromAudio(from, latencyMs), GRACE_SECONDS);
-    beginCountdown(from);
+    if (!player.current) return;
+    if (!player.playing) void player.toggle();
+    schedule();
   }
 
   export function isPaused(): boolean {
     return phase === "paused";
   }
 
-  /* ── HUD ── */
+  /** The song itself: pause it when it plays, play it otherwise. */
+  function togglePause() {
+    if (songPlaying) pause();
+    else resume();
+  }
+
+  function updatePhase(now: number) {
+    const audible = isAudioPlaying();
+    if (audible !== songPlaying) songPlaying = audible;
+    const s = run;
+    let next: StagePhase;
+    let reason: PauseReason | undefined;
+    if (!chart || !s) next = "loading";
+    else if (s.finished) next = "done";
+    else if (isAudioPlaying()) next = "live";
+    else {
+      next = "paused";
+      reason = !runHeardAudio ? "idle" : now - pauseRequestedAt < 1500 ? "user" : "external";
+    }
+    if (next === phase) return;
+    phase = next;
+    onphase?.(next, reason);
+  }
+
+  /* ── HUD (DOM writes on change only) ── */
 
   function liveStats(s: RunState): LiveStats {
     const judged = judgedNotes(s);
@@ -433,56 +465,58 @@
   }
 
   function syncHud(force = false) {
-    const s = run;
-    if (!s) return;
+    const s = run ?? idleState;
     const now = performance.now();
-    const dt = lastFrameAt ? Math.min(0.1, (now - lastFrameAt) / 1000) : 0.016;
-    shownScore = force || reducedMotion ? s.score : shownScore + (s.score - shownScore) * Math.min(1, dt * 10);
-    if (Math.abs(s.score - shownScore) < 1) shownScore = s.score;
-    const score = Math.round(shownScore);
-    const feedbackChanged = s.feedback !== hud.feedback || s.feedbackPulse !== hud.pulse;
-    const changed = feedbackChanged || score !== hud.score || s.combo !== hud.combo || s.milestonePulse !== hud.milestonePulse;
-    const duration = runChart ? resolveRunEndTime(runChart.duration, bridge?.getDuration() || undefined) : 0;
-    const progress = duration > 0 ? Math.min(1, Math.max(0, s.songTime / duration)) : 0;
-    const progressMoved = Math.abs(progress - hud.progress) >= 0.004;
-    if (!force && !feedbackChanged && (!changed || now - hudSyncAt < 50) && (!progressMoved || now - hudSyncAt < 250)) {
-      return;
+    if (force || s.score !== hudScore) {
+      hudScore = s.score;
+      if (scoreEl) scoreEl.textContent = fmtNumber(s.score);
     }
-    hudSyncAt = now;
-    hud = {
-      score,
-      combo: s.combo,
-      feedback: s.feedback,
-      pulse: s.feedbackPulse,
-      progress,
-      milestone: s.milestone,
-      milestonePulse: s.milestonePulse,
-    };
-    if (onstats && (force || now - statsAt > 250)) {
+    if (force || s.combo !== hudCombo) {
+      hudCombo = s.combo;
+      if (comboEl) comboEl.textContent = `${s.combo}x`;
+    }
+    if (force || s.feedbackPulse !== hudPulse || s.milestonePulse !== hudMilestone || s.combo !== judge.combo) {
+      hudPulse = s.feedbackPulse;
+      hudMilestone = s.milestonePulse;
+      judge = {
+        code: s.feedback,
+        pulse: s.feedbackPulse,
+        combo: s.combo,
+        milestone: s.milestone,
+        milestonePulse: s.milestonePulse,
+      };
+    }
+    if (force || now - progressAt > 250) {
+      progressAt = now;
+      const d = bridge?.getDuration() || runChart?.duration || 0;
+      const p = d > 0 ? Math.min(1, Math.max(0, s.songTime / d)) : 0;
+      if (progressEl) progressEl.style.transform = `scaleX(${p.toFixed(4)})`;
+    }
+    if (onstats && run && (force || now - statsAt > 300)) {
       statsAt = now;
-      onstats(liveStats(s));
+      onstats(liveStats(run));
     }
   }
 
   function syncPads(now: number) {
-    const s = run;
-    if (!s) return;
-    let sig = "";
+    const s = run ?? idleState;
+    let mask = 0;
     for (let i = 0; i < LANES.length; i += 1) {
-      const holding = isHoldingLane(s, i);
+      const holding = s.activeHolds.length > 0 && isHoldingLane(s, i);
       const flash = activeFlash(s, i, now);
-      sig += `${s.pressedLanes[i] || holding ? 1 : 0}${flash === "hit" ? "h" : flash === "miss" ? "m" : "-"}`;
+      const bits = (s.pressedLanes[i] || holding ? 1 : 0) | (holding ? 2 : 0) | (flash === "hit" ? 4 : flash === "miss" ? 8 : 0);
+      mask |= bits << (i * 4);
     }
-    if (sig === padSignature) return;
-    padSignature = sig;
+    if (mask === padMask) return;
+    padMask = mask;
     for (let i = 0; i < LANES.length; i += 1) {
       const pad = padEls[i];
       if (!pad) continue;
-      const holding = isHoldingLane(s, i);
-      const flash = activeFlash(s, i, now);
-      pad.classList.toggle("is-pressed", s.pressedLanes[i] || holding);
-      pad.classList.toggle("is-hit", flash === "hit");
-      pad.classList.toggle("is-miss", flash === "miss");
+      const bits = (mask >> (i * 4)) & 15;
+      pad.classList.toggle("is-pressed", (bits & 1) !== 0);
+      pad.classList.toggle("is-holding", (bits & 2) !== 0);
+      pad.classList.toggle("is-hit", (bits & 4) !== 0);
+      pad.classList.toggle("is-miss", (bits & 8) !== 0);
     }
   }
 
@@ -492,188 +526,144 @@
     const canvas = canvasEl;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const dpr = light ? 1 : canvasDprCap({ lite: true });
-    const width = Math.max(1, rect.width);
-    const height = Math.max(1, rect.height);
+    const dpr = light ? 1 : Math.min(2, canvasDprCap({ lite: true }));
+    const width = Math.max(1, Math.round(rect.width));
+    const height = Math.max(1, Math.round(rect.height));
     const hitY = hitLineY(height);
     const speed = pxPerSecond(hitY, leadTime);
     layout = { width, height, dpr, hitY, speed };
-    const bw = Math.max(1, Math.floor(width * dpr));
-    const bh = Math.max(1, Math.floor(height * dpr));
+    const bw = Math.max(1, Math.round(width * dpr));
+    const bh = Math.max(1, Math.round(height * dpr));
     if (canvas.width !== bw || canvas.height !== bh) {
       canvas.width = bw;
       canvas.height = bh;
+      ctx2d = null;
     }
-    fade = null;
     // For QA bots / tests: where the hit line is and how fast notes travel.
     canvas.dataset.hitY = String(Math.round(hitY));
     canvas.dataset.speed = String(Math.round(speed));
   }
 
-  function draw(now: number, songTime: number) {
-    const s = run;
-    const canvas = canvasEl;
-    if (!s || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    if (layout.width < 1) measure();
-    const { width, height, dpr, hitY, speed } = layout;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const useViz = !light && backdrop === "bars" && vizMode !== "karaoke";
-    const vizPlaying = useViz && phase === "play" && isAudioPlaying();
-    analyserLease.set(vizPlaying);
-    if (useViz) {
-      backdropViz.draw(
-        ctx,
-        width,
-        height,
-        { mode: vizMode, analyser: vizPlaying ? player.getAnalyser() : null, isPlaying: vizPlaying },
-        "#06080f",
-      );
-    }
-    const bg = background.get(width, height, dpr, light || backdrop !== "art" ? { image: null, tint: art.tint } : art, !useViz);
-    if (bg) {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(bg, 0, 0);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-    const d: DrawContext = {
-      cssWidth: width,
-      cssHeight: height,
-      hitY,
-      laneWidth: width / LANES.length,
-      speed,
-      songTime,
-      state: s,
-      now,
-      light,
-      reducedMotion,
-      showMeter: !compact,
-      vizUnderlay: useViz,
-    };
-    drawStage(ctx, d);
-    drawNotes(ctx, d);
-    drawParticles(ctx, d);
-    fade ??= topFadeGradient(ctx, height);
-    drawTopFade(ctx, d, fade);
-    drawAccuracyMeter(ctx, d);
+  function useViz(): boolean {
+    return !light && backdrop === "bars" && vizMode !== "karaoke";
   }
 
-  function drawOnce() {
-    const s = run;
-    if (!s) return;
-    draw(performance.now(), s.songTime);
+  function draw(now: number, songTime: number) {
+    const canvas = canvasEl;
+    if (!canvas) return;
+    if (layout.width < 2) measure();
+    ctx2d ??= canvas.getContext("2d", { alpha: false });
+    const ctx = ctx2d;
+    if (!ctx) return;
+    const { width, height, dpr, hitY, speed } = layout;
+    const viz = useViz();
+    const playing = isAudioPlaying();
+    analyserLease.set(viz && playing);
+    layer.configure(width, height, dpr, hitY, light || backdrop !== "art" ? { image: null, tint: art.tint } : art, viz);
+    if (viz) {
+      const f = backdropViz.frame(
+        width,
+        height,
+        { mode: vizMode, analyser: playing ? player.getAnalyser() : null, isPlaying: playing },
+        STAGE_BG,
+      );
+      if (f) layer.compose(f.canvas, f.stamp);
+    }
+    if (!layer.blit(ctx)) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = STAGE_BG;
+      ctx.fillRect(0, 0, width, height);
+    }
+    sprites.configure(width / LANES.length, dpr, light);
+    const d = drawCtx;
+    d.cssWidth = width;
+    d.cssHeight = height;
+    d.dpr = dpr;
+    d.hitY = hitY;
+    d.laneWidth = width / LANES.length;
+    d.speed = speed;
+    d.songTime = songTime;
+    d.state = run ?? idleState;
+    d.now = now;
+    d.light = light;
+    d.vizUnderlay = viz;
+    drawLanes(ctx, d);
+    if (run) drawNotes(ctx, d, sprites);
   }
 
   /* ── Loop ── */
 
-  function frame() {
+  function frame(now: number) {
     raf = 0;
+    if (!canvasEl || !mounted) return;
+    now = performance.now();
     const s = run;
     const b = bridge;
-    if (!s || !b || !canvasEl) return;
-    const now = performance.now();
-    if (phase === "paused" || phase === "done") {
-      drawOnce();
+    if (!s || !b) {
+      draw(now, 0);
+      syncPads(now);
+      updatePhase(now);
+      if (isAudioPlaying() || player.playing) schedule();
       return;
     }
-    if (watchFps && phase === "play" && fps.tick(now)) onlowfps?.();
-
-    const onTrack = b.isOnTrack();
-    if (!onTrack) {
-      // The player moved on to another track.
-      finishRun("interrupted");
-      drawOnce();
-      return;
+    watchAudio();
+    const playing = isAudioPlaying();
+    if (playing) runHeardAudio = true;
+    if (!s.finished && b.isOnTrack()) {
+      if (playing) stepLive(now);
+      else if (nearTrackEnd(b.getCurrentTime()) && (b.getAudio()?.ended || !player.playing) && runHeardAudio) {
+        // The song ended and the player stopped (end of the queue).
+        finishRun("end");
+      }
     }
-
-    if (phase === "countdown") stepCountdown(now);
-    else stepPlay(now);
-    if (!run || run !== s || s.finished) {
-      if (run) drawOnce();
-      return;
+    if (run !== s) return; // a seek back started a new run
+    const songTime = s.finished ? s.songTime : clockNow(now);
+    if (!s.finished) {
+      s.songTime = songTime;
+      // Resumed: no countdown, but a note due right now is not a miss yet.
+      if (playing && !wasPlaying) startGrace(s, songTime, 0.75);
+      if (resyncPending || covered) {
+        // Hidden / covered: notes that went by unseen are skipped, not missed.
+        resyncPending = false;
+        skipNotesBefore(s, songTime + (covered ? 0.4 : 0));
+        startGrace(s, songTime, covered ? 0.6 : 1);
+      }
+      if (playing) {
+        const e = env(now);
+        applyMisses(s, songTime, e);
+        completeHeldNotes(s, songTime, e);
+      }
+      if (watchFps && playing && fps.tick(now)) onlowfps?.();
     }
-
-    const songTime = clockNow(now);
-    s.songTime = songTime;
-    if (!covered) {
-      const e = env(now);
-      applyMisses(s, songTime, e);
-      completeHeldNotes(s, songTime, e);
-    }
-
+    wasPlaying = playing;
     draw(now, songTime);
     syncPads(now);
     syncHud();
-    lastFrameAt = now;
-    checkEnd(s, songTime);
-    schedule();
+    if (!s.finished) checkEnd(s, songTime);
+    updatePhase(now);
+    if (playing || pointerLanes.size || keyLanes.size || flashing(s, now)) schedule();
   }
 
-  function stepCountdown(now: number) {
-    const s = run;
-    const b = bridge;
-    if (!s || !b || !plan) return;
-    const elapsed = (now - countdownStart) / 1000;
-    const label = countdownLabelAt(plan, elapsed);
-    if (label !== countdown) countdown = label;
-    if (elapsed >= plan.total && !audioRequested) {
-      audioRequested = true;
-      audioRequestedAt = now;
-      if (!player.playing) void player.toggle();
-    }
-    if (audioRequested && !onAudioClock) {
-      const audioNow = b.getCurrentTime();
-      if (isAudioPlaying() && audioNow > lastAudioTime + 0.005) {
-        // The song runs: hand the clock over to the audio.
-        onAudioClock = true;
-        resetSongClock(s, audioNow, now);
-        lastAudioTime = audioNow;
-        lastAudioPerf = now;
-      } else if (now - audioRequestedAt > 2500) {
-        // Autoplay refused / audio stuck: wait for the player in the pause menu.
-        pause("blocked");
-        return;
-      }
-    }
-    if (onAudioClock && elapsed >= plan.total + plan.stepSec) {
-      countdown = null;
-      setPhase("play");
-    }
+  function flashing(s: RunState, now: number): boolean {
+    for (let i = 0; i < LANES.length; i += 1) if (activeFlash(s, i, now)) return true;
+    return false;
   }
 
-  function stepPlay(now: number) {
+  function stepLive(now: number) {
     const s = run;
     const b = bridge;
     if (!s || !b) return;
     const audioNow = b.getCurrentTime();
-    if (!isAudioPlaying()) {
-      if (nearTrackEnd(audioNow)) {
-        finishRun("end");
-        return;
-      }
-      if (selfPausing) return;
-      // Paused from the dock, media keys, a headset unplugged…
-      pause("external");
-      return;
-    }
-    if (Math.abs(audioNow - lastAudioTime) < 1e-4 && lastAudioPerf && now - lastAudioPerf > 3000) {
-      // "Playing" but the audio clock froze (output lost, stream stalled):
-      // pause instead of letting notes fall without music.
-      pause("device");
-      return;
-    }
     if (audioNow < lastAudioTime - 1.5) {
-      // Seek back (or the track looped): a fresh run from here, mid-song.
-      const from = audioNow;
-      finishRun(audioNow < 2 && nearTrackEnd(lastAudioTime) ? "end" : "interrupted");
-      if (runChart && !nearTrackEnd(lastAudioTime)) startRun(runChart, runRelPath, from);
+      // Seek back (or the track looped): a fresh run from here.
+      const looped = audioNow < 2 && nearTrackEnd(lastAudioTime);
+      finishRun(looped ? "end" : "interrupted");
+      if (runChart) startRun(runChart, runRelPath);
       return;
     }
     const wall = lastAudioPerf ? (now - lastAudioPerf) / 1000 : 0;
-    if (audioNow - lastAudioTime - wall > 0.6) {
-      // Seek forward (the audio jumped, not just a slow frame): skipped
-      // notes are not misses; grace after the jump.
+    if (lastAudioPerf && audioNow - lastAudioTime - wall > 0.6) {
+      // Seek forward: skipped notes are not misses; grace after the jump.
       const target = gameTimeFromAudio(audioNow, latencyMs);
       skipNotesBefore(s, target);
       startGrace(s, target, GRACE_SECONDS);
@@ -686,37 +676,25 @@
 
   function nearTrackEnd(audioTime: number): boolean {
     const d = bridge?.getDuration() || runChart?.duration || 0;
-    return d > 0 && d - audioTime <= END_GUARD_SECONDS + 0.6;
+    return d > 0 && d - audioTime <= 1.2;
   }
 
   function checkEnd(s: RunState, songTime: number) {
-    if (s.finished || phase !== "play") return;
     if (challenge) {
       const judged = judgedNotes(s);
       if (judged >= CHALLENGE_MIN_JUDGED && s.hits / judged < CHALLENGE_FAIL_ACCURACY) {
+        // Failed: the run ends, the song keeps playing (legacy never stopped it).
         finishRun("end", true);
-        if (player.playing) {
-          selfPausing = true;
-          player.pause();
-        }
         return;
       }
     }
-    if (!s.awaitingTrackEnd && isChartRunComplete(s, songTime)) {
-      s.awaitingTrackEnd = true;
-    }
-    const lastEnd = runChart?.notes.reduce((m, n) => Math.max(m, n.time + n.duration), 0) ?? 0;
-    // Chart done (+ a breath): results now, the player keeps going to the end.
-    if (s.awaitingTrackEnd && songTime >= lastEnd + 1.2) {
-      finishRun("end");
-      return;
-    }
-    const runEnd = resolveRunEndTime(runChart?.duration ?? 0, bridge?.getDuration() || undefined);
-    if (runEnd > 0 && songTime >= runEnd - END_GUARD_SECONDS - 0.1) finishRun("end");
+    if (!s.awaitingTrackEnd && isChartRunComplete(s, songTime)) s.awaitingTrackEnd = true;
+    // Chart done (+ a breath): results now, the song plays on.
+    if (s.awaitingTrackEnd && songTime >= s.lastEnd + 1.2) finishRun("end");
   }
 
   function schedule() {
-    if (raf || typeof document === "undefined" || document.hidden) return;
+    if (raf || !mounted || typeof document === "undefined" || document.hidden) return;
     raf = requestAnimationFrame(frame);
   }
 
@@ -724,19 +702,19 @@
 
   function canJudge(): boolean {
     const s = run;
-    if (!s || s.finished || covered) return false;
-    return phase === "play" || phase === "countdown";
+    return !!s && !s.finished && !covered && phase === "live";
   }
 
   function press(lane: number) {
     const s = run;
-    if (!s || s.finished) return;
-    if (!canJudge()) return;
+    if (!s || !canJudge()) return;
+    const now = performance.now();
     // Judge on the freshest clock, not the last frame's.
-    s.songTime = clockNow(performance.now());
-    pressLane(s, lane, env());
-    syncPads(performance.now());
+    s.songTime = clockNow(now);
+    pressLane(s, lane, env(now));
+    syncPads(now);
     syncHud();
+    schedule();
   }
 
   function release(lane: number) {
@@ -744,12 +722,15 @@
     if (!s) return;
     if (!canJudge()) {
       s.pressedLanes[lane] = false;
+      syncPads(performance.now());
       return;
     }
-    s.songTime = clockNow(performance.now());
-    releaseLane(s, lane, env());
-    syncPads(performance.now());
+    const now = performance.now();
+    s.songTime = clockNow(now);
+    releaseLane(s, lane, env(now));
+    syncPads(now);
     syncHud();
+    schedule();
   }
 
   function laneAt(clientX: number): number {
@@ -759,10 +740,16 @@
     return Math.min(LANES.length - 1, Math.max(0, ix));
   }
 
+  function inOverlay(target: EventTarget | null): boolean {
+    return target instanceof Element && !!target.closest(".plectr-overlay");
+  }
+
   function onPointerDown(event: PointerEvent) {
-    if (!canJudge()) return;
-    if (event.button !== 0 && event.pointerType === "mouse") return;
+    // Overlays (pause card, results, status) keep their own buttons.
+    if (inOverlay(event.target)) return;
+    // The lanes own every press: no focus change, no click-through, no menu.
     event.preventDefault();
+    if (event.button !== 0 && event.pointerType === "mouse") return;
     const lane = laneAt(event.clientX);
     pointerLanes.set(event.pointerId, lane);
     try {
@@ -773,6 +760,12 @@
     press(lane);
   }
 
+  function laneHeldElsewhere(lane: number): boolean {
+    if (keyLanes.has(lane)) return true;
+    for (const l of pointerLanes.values()) if (l === lane) return true;
+    return false;
+  }
+
   function onPointerMove(event: PointerEvent) {
     const prev = pointerLanes.get(event.pointerId);
     if (prev === undefined) return;
@@ -780,7 +773,7 @@
     if (lane === prev) return;
     // Sliding a finger across lanes: let go of the old one, press the new one.
     pointerLanes.set(event.pointerId, lane);
-    if (![...pointerLanes.values()].includes(prev) && !keyLanes.has(prev)) release(prev);
+    if (!laneHeldElsewhere(prev)) release(prev);
     if (run && !run.pressedLanes[lane]) press(lane);
   }
 
@@ -788,7 +781,13 @@
     const lane = pointerLanes.get(event.pointerId);
     if (lane === undefined) return;
     pointerLanes.delete(event.pointerId);
-    if (![...pointerLanes.values()].includes(lane) && !keyLanes.has(lane)) release(lane);
+    if (!laneHeldElsewhere(lane)) release(lane);
+  }
+
+  /** Touch: no synthetic click / double-tap zoom / scroll from the lanes. */
+  function onTouch(event: TouchEvent) {
+    if (inOverlay(event.target)) return;
+    if (event.target instanceof Element && event.target.closest(".plectr-lanes")) event.preventDefault();
   }
 
   function isTypingTarget(el: EventTarget | null): boolean {
@@ -802,8 +801,13 @@
   }
 
   function laneForKey(event: KeyboardEvent): number {
-    const k = event.key.toLowerCase();
-    return keys.indexOf(k);
+    return keys.indexOf(event.key.toLowerCase());
+  }
+
+  function switchDifficulty(id: DifficultyId) {
+    if (id === difficulty || !playable.includes(id)) return;
+    ondifficulty?.(id);
+    diffFlash = { id, n: (diffFlash?.n ?? 0) + 1 };
   }
 
   function onKeyDown(event: KeyboardEvent) {
@@ -811,23 +815,29 @@
     if (isTypingTarget(event.target) || modalOpen()) return;
     const isSpace = event.key === " " || event.code === "Space";
     if ((isSpace || event.key === "Escape") && !event.repeat) {
-      // Buttons keep Space / Enter for themselves (pause menu, results).
-      if (isSpace && event.target instanceof HTMLElement && event.target.closest("button, a, [role=button]")) {
+      // Buttons keep Space / Enter for themselves (pause card, results).
+      if (isSpace && event.target instanceof HTMLElement && event.target.closest("button, a, [role=button], [role=radio]")) {
         return;
       }
-      if (phase === "done" || covered) return;
+      if (covered) return;
+      // Esc pauses; it never starts the song.
+      if (event.key === "Escape" && !songPlaying) return;
       event.preventDefault();
       event.stopPropagation();
-      if (phase === "paused") resume();
-      else pause("user");
+      togglePause();
+      return;
+    }
+    const diffIx = ["1", "2", "3"].indexOf(event.key);
+    if (diffIx >= 0 && !event.repeat && !covered && keys.indexOf(event.key) < 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      switchDifficulty(DIFFICULTIES[diffIx]!.id);
       return;
     }
     const lane = laneForKey(event);
     if (lane < 0) return;
-    // Paused: arrow lane keys move the pause menu's difficulty choice instead.
-    if (phase === "paused" && event.target instanceof HTMLElement && event.target.closest('[role="radiogroup"]')) {
-      return;
-    }
+    // Paused: arrow lane keys move the pause card's difficulty choice instead.
+    if (phase === "paused" && event.target instanceof HTMLElement && event.target.closest('[role="radiogroup"]')) return;
     // Lane keys belong to the game while it is on screen (no app shortcuts).
     event.preventDefault();
     event.stopPropagation();
@@ -842,7 +852,7 @@
     if (lane < 0 || !keyLanes.has(lane)) return;
     event.stopPropagation();
     keyLanes.delete(lane);
-    if (![...pointerLanes.values()].includes(lane)) release(lane);
+    if (!laneHeldElsewhere(lane)) release(lane);
   }
 
   function releaseAll() {
@@ -851,18 +861,26 @@
     pointerLanes.clear();
     const s = run;
     if (s && !s.finished && canJudge()) for (const lane of lanes) release(lane);
-    if (s) s.pressedLanes = s.pressedLanes.map(() => false);
+    if (s) for (let i = 0; i < s.pressedLanes.length; i += 1) s.pressedLanes[i] = false;
     if (s) syncPads(performance.now());
   }
 
-  /* (Re)start a run whenever the chart (track × difficulty) or the token changes. */
+  /* (Re)start a run when the chart (track × difficulty) or the token changes. */
   $effect(() => {
     const c = chart;
     const rel = relPath;
-    const from = startAt;
     void startToken;
     untrack(() => {
-      startRun(c, rel, from);
+      if (c) startRun(c, rel);
+      else {
+        if (run && !run.finished) finishRun(runRelPath !== rel && reachedEnd(run) ? "end" : "interrupted");
+        run = null;
+        runChart = null;
+        bridge = createPlayerBridge(rel);
+        updatePhase(performance.now());
+        syncHud(true);
+        schedule();
+      }
     });
   });
 
@@ -872,23 +890,33 @@
     void leadTime;
     void backdrop;
     void art;
+    void vizMode;
     untrack(() => {
       measure();
-      if (phase === "paused" || phase === "done") drawOnce();
+      schedule();
     });
   });
 
-  /* Overlay on top: drop held lanes. */
+  /* A dialog on top: drop held lanes; skip what goes by under it. */
   $effect(() => {
     if (covered) untrack(releaseAll);
+    else untrack(() => (resyncPending = true));
+  });
+
+  /* Android Back / browser Back while notes fall: pause first (legacy trapped it). */
+  $effect(() => {
+    if (phase !== "live") return;
+    const release = pushBackLayer(() => pause());
+    return release;
   });
 
   onMount(() => {
+    mounted = true;
     padEls = lanesEl ? [...lanesEl.querySelectorAll<HTMLElement>(".plectr-pad")] : [];
     measure();
     const ro = new ResizeObserver(() => {
       measure();
-      if (phase === "paused" || phase === "done") drawOnce();
+      schedule();
     });
     if (canvasEl) ro.observe(canvasEl);
 
@@ -896,55 +924,68 @@
       if (document.hidden) {
         if (raf) cancelAnimationFrame(raf);
         raf = 0;
-        // Background: a real pause (notes would scroll by unseen).
-        if (phase === "play" || phase === "countdown") pause("background");
+        // The song keeps playing (legacy); notes that go by unseen are skipped.
         analyserLease.set(false);
         releaseAll();
       } else {
+        resyncPending = true;
         schedule();
       }
     };
     const onBlur = () => releaseAll();
     const offPlayState = player.subscribePlayState(() => {
-      // Our own pause went through: later pauses are external again.
-      if (!player.playing) selfPausing = false;
-      if (player.playing && phase === "paused" && !covered) {
-        // Resumed from the dock / media keys while paused here: pause again
-        // and go through the countdown instead of running blind.
-        selfPausing = true;
-        player.pause();
-      }
+      if (player.playing) pauseRequestedAt = 0;
+      schedule();
     });
+    const offState = player.subscribe(schedule);
+    // Wake-up for changes nobody announces (remote outputs, buffering).
+    const poll = window.setInterval(schedule, 500);
 
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("blur", onBlur);
     // Capture: lane keys must not reach the app-wide shortcut handler.
     window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("keyup", onKeyUp, true);
+    const root = rootEl;
+    root?.addEventListener("touchstart", onTouch, { passive: false });
+    root?.addEventListener("touchmove", onTouch, { passive: false });
+    root?.addEventListener("touchend", onTouch, { passive: false });
+    schedule();
 
     return () => {
+      mounted = false;
       ro.disconnect();
       offPlayState();
+      offState();
+      window.clearInterval(poll);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);
+      root?.removeEventListener("touchstart", onTouch);
+      root?.removeEventListener("touchmove", onTouch);
+      root?.removeEventListener("touchend", onTouch);
+      for (const type of ["play", "pause", "seeking", "seeked", "ratechange"] as const) {
+        watchedAudio?.removeEventListener(type, onAudioEvent);
+      }
+      watchedAudio = null;
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
-      if (run && !run.finished) finishRun("interrupted");
+      if (run && !run.finished) finishRun(reachedEnd(run) ? "end" : "interrupted");
       run = null;
       bridge = null;
-      background.dispose();
+      layer.dispose();
+      sprites.dispose();
       backdropViz.dispose();
       analyserLease.dispose();
     };
   });
 
   const hitWindowMs = Math.round(HIT_WINDOWS.ok * 1000);
-  void finishedReason;
 </script>
 
 <div
+  bind:this={rootEl}
   {...{ [SHORTCUTS_OFF_ATTR]: "" }}
   class="plectr-stage"
   class:is-compact={compact}
@@ -953,47 +994,64 @@
   data-phase={phase}
   role="application"
   aria-label={t("plectr.stageAria", { keys: keyLabels.join(" "), ms: hitWindowMs })}
+  oncontextmenu={(e) => e.preventDefault()}
 >
-  <div class="plectr-strip">
-    <div
-      class="plectr-strip__progress"
-      role="progressbar"
-      aria-label={t("plectr.timeAria")}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={Math.round(hud.progress * 100)}
-    >
-      <span style="transform: scaleX({hud.progress})"></span>
-    </div>
-    <button
-      type="button"
-      class="plectr-strip__pause"
-      aria-label={phase === "paused" ? t("plectr.resume") : t("plectr.pause")}
-      title={phase === "paused" ? t("plectr.resume") : t("plectr.pause")}
-      disabled={phase === "done"}
-      onclick={() => (phase === "paused" ? resume() : pause("user"))}
-    >
-      {#if phase === "paused"}
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor" /></svg>
-      {:else}
-        <svg viewBox="0 0 24 24" aria-hidden="true"
-          ><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor" /></svg
-        >
-      {/if}
-    </button>
-    {#if compact}
-      <div class="plectr-strip__title" aria-hidden="true"><span>{title}</span></div>
-    {/if}
-    <div class="plectr-strip__score" aria-label={t("plectr.hudScore")}>{fmtNumber(hud.score)}</div>
-    <div class="plectr-strip__combo" aria-label={t("plectr.hudCombo")}>
-      <strong>×{hud.combo}</strong>
-      <span class="plectr-pips" aria-label={t("plectr.multiplier", { n: multiplier })}>
-        {#each [1, 2, 3, 4] as pip (pip)}
-          <i class:is-on={pip <= multiplier}></i>
-        {/each}
+  <header class="plectr-head">
+    <div class="plectr-head__top">
+      <span class="plectr-head__brand" title={title}>
+        <UiIcon name="plectrum" />
+        <span>{title || t("plectr.title")}</span>
       </span>
+      <p class="plectr-head__record" aria-live="polite">
+        {#if record}
+          <span class="plectr-head__record-label">
+            {#if record.last}{t("plectr.lastRun")}{:else}<UiIcon name="trophy" />{/if}
+          </span>
+          <strong>{fmtNumber(record.r.score)} · {record.r.grade}</strong>
+        {:else}
+          <span class="plectr-head__record-label"><UiIcon name="trophy" /></span>
+          <span class="plectr-head__record-empty">—</span>
+        {/if}
+      </p>
+      <div class="plectr-head__actions">
+        <button
+          type="button"
+          class="plectr-head__btn"
+          aria-label={songPlaying ? t("plectr.pause") : t("plectr.resume")}
+          title={songPlaying ? t("plectr.pause") : t("plectr.resume")}
+          onclick={togglePause}
+        >
+          <UiIcon name={songPlaying ? "pause" : "play"} />
+        </button>
+        {#if onsettings}
+          <button type="button" class="plectr-head__btn" aria-label={t("plectr.settings.open")} title={t("plectr.settings.open")} onclick={onsettings}>
+            <UiIcon name="settings" />
+          </button>
+        {/if}
+        {#if onexit}
+          <button type="button" class="plectr-head__btn" aria-label={t("plectr.exit")} title={t("plectr.exit")} onclick={onexit}>
+            <UiIcon name="close" />
+          </button>
+        {/if}
+      </div>
     </div>
-  </div>
+    <div class="plectr-head__diffs" role="group" aria-label={t("plectr.difficulty")}>
+      {#each DIFFICULTIES as d, i (d.id)}
+        <button
+          type="button"
+          class="plectr-head__diff plectr-head__diff--{d.id}"
+          class:is-active={difficulty === d.id}
+          aria-pressed={difficulty === d.id}
+          disabled={!playable.includes(d.id)}
+          title={`${t(`plectr.diff.${d.id}`)} · ${t("plectr.level", { n: d.level })} (${i + 1})`}
+          onclick={() => switchDifficulty(d.id)}
+        >
+          {t(`plectr.diff.${d.id}`)}
+        </button>
+      {/each}
+    </div>
+    <div class="plectr-head__progress" role="presentation"><span bind:this={progressEl}></span></div>
+  </header>
 
   <div
     bind:this={lanesEl}
@@ -1003,38 +1061,51 @@
     onpointerup={onPointerUp}
     onpointercancel={onPointerUp}
     onlostpointercapture={onPointerUp}
-    oncontextmenu={(e) => e.preventDefault()}
     role="presentation"
   >
     <canvas bind:this={canvasEl} class="plectr-stage__canvas" aria-hidden="true"></canvas>
 
-    {#if fb.labelKey && phase !== "paused"}
-      {#key `${hud.feedback}-${hud.pulse}`}
+    <div class="plectr-hud" aria-hidden="true">
+      <div class="plectr-hud__stat plectr-hud__stat--score">
+        <span>{t("plectr.hudScore")}</span>
+        <strong bind:this={scoreEl}>0</strong>
+      </div>
+      <div class="plectr-hud__stat plectr-hud__stat--combo">
+        <span>{t("plectr.hudCombo")}</span>
+        <strong bind:this={comboEl}>0x</strong>
+      </div>
+    </div>
+
+    {#if fb.labelKey && phase === "live"}
+      {#key judge.pulse}
         <div class="plectr-judge plectr-judge--{fb.tone}" aria-hidden="true">{t(fb.labelKey)}</div>
       {/key}
     {/if}
-    {#if hud.combo >= COMBO_LABEL_FROM && phase === "play"}
-      <div class="plectr-judge__combo" aria-hidden="true">{t("plectr.comboLabel", { n: hud.combo })}</div>
+    {#if judge.combo >= COMBO_LABEL_FROM && phase === "live"}
+      <div class="plectr-judge__combo" aria-hidden="true">{t("plectr.comboLabel", { n: judge.combo })}</div>
     {/if}
-    {#if hud.milestone > 0 && phase === "play"}
-      {#key hud.milestonePulse}
-        <div class="plectr-milestone" aria-hidden="true">{t("plectr.milestone", { n: hud.milestone })}</div>
+    {#if judge.milestone > 0 && phase === "live" && !reducedMotion}
+      {#key judge.milestonePulse}
+        <div class="plectr-milestone" aria-hidden="true">{t("plectr.milestone", { n: judge.milestone })}</div>
       {/key}
     {/if}
-    {#if countdown}
-      {#key countdown}
-        <div class="plectr-countdown" class:is-go={countdown === "go"} aria-live="assertive">
-          {countdown === "go" ? t("plectr.countdownGo") : countdown}
-        </div>
+    {#if diffFlash}
+      {#key diffFlash.n}
+        <div class="plectr-diffflash plectr-diffflash--{diffFlash.id}" aria-live="polite">{t(`plectr.diff.${diffFlash.id}`)}</div>
       {/key}
     {/if}
 
     <div class="plectr-pads" aria-hidden="true">
       {#each LANES as lane, i (lane.name)}
-        <div class="plectr-pad" data-lane={i} style="--lane-color: {lane.color}">
+        <div class="plectr-pad" data-lane={i} style="--lane-color: {lane.color}; --lane-shadow: {lane.shadow}">
+          <span class="plectr-pad__pip"></span>
           {#if keyLetters}<span class="plectr-pad__key">{keyLabels[i]}</span>{/if}
         </div>
       {/each}
     </div>
+
+    {#if overlay}
+      {@render overlay()}
+    {/if}
   </div>
 </div>

@@ -301,6 +301,19 @@ impl Db {
         account_id: &str,
         playlists: &[PlaylistBackup],
     ) -> Result<(u32, u32)> {
+        let (created, added, _) = self.merge_playlists_backup_opts(account_id, playlists, false)?;
+        Ok((created, added))
+    }
+
+    /// [`Db::merge_playlists_backup`] that also counts the parked entries
+    /// (file not indexed): returns (playlists created, tracks added, of which
+    /// parked). `dry_run` computes everything and rolls back.
+    pub fn merge_playlists_backup_opts(
+        &self,
+        account_id: &str,
+        playlists: &[PlaylistBackup],
+        dry_run: bool,
+    ) -> Result<(u32, u32, u32)> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         // (id, name key, legacy id)
@@ -320,6 +333,7 @@ impl Db {
         let stamps = import_stamps(playlists.len());
         let mut created_n = 0u32;
         let mut added_n = 0u32;
+        let mut parked_n = 0u32;
         let mut used: HashSet<String> = HashSet::new();
         for (pl, stamp) in playlists.iter().zip(&stamps) {
             let key = playlist_name_key(&pl.name);
@@ -371,13 +385,17 @@ impl Db {
                 if rel.is_empty() || !present.insert(rel.to_string()) {
                     continue;
                 }
-                append_playlist_rel(&tx, &playlist_id, rel, next_pos)?;
+                if !append_playlist_rel(&tx, &playlist_id, rel, next_pos)? {
+                    parked_n += 1;
+                }
                 next_pos += 1;
                 added_n += 1;
             }
         }
-        tx.commit()?;
-        Ok((created_n, added_n))
+        if !dry_run {
+            tx.commit()?;
+        }
+        Ok((created_n, added_n, parked_n))
     }
 
     pub fn delete_account_user_data(&self, account_id: &str) -> Result<()> {

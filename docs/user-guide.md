@@ -491,17 +491,23 @@ cover"**. The cover is written into the album folder.
 
 ![Plectr](images/screenshots/plectr-desktop.png)
 
-Plectr turns any track in your library into a four-lane rhythm game. The chart is generated
-from the song's audio when you start it.
+Plectr turns the song you are listening to into a four-lane rhythm game. The chart is
+generated from the song's audio; the music keeps playing while it is prepared.
 
-**Choosing a song.** Pick from **"Song of the day"**, **"Recently played"**, **"Your
-records"**, **"Up next"**, search, or **"Random"**. Choose the **"Difficulty"**: "Easy",
-"Normal" or "Hard".
+**Starting.** Open Plectr while a song plays and the game starts at once on that song, from
+where it is: the music is never paused, rewound or restarted. When the next song starts, a
+new chart follows it. If the song is paused, **"Play"** resumes it and the notes start. With
+nothing in the player, or with **"Change song"**, pick from **"Song of the day"**,
+**"Recently played"**, **"Your records"**, **"Up next"**, search, or **"Random"**.
+
+**Difficulty.** "Easy", "Normal" or "Hard", switched at any time with the buttons on the
+stage or the `1` `2` `3` keys: the new chart starts from the current point of the song.
 
 **Playing.** Notes fall down four lanes; hit them when they reach the line, and keep holding
 on long notes. The default keys are `D` `F` `J` `K` (presets "S D K L" and "Arrows", or remap
-any key); on touch screens, tap the pads. `Space` or `Esc` pauses. The game pauses itself if
-the app goes to the background or the music stops.
+any key); on touch screens, tap the lanes (several fingers at once work). `Space`, `Esc`, the
+pause button or Back pause the song; resuming is immediate. Pausing from the player bar or
+media keys freezes the notes too.
 
 | Judgement | Window | Points |
 |---|---|---|
@@ -593,8 +599,9 @@ from the hub computer, or anywhere once remote administration is on. See
   accent 2), and a background color or image (JPEG, PNG, WebP or animated GIF; fit cover,
   contain, fill, repeat or center). **"Extract colors from image"** builds a matching palette
   from the picture. **"Accent wash on background"** adds a soft gradient.
-- **Glass style**: semi-transparent cards, with an adjustable **"Glass opacity"**. On Linux
-  desktops the blur is turned off to keep the interface fast.
+- **Glass style**: semi-transparent cards, with an adjustable **"Glass opacity"**. The top
+  bar, the player bar, the sidebar and the first card of each page are frosted (blurred);
+  the cards further down are only see-through, which keeps scrolling fast.
 - **"Export theme"** saves your look as a `.zip`; **"Upload theme"** applies a theme file
   from anyone, without touching other data.
 - **"Player"**: **"Visualizer"** and **"Crossfade"** (off, 3 or 5 seconds).

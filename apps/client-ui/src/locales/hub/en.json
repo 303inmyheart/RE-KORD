@@ -13,6 +13,7 @@
   "hub.activity.system.remoteAdminOn": "Machine operations allowed from other devices",
   "hub.activity.system.remoteAdminOff": "Machine operations limited to the hub's computer",
   "hub.activity.system.ytdlpUpdated": "yt-dlp updated: {{from}} → {{to}}",
+  "hub.activity.system.legacyImport": "Import from legacy RE-KORD: {{accounts}} accounts, {{favorites}} favorites, {{playlists}} playlists, {{moods}} moods, {{blocked}} blocked",
   "hub.activity.favorites.added": "Favorite added (track {{trackId}})",
   "hub.activity.favorites.removed": "Favorite removed (track {{trackId}})",
   "hub.activity.playlist.created": "Playlist created: {{name}}",

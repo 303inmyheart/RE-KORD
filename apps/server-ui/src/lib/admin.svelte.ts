@@ -16,7 +16,8 @@ import {
   type WatcherStatus,
   errorText,
   isApiError,
-  type LegacySyncReport,
+  type LegacyImportReport,
+  type LegacyImportStatus,
   type ScanReport,
 } from "../api";
 import type { StatItem } from "@rekord/ui";
@@ -106,6 +107,10 @@ class AdminSession {
   remote = $state<RemoteAccessState | null>(null);
   publicIp = $state<string | null>(null);
   access = $state<MachineAccess | null>(null);
+  /** Legacy RE-KORD data next to the music, and the last import. */
+  legacy = $state<LegacyImportStatus | null>(null);
+  /** Report of the last import or preview started from this panel. */
+  legacyReport = $state<LegacyImportReport | null>(null);
 
   /** Report of the last scan started from this panel (the hub keeps no copy). */
   lastScan = $state<ScanReport | null>(null);
@@ -263,6 +268,7 @@ class AdminSession {
           this.remote = await api.remoteAccess();
           break;
         case "backup":
+          this.legacy = this.canManage ? await api.legacyImportStatus() : null;
           break;
       }
     } catch (e) {
@@ -456,16 +462,26 @@ class AdminSession {
     });
   }
 
+  /** Library › Maintenance shortcut: same as the backup section's button. */
   syncLegacyMeta() {
+    return this.importLegacy();
+  }
+
+  /** Merge legacy RE-KORD data (`.kord`) into the hub, or preview it. */
+  importLegacy(opts: { dryRun?: boolean; force?: boolean } = {}) {
     return this.run(async () => {
-      const r: LegacySyncReport = await api.syncLegacyMeta();
-      await this.refresh();
-      return t("msg.legacySynced", {
-        albums: formatNumber(r.albumMetaMerged ?? 0),
-        tracks: formatNumber(r.trackMetaMerged ?? 0),
-        favorites: formatNumber(r.favoritesLinked ?? 0),
-        playlists: formatNumber(r.playlistsImported ?? 0),
-      });
+      const r = await api.legacyImport(opts);
+      this.legacyReport = r;
+      if (!r.dryRun) await this.refresh();
+      if (this.canManage) this.legacy = await api.legacyImportStatus();
+      const params = {
+        accounts: formatNumber(r.accounts.filter((a) => a.status === "imported").length),
+        favorites: formatNumber(r.totals.favorites),
+        playlists: formatNumber(r.totals.playlists),
+        moods: formatNumber(r.totals.moods),
+        blocked: formatNumber(r.totals.excludedTracks + r.totals.excludedAlbums),
+      };
+      return t(r.dryRun ? "msg.legacyPreview" : "msg.legacyImported", params);
     });
   }
 

@@ -1,31 +1,24 @@
 /**
- * Note highway drawing: near-black stage (whatever the app theme), fixed lane
- * palette, gem notes, solid capped hold tails, bright hit line with
- * receptors, hit particles, combo milestone band, top fade and the accuracy
- * meter. Static parts (background, art, lane tints) are baked once into an
- * offscreen canvas and blitted each frame.
+ * Note highway drawing, ported from the legacy Plectr dock (`GameCanvas.tsx`,
+ * "lite" path): alternating lane tints with lane-coloured edges, flat
+ * receptors on the hit line that light up when pressed / hit / missed,
+ * rounded lane-coloured notes, dashed hold trails that fill while held.
+ *
+ * Built for WebKitGTK (Tauri on Linux, every canvas op on the CPU): the
+ * static part (stage colour, cover, visualizer, lane tints, edges, hit band)
+ * is composed into one device-pixel canvas and blitted 1:1 each frame; notes
+ * are pre-rendered sprites (glow baked once, never `shadowBlur` per frame);
+ * no gradients, filters or allocations in the frame path.
  */
-import {
-  HIT_LINE_BOTTOM_MAX_PX,
-  HIT_LINE_BOTTOM_MIN_PX,
-  HIT_WINDOWS,
-  JUDGE_COLORS,
-  LANES,
-  STAGE_BG,
-} from "./config";
-import {
-  activeFlash,
-  lowerBoundNoteIndex,
-  noteEndLane,
-  upperBoundNoteIndex,
-  type RunState,
-} from "./engine";
+import { HIT_LINE_BOTTOM_MAX_PX, HIT_LINE_BOTTOM_MIN_PX, HIT_LINE_Y, HOLD_WIDTH, JUDGE_COLORS, LANES, STAGE_BG } from "./config";
+import { activeFlash, lowerBoundNoteIndex, noteEndLane, upperBoundNoteIndex, type RunState } from "./engine";
 import { clamp } from "./math";
 import type { ChartNote } from "./types";
 
 export type DrawContext = {
   cssWidth: number;
   cssHeight: number;
+  dpr: number;
   hitY: number;
   laneWidth: number;
   /** Note speed, px per second (from the lead time). */
@@ -33,20 +26,28 @@ export type DrawContext = {
   songTime: number;
   state: RunState;
   now: number;
-  /** Light stage: no glow, no particles. */
+  /** Light stage: flat notes, no baked glow. */
   light: boolean;
-  /** prefers-reduced-motion: no particles, no band pulse. */
-  reducedMotion: boolean;
-  /** Accuracy meter on the right edge (tablet / desktop). */
-  showMeter: boolean;
-  /** A visualizer was painted underneath: skip the baked background. */
+  /** A visualizer is composed under the lanes (lanes and receptors dimmer). */
   vizUnderlay: boolean;
 };
 
-/** Hit line: a little above the bottom edge of the highway (pads sit below). */
+export type StageArt = {
+  /** Small (already blurred) cover image, drawn stretched and dimmed. */
+  image: CanvasImageSource | null;
+  /** Album dominant colour "#rrggbb" for a faint glow at the bottom. */
+  tint: string | null;
+};
+
+/** Hit line: ~83.5% of the canvas, 28-52 px from the bottom edge (legacy dock). */
 export function hitLineY(cssHeight: number): number {
-  const gap = clamp(cssHeight * 0.06, HIT_LINE_BOTTOM_MIN_PX - 6, HIT_LINE_BOTTOM_MAX_PX - 12);
-  return Math.max(1, cssHeight - gap);
+  const y = cssHeight * HIT_LINE_Y;
+  return Math.min(cssHeight - HIT_LINE_BOTTOM_MIN_PX, Math.max(cssHeight - HIT_LINE_BOTTOM_MAX_PX, y));
+}
+
+/** Note size for a lane width (legacy: 62% of the lane, 14 px tall). */
+export function noteSize(laneWidth: number): { w: number; h: number } {
+  return { w: laneWidth * 0.62, h: 14 };
 }
 
 export function roundedRect(
@@ -71,172 +72,276 @@ export function roundedRect(
   ctx.closePath();
 }
 
-function laneCenterX(laneIndex: number, laneWidth: number): number {
-  return laneIndex * laneWidth + laneWidth / 2;
-}
-
 function rgba(hex: string, alpha: number): string {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
-/* ── Baked background ─────────────────────────────────────────────────── */
+function makeCanvas(w: number, h: number): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, w);
+  c.height = Math.max(1, h);
+  return c;
+}
 
-export type StageArt = {
-  /** Small (already blurred) cover image, drawn stretched and dimmed. */
-  image: CanvasImageSource | null;
-  /** Album dominant colour "#rrggbb" for a faint glow at the bottom. */
-  tint: string | null;
-};
+function releaseCanvas(c: HTMLCanvasElement | null): void {
+  if (!c) return;
+  c.width = 0;
+  c.height = 0;
+}
+
+/* ── Static layer ─────────────────────────────────────────────────────── */
 
 /**
- * Background canvas: stage colour, optional blurred cover, lane tints
- * (2% / 3.5% white alternating) and lane separators. Rebuilt on resize or
- * when the art changes, blitted once per frame.
+ * Everything that does not move with the notes, in device pixels: stage
+ * colour (+ dimmed cover, album glow), an optional visualizer frame under the
+ * lanes, lane tints, lane edges and the hit band. Rebuilt on resize / look
+ * change; the visualizer part is recomposed only when a new viz frame comes
+ * (~25 fps), so a game frame starts with a single unscaled `drawImage`.
  */
-export class StageBackground {
-  private canvas: HTMLCanvasElement | null = null;
+export class StageLayer {
+  private base: HTMLCanvasElement | null = null;
+  private lanes: HTMLCanvasElement | null = null;
+  private full: HTMLCanvasElement | null = null;
   private key = "";
+  private vizStamp = -1;
+  private width = 0;
+  private height = 0;
+  private dpr = 1;
 
-  get(width: number, height: number, dpr: number, art: StageArt, withBase: boolean): HTMLCanvasElement | null {
-    if (typeof document === "undefined") return null;
-    const key = `${width}x${height}@${dpr}:${art.image ? 1 : 0}:${art.tint ?? ""}:${withBase ? 1 : 0}`;
-    if (this.canvas && key === this.key) return this.canvas;
-    const c = this.canvas ?? document.createElement("canvas");
-    c.width = Math.max(1, Math.round(width * dpr));
-    c.height = Math.max(1, Math.round(height * dpr));
-    const ctx = c.getContext("2d");
-    if (!ctx) return null;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    if (withBase) {
-      ctx.fillStyle = STAGE_BG;
-      ctx.fillRect(0, 0, width, height);
-      if (art.image) {
-        ctx.globalAlpha = 0.22;
-        // Cover the stage (portrait): crop the square art to the height.
-        const side = Math.max(width, height);
-        ctx.drawImage(art.image, (width - side) / 2, (height - side) / 2, side, side);
-        ctx.globalAlpha = 1;
-        const veil = ctx.createLinearGradient(0, 0, 0, height);
-        veil.addColorStop(0, rgba(STAGE_BG, 0.55));
-        veil.addColorStop(0.6, rgba(STAGE_BG, 0.7));
-        veil.addColorStop(1, rgba(STAGE_BG, 0.9));
-        ctx.fillStyle = veil;
-        ctx.fillRect(0, 0, width, height);
-      }
-      if (art.tint && /^#[0-9a-f]{6}$/i.test(art.tint)) {
-        const glow = ctx.createLinearGradient(0, height, 0, height * 0.55);
-        glow.addColorStop(0, rgba(art.tint, 0.16));
-        glow.addColorStop(1, rgba(art.tint, 0));
-        ctx.fillStyle = glow;
-        ctx.fillRect(0, height * 0.55, width, height * 0.45);
-      }
+  /** Re-bakes when the size, the art or the viz mode changes. */
+  configure(width: number, height: number, dpr: number, hitY: number, art: StageArt, viz: boolean): void {
+    const key = `${width}x${height}@${dpr}:${hitY}:${art.image ? 1 : 0}:${art.tint ?? ""}:${viz ? 1 : 0}`;
+    if (key === this.key && this.full) return;
+    this.key = key;
+    this.width = width;
+    this.height = height;
+    this.dpr = dpr;
+    this.vizStamp = -1;
+    const bw = Math.max(1, Math.round(width * dpr));
+    const bh = Math.max(1, Math.round(height * dpr));
+    for (const c of [this.base, this.lanes, this.full]) releaseCanvas(c);
+    this.base = makeCanvas(bw, bh);
+    this.lanes = makeCanvas(bw, bh);
+    this.full = makeCanvas(bw, bh);
+    const bctx = this.base?.getContext("2d");
+    const lctx = this.lanes?.getContext("2d");
+    if (!bctx || !lctx) return;
+
+    // Base: stage colour, dimmed cover, album glow at the bottom.
+    bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    bctx.fillStyle = STAGE_BG;
+    bctx.fillRect(0, 0, width, height);
+    if (art.image && !viz) {
+      bctx.globalAlpha = 0.22;
+      const side = Math.max(width, height);
+      bctx.drawImage(art.image, (width - side) / 2, (height - side) / 2, side, side);
+      bctx.globalAlpha = 1;
+      const veil = bctx.createLinearGradient(0, 0, 0, height);
+      veil.addColorStop(0, rgba(STAGE_BG, 0.55));
+      veil.addColorStop(0.6, rgba(STAGE_BG, 0.7));
+      veil.addColorStop(1, rgba(STAGE_BG, 0.9));
+      bctx.fillStyle = veil;
+      bctx.fillRect(0, 0, width, height);
     }
+    if (art.tint && /^#[0-9a-f]{6}$/i.test(art.tint) && !viz) {
+      const glow = bctx.createLinearGradient(0, height, 0, height * 0.55);
+      glow.addColorStop(0, rgba(art.tint, 0.14));
+      glow.addColorStop(1, rgba(art.tint, 0));
+      bctx.fillStyle = glow;
+      bctx.fillRect(0, height * 0.55, width, height * 0.45);
+    }
+
+    // Lanes (legacy lite): 2% / 3.5% white alternating, lane-coloured 2 px edges.
+    lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const laneWidth = width / LANES.length;
     for (let lane = 0; lane < LANES.length; lane += 1) {
-      ctx.fillStyle = `rgba(255, 255, 255, ${lane % 2 === 0 ? 0.02 : 0.035})`;
-      ctx.fillRect(lane * laneWidth, 0, laneWidth, height);
-      if (lane > 0) {
-        ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
-        ctx.fillRect(Math.round(lane * laneWidth) - 0.5, 0, 1, height);
-      }
+      const x = lane * laneWidth;
+      lctx.globalAlpha = viz ? 0.88 : 1;
+      lctx.fillStyle = lane % 2 === 0 ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.035)";
+      lctx.fillRect(x, 0, laneWidth, height);
+      lctx.fillStyle = LANES[lane]!.color;
+      lctx.globalAlpha = viz ? 0.05 : 0.14;
+      lctx.fillRect(x + 1, 0, 2, height);
+      lctx.fillRect(x + laneWidth - 3, 0, 2, height);
     }
-    this.canvas = c;
-    this.key = key;
-    return c;
+    lctx.globalAlpha = 1;
+    // Hit band under the receptors.
+    lctx.fillStyle = viz ? "rgba(255,255,255,0.035)" : "rgba(255,255,255,0.06)";
+    lctx.fillRect(0, hitY - 2, width, 4);
+    this.compose(null, 0);
+  }
+
+  /** Composes base + viz frame + lanes into the blit canvas. */
+  compose(viz: HTMLCanvasElement | null, stamp: number): void {
+    const fctx = this.full?.getContext("2d");
+    if (!fctx || !this.base || !this.lanes) return;
+    if (stamp === this.vizStamp && stamp !== 0) return;
+    this.vizStamp = stamp;
+    fctx.setTransform(1, 0, 0, 1, 0, 0);
+    fctx.globalAlpha = 1;
+    fctx.drawImage(this.base, 0, 0);
+    if (viz && viz.width > 0) fctx.drawImage(viz, 0, 0, this.full!.width, this.full!.height);
+    fctx.drawImage(this.lanes, 0, 0);
+  }
+
+  /** Blits the static layer (device pixels, identity transform). */
+  blit(ctx: CanvasRenderingContext2D): boolean {
+    if (!this.full) return false;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(this.full, 0, 0);
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    return true;
+  }
+
+  get size(): { width: number; height: number } {
+    return { width: this.width, height: this.height };
   }
 
   dispose(): void {
-    if (this.canvas) {
-      this.canvas.width = 0;
-      this.canvas.height = 0;
-    }
-    this.canvas = null;
+    for (const c of [this.base, this.lanes, this.full]) releaseCanvas(c);
+    this.base = this.lanes = this.full = null;
     this.key = "";
+  }
+}
+
+/* ── Note sprites ─────────────────────────────────────────────────────── */
+
+/**
+ * One pre-rendered note per lane at device resolution. Full stage: the
+ * legacy gem (white top → lane colour → darker base) with its glow baked in;
+ * light stage: the legacy dock's flat rounded note.
+ */
+export class NoteSprites {
+  private sprites: (HTMLCanvasElement | null)[] = [];
+  private key = "";
+  /** Sprite padding (css px) around the note body (room for the glow). */
+  pad = 0;
+  w = 0;
+  h = 0;
+  dpr = 1;
+
+  configure(laneWidth: number, dpr: number, light: boolean): void {
+    const { w, h } = noteSize(laneWidth);
+    const key = `${w.toFixed(2)}:${dpr}:${light ? 1 : 0}`;
+    if (key === this.key) return;
+    this.key = key;
+    this.dispose(false);
+    this.w = w;
+    this.h = h;
+    this.dpr = dpr;
+    this.pad = light ? 1 : 8;
+    const cw = Math.ceil((w + this.pad * 2) * dpr);
+    const ch = Math.ceil((h + this.pad * 2) * dpr);
+    for (const lane of LANES) {
+      const c = makeCanvas(cw, ch);
+      const ctx = c?.getContext("2d");
+      if (!c || !ctx) {
+        this.sprites.push(null);
+        continue;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const x = this.pad;
+      const y = this.pad;
+      if (light) {
+        ctx.fillStyle = lane.color;
+        roundedRect(ctx, x, y, w, h, 2);
+        ctx.fill();
+      } else {
+        const g = ctx.createLinearGradient(0, y, 0, y + h);
+        g.addColorStop(0, "#ffffff");
+        g.addColorStop(0.18, lane.color);
+        g.addColorStop(0.55, lane.color);
+        g.addColorStop(1, rgba(lane.color, 0.78));
+        ctx.shadowColor = lane.shadow;
+        ctx.shadowBlur = 10 * dpr;
+        ctx.fillStyle = g;
+        roundedRect(ctx, x, y, w, h, 3);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "rgba(0,0,0,0.18)";
+        ctx.fillRect(x + 2, y + h - 3, w - 4, 2);
+      }
+      this.sprites.push(c);
+    }
+  }
+
+  get(lane: number): HTMLCanvasElement | null {
+    return this.sprites[lane] ?? null;
+  }
+
+  dispose(resetKey = true): void {
+    for (const c of this.sprites) releaseCanvas(c);
+    this.sprites = [];
+    if (resetKey) this.key = "";
   }
 }
 
 /* ── Frame ────────────────────────────────────────────────────────────── */
 
-export function drawStage(ctx: CanvasRenderingContext2D, d: DrawContext): void {
-  const { cssWidth, cssHeight, laneWidth, state, now } = d;
-  // Pressed lanes: a lane-coloured column rising from the hit line.
-  for (let lane = 0; lane < LANES.length; lane += 1) {
-    const flash = activeFlash(state, lane, now);
-    const pressed = state.pressedLanes[lane];
-    if (!pressed && flash !== "hit") continue;
-    const x = lane * laneWidth;
-    const g = ctx.createLinearGradient(0, d.hitY, 0, d.hitY - cssHeight * 0.55);
-    g.addColorStop(0, rgba(LANES[lane]!.color, pressed ? 0.22 : 0.12));
-    g.addColorStop(1, rgba(LANES[lane]!.color, 0));
-    ctx.fillStyle = g;
-    ctx.fillRect(x, 0, laneWidth, d.hitY);
-  }
-  drawMilestoneBand(ctx, d);
-  drawHitLine(ctx, d);
-  void cssWidth;
+/** Lanes carrying a hold right now (reused, no allocation per frame). */
+const holdLanes: boolean[] = LANES.map(() => false);
+const DASH: number[] = [5, 4];
+const NO_DASH: number[] = [];
+
+function laneCenterX(laneIndex: number, laneWidth: number): number {
+  return laneIndex * laneWidth + laneWidth / 2;
 }
 
-function drawMilestoneBand(ctx: CanvasRenderingContext2D, d: DrawContext): void {
-  const { state, now, cssWidth, cssHeight } = d;
-  if (!state.milestoneAt) return;
-  const age = now - state.milestoneAt;
-  if (age < 0 || age > 700) return;
-  const t = age / 700;
-  const alpha = (1 - t) * (d.reducedMotion ? 0.12 : 0.22);
-  const bandH = cssHeight * 0.16;
-  const y = d.hitY - cssHeight * 0.42 - (d.reducedMotion ? 0 : t * cssHeight * 0.08);
-  const g = ctx.createLinearGradient(0, y, 0, y + bandH);
-  g.addColorStop(0, "rgba(70, 231, 255, 0)");
-  g.addColorStop(0.5, `rgba(70, 231, 255, ${alpha})`);
-  g.addColorStop(1, "rgba(70, 231, 255, 0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, y, cssWidth, bandH);
-}
-
-function drawHitLine(ctx: CanvasRenderingContext2D, d: DrawContext): void {
-  const { cssWidth, hitY, laneWidth, state, now, light } = d;
-  const holdLanes = new Set<number>();
+function markHoldLanes(state: RunState): void {
+  for (let i = 0; i < holdLanes.length; i += 1) holdLanes[i] = false;
   for (const note of state.activeHolds) {
     if (!note.holding || note.completed) continue;
-    holdLanes.add(note.lane);
-    holdLanes.add(noteEndLane(note));
+    holdLanes[note.lane] = true;
+    holdLanes[noteEndLane(note)] = true;
   }
-  ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
-  ctx.fillRect(0, hitY - 1, cssWidth, 2);
-  if (!light) {
-    ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
-    ctx.fillRect(0, hitY - 5, cssWidth, 10);
-  }
-  const rw = laneWidth * 0.74;
-  const rh = 18;
+}
+
+/** Pressed / flashing lanes and the receptors (legacy lite `drawStage` + `drawReceptors`). */
+export function drawLanes(ctx: CanvasRenderingContext2D, d: DrawContext): void {
+  const { cssHeight, hitY, laneWidth, state, now, vizUnderlay } = d;
+  markHoldLanes(state);
   for (let lane = 0; lane < LANES.length; lane += 1) {
-    const cx = laneCenterX(lane, laneWidth);
-    const pressed = state.pressedLanes[lane] || holdLanes.has(lane);
+    const x = lane * laneWidth;
+    const color = LANES[lane]!.color;
+    const pressed = state.pressedLanes[lane];
     const flash = activeFlash(state, lane, now);
-    const color = flash === "miss" ? JUDGE_COLORS.miss : LANES[lane]!.color;
-    roundedRect(ctx, cx - rw / 2, hitY - rh / 2, rw, rh, 9);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = rgba(color, pressed || flash ? 1 : 0.35);
-    ctx.stroke();
-    if (pressed || flash === "hit") {
-      ctx.fillStyle = rgba(color, pressed ? 0.35 : 0.2);
-      ctx.fill();
+    if (pressed) {
+      ctx.fillStyle = color;
+      ctx.globalAlpha = vizUnderlay ? 0.14 : 0.2;
+      ctx.fillRect(x, 0, laneWidth, cssHeight);
     }
+    if (pressed || flash) {
+      // Brighter lane edges over the baked ones.
+      ctx.fillStyle = color;
+      ctx.globalAlpha = pressed
+        ? vizUnderlay ? 0.2 : 0.42
+        : flash === "hit"
+          ? vizUnderlay ? 0.12 : 0.24
+          : vizUnderlay ? 0.1 : 0.18;
+      ctx.fillRect(x + 1, 0, 2, cssHeight);
+      ctx.fillRect(x + laneWidth - 3, 0, 2, cssHeight);
+    }
+    // Receptor: a flat bar across 84% of the lane.
+    const holding = holdLanes[lane];
+    ctx.fillStyle =
+      flash === "miss" ? JUDGE_COLORS.miss : flash === "hit" || holding || pressed ? color : "rgba(255,255,255,0.22)";
+    ctx.globalAlpha = vizUnderlay && !pressed && !holding && !flash ? 0.42 : 0.88;
+    ctx.fillRect(x + laneWidth * 0.08, hitY - 11, laneWidth * 0.84, 22);
   }
+  ctx.globalAlpha = 1;
 }
 
 function visibleTimeRange(d: DrawContext): { min: number; max: number } {
-  const margin = 40;
   return {
-    min: d.songTime - (d.cssHeight - d.hitY + margin) / d.speed,
-    max: d.songTime + (d.hitY + margin) / d.speed,
+    min: d.songTime - (d.cssHeight - d.hitY + 56) / d.speed,
+    max: d.songTime + (d.hitY + 56) / d.speed,
   };
 }
 
-export function drawNotes(ctx: CanvasRenderingContext2D, d: DrawContext): void {
-  const { cssHeight, hitY, laneWidth, speed, songTime, state, light } = d;
+export function drawNotes(ctx: CanvasRenderingContext2D, d: DrawContext, sprites: NoteSprites): void {
+  const { cssHeight, hitY, laneWidth, speed, songTime, state, dpr } = d;
   const { min, max } = visibleTimeRange(d);
   // Holds start well before their tail: widen the scan to the longest hold.
   let start = lowerBoundNoteIndex(state.notes, min - 3);
@@ -246,160 +351,102 @@ export function drawNotes(ctx: CanvasRenderingContext2D, d: DrawContext): void {
     start = Math.min(start, holdNote.id);
     end = Math.max(end, holdNote.id + 1);
   }
-  const gemW = Math.min(laneWidth * 0.7, 96);
-  const gemH = clamp(laneWidth * 0.16, 12, 18);
-
+  const noteW = sprites.w;
+  const noteH = sprites.h;
+  const yMin = -noteH - 40;
+  const yMax = cssHeight + noteH + 40;
+  // Holds first (tails under the heads).
   for (let i = start; i < end; i += 1) {
     const note = state.notes[i];
-    if (!note || note.completed || note.missed) continue;
+    if (!note || note.duration <= 0 || note.completed || note.missed) continue;
     const y = hitY - (note.time - songTime) * speed;
-    const holding = note.duration > 0 && note.holding;
-    if (note.duration > 0) {
-      const endY = hitY - (note.time + note.duration - songTime) * speed;
-      if (Math.min(y, endY) <= cssHeight + gemH && Math.max(y, endY) >= -gemH) {
-        drawHoldTail(ctx, d, note, holding ? hitY : y, endY);
-      }
-    }
-    if (holding) continue;
-    if (y < -gemH || y > cssHeight + gemH) continue;
-    drawGem(ctx, laneCenterX(note.lane, laneWidth), y, gemW, gemH, LANES[note.lane]!.color, light);
+    const endY = hitY - (note.time + note.duration - songTime) * speed;
+    if (!note.holding && (Math.min(y, endY) > yMax || Math.max(y, endY) < yMin)) continue;
+    drawHoldTrail(ctx, d, note, y, endY, noteH);
   }
+  // Heads: sprite blits at device pixels.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const pad = sprites.pad;
+  for (let i = start; i < end; i += 1) {
+    const note = state.notes[i];
+    if (!note || note.completed || note.missed || (note.duration > 0 && note.holding)) continue;
+    const y = hitY - (note.time - songTime) * speed;
+    if (y < yMin || y > yMax) continue;
+    const sprite = sprites.get(note.lane);
+    if (!sprite) continue;
+    const x = laneCenterX(note.lane, laneWidth) - noteW / 2 - pad;
+    ctx.drawImage(sprite, Math.round(x * dpr), Math.round((y - noteH / 2 - pad) * dpr));
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-function drawGem(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  w: number,
-  h: number,
-  color: string,
-  light: boolean,
-): void {
-  const x = cx - w / 2;
-  const y = cy - h / 2;
-  if (!light) {
-    // Soft glow: a wider translucent body (no shadowBlur — too slow per note).
-    ctx.fillStyle = rgba(color, 0.18);
-    roundedRect(ctx, x - 4, y - 4, w + 8, h + 8, h / 2 + 4);
-    ctx.fill();
-  }
-  ctx.fillStyle = color;
-  roundedRect(ctx, x, y, w, h, h / 2);
-  ctx.fill();
-  // Specular glint on the left (the centre column stays the pure lane colour).
-  ctx.fillStyle = "rgba(255, 255, 255, 0.42)";
-  roundedRect(ctx, x + h * 0.35, y + 2.5, w * 0.26, Math.max(2, h * 0.26), h * 0.13);
-  ctx.fill();
-}
-
-function drawHoldTail(
+/** Legacy hold trail: dashed outline while falling, filling up while held. */
+function drawHoldTrail(
   ctx: CanvasRenderingContext2D,
   d: DrawContext,
   note: ChartNote,
-  fromY: number,
-  endY: number,
+  headY: number,
+  holdEndY: number,
+  noteHeight: number,
 ): void {
-  const { laneWidth, hitY } = d;
+  const { hitY, laneWidth, songTime } = d;
   const lane = LANES[note.lane]!;
-  const cx = laneCenterX(note.lane, laneWidth);
+  const centerX = laneCenterX(note.lane, laneWidth);
   const endLane = noteEndLane(note);
-  const w = clamp(laneWidth * 0.34, 12, 34);
-  const alpha = note.holding ? 0.8 : 0.55;
+  const trailW = HOLD_WIDTH + (note.holding ? 4 : 0);
+
   if (endLane !== note.lane) {
     // Cross-lane slide (the generator does not emit them today; kept for parity).
-    const ex = laneCenterX(endLane, laneWidth);
-    const mid = fromY + (endY - fromY) * 0.54;
+    const endX = laneCenterX(endLane, laneWidth);
+    const anchorY = note.holding ? hitY : headY;
+    const switchY = anchorY + (holdEndY - anchorY) * 0.54;
+    ctx.globalAlpha = note.holding ? 0.72 : 1;
+    ctx.strokeStyle = note.holding ? lane.color : lane.shadow;
+    ctx.lineWidth = HOLD_WIDTH;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.lineWidth = w * 0.7;
-    ctx.strokeStyle = rgba(lane.color, alpha);
     ctx.beginPath();
-    ctx.moveTo(cx, fromY);
-    ctx.lineTo(cx, mid);
-    ctx.lineTo(ex, mid);
-    ctx.lineTo(ex, endY);
+    ctx.moveTo(centerX, anchorY);
+    ctx.lineTo(centerX, switchY);
+    ctx.lineTo(endX, switchY);
+    ctx.lineTo(endX, holdEndY);
     ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    ctx.beginPath();
+    ctx.arc(endX, holdEndY, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
     return;
   }
-  const top = Math.min(fromY, endY);
-  const bottom = Math.min(Math.max(fromY, endY), note.holding ? hitY : Infinity);
-  const height = Math.max(w, bottom - top);
-  // Solid tail with a rounded cap at the far end.
-  ctx.fillStyle = rgba(lane.color, alpha);
-  roundedRect(ctx, cx - w / 2, top, w, height, w / 2);
-  ctx.fill();
-  // Bright core line: holds read as "keep pressing".
-  ctx.fillStyle = lane.color;
-  ctx.fillRect(cx - 1.5, top + w / 2, 3, Math.max(0, height - w / 2));
-  // End cap ring.
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(cx, top + w / 2, w / 2 - 1, Math.PI, 0);
-  ctx.stroke();
-}
 
-/** Hit sparks: 6-8 per hit (10 on perfect), ~320 ms. */
-export function drawParticles(ctx: CanvasRenderingContext2D, d: DrawContext): void {
-  if (d.light || d.reducedMotion) return;
-  const { state, now, hitY, laneWidth } = d;
-  for (const burst of state.bursts) {
-    const age = now - burst.at;
-    if (age < 0 || age > 320) continue;
-    const t = age / 320;
-    const count = burst.perfect ? 10 : 7;
-    const cx = laneCenterX(burst.lane, laneWidth);
-    const color = burst.perfect ? JUDGE_COLORS.perfect : LANES[burst.lane]!.color;
-    ctx.fillStyle = rgba(color, 1 - t);
-    const reach = laneWidth * (0.35 + 0.45 * t);
-    for (let i = 0; i < count; i += 1) {
-      // Upper half-circle fan, deterministic angles (no per-frame allocation).
-      const a = Math.PI + (Math.PI * (i + 0.5)) / count;
-      const r = reach * (0.6 + 0.4 * ((i * 37) % 10) / 10);
-      const size = 3.5 * (1 - t) + 1;
-      ctx.fillRect(cx + Math.cos(a) * r - size / 2, hitY + Math.sin(a) * r - size / 2, size, size);
+  if (note.holding) {
+    const topY = Math.min(holdEndY, hitY - noteHeight * 0.5);
+    const height = Math.max(6, hitY - topY);
+    const progress = clamp((songTime - note.time) / Math.max(0.001, note.duration), 0, 1);
+    ctx.fillStyle = "rgba(255,255,255,0.12)";
+    roundedRect(ctx, centerX - trailW / 2, topY, trailW, height, 6);
+    ctx.fill();
+    const filledH = height * progress;
+    if (filledH > 2) {
+      ctx.fillStyle = lane.color;
+      ctx.globalAlpha = 0.58;
+      roundedRect(ctx, centerX - trailW / 2, hitY - filledH, trailW, filledH, 6);
+      ctx.fill();
+      ctx.globalAlpha = 1;
     }
+    ctx.fillStyle = lane.color;
+    ctx.fillRect(centerX - trailW / 2, hitY - noteHeight / 2, trailW, noteHeight);
+    return;
   }
-}
 
-/** Notes fade in under the top 8% of the highway. */
-export function drawTopFade(ctx: CanvasRenderingContext2D, d: DrawContext, fade: CanvasGradient | null): void {
-  if (!fade) return;
-  ctx.fillStyle = fade;
-  ctx.fillRect(0, 0, d.cssWidth, d.cssHeight * 0.08);
-}
-
-export function topFadeGradient(ctx: CanvasRenderingContext2D, cssHeight: number): CanvasGradient {
-  const g = ctx.createLinearGradient(0, 0, 0, cssHeight * 0.08);
-  g.addColorStop(0, rgba(STAGE_BG, 1));
-  g.addColorStop(1, rgba(STAGE_BG, 0));
-  return g;
-}
-
-/** Recent hit offsets on a 4 px bar at the right edge: centre = perfect. */
-export function drawAccuracyMeter(ctx: CanvasRenderingContext2D, d: DrawContext): void {
-  if (!d.showMeter) return;
-  const { cssWidth, cssHeight, state } = d;
-  const x = cssWidth - 7;
-  const top = cssHeight * 0.3;
-  const h = cssHeight * 0.4;
-  const mid = top + h / 2;
-  ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
-  ctx.fillRect(x, top, 4, h);
-  const okMs = HIT_WINDOWS.ok * 1000;
-  const perfH = (HIT_WINDOWS.perfect * 1000 * h) / (2 * okMs);
-  ctx.fillStyle = rgba(JUDGE_COLORS.perfect, 0.25);
-  ctx.fillRect(x, mid - perfH, 4, perfH * 2);
-  const n = state.offsets.length;
-  for (let i = 0; i < n; i += 1) {
-    const off = state.offsets[i]!;
-    const y = mid + clamp(off / okMs, -1, 1) * (h / 2);
-    const abs = Math.abs(off) / 1000;
-    const color =
-      abs <= HIT_WINDOWS.perfect ? JUDGE_COLORS.perfect : abs <= HIT_WINDOWS.good ? JUDGE_COLORS.good : JUDGE_COLORS.timing;
-    ctx.fillStyle = rgba(color, 0.25 + (0.75 * (i + 1)) / n);
-    ctx.fillRect(x - 3, y - 1, 10, 2);
-  }
-  ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
-  ctx.fillRect(x - 2, mid - 0.5, 8, 1);
+  const topY = Math.min(headY, holdEndY);
+  const barHeight = Math.max(headY, holdEndY) - topY + noteHeight;
+  roundedRect(ctx, centerX - trailW / 2, topY, trailW, barHeight, 8);
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  ctx.fill();
+  ctx.strokeStyle = lane.color;
+  ctx.lineWidth = 2;
+  ctx.setLineDash(DASH);
+  ctx.stroke();
+  ctx.setLineDash(NO_DASH);
 }

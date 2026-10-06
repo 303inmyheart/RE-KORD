@@ -12,8 +12,6 @@ import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
@@ -58,52 +56,20 @@ class RekordMediaService : Service() {
     private var inForeground = false
 
     private lateinit var audioManager: AudioManager
-    private var focusRequest: AudioFocusRequest? = null
-    private var hasFocus = false
-    /** Paused by a transient loss (phone call, navigation app): resume afterwards. */
-    private var resumeOnGain = false
     private var noisyRegistered = false
 
-    /**
-     * Android audio focus: whoever plays requests it, and whoever loses it steps
-     * aside. The WebView doesn't request it on its own, so the service does it on
-     * its behalf and translates the changes into player commands (the same
-     * `rekord:media-action` as the notification).
-     *
-     * Since 8.0 the system lowers the volume (ducking) by itself as long as
-     * `setWillPauseWhenDucked` stays false: nothing to do here.
+    /*
+     * Audio focus is left to the WebView: Chromium requests it as soon as the
+     * <audio> element starts and pauses/resumes the element itself on losses
+     * (calls, other music apps). Requesting it here too made the two steal it
+     * from each other, and the loss handler paused the track right after it
+     * started. The legacy app ignored focus changes for the same reason.
      */
-    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
-        main.post {
-            when (change) {
-                AudioManager.AUDIOFOCUS_GAIN -> {
-                    hasFocus = true
-                    if (resumeOnGain) {
-                        resumeOnGain = false
-                        RekordMediaBridge.send("play")
-                    }
-                }
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                    resumeOnGain = isPlaying
-                    if (isPlaying) RekordMediaBridge.send("pause")
-                }
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> Unit
-                AudioManager.AUDIOFOCUS_LOSS -> {
-                    // Another music app: pause and don't resume on our own.
-                    // Focus is requested again on the next play.
-                    resumeOnGain = false
-                    if (isPlaying) RekordMediaBridge.send("pause")
-                    abandonFocus()
-                }
-            }
-        }
-    }
 
     /** Headphones unplugged / Bluetooth off: pause right away, before it plays through the speaker. */
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY && isPlaying) {
-                resumeOnGain = false
                 RekordMediaBridge.send("pause")
             }
         }
@@ -115,10 +81,7 @@ class RekordMediaService : Service() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         session = MediaSessionCompat(this, "RE-KORD").apply {
             setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay() {
-                    if (castTarget == null) requestFocus()
-                    RekordMediaBridge.send("play")
-                }
+                override fun onPlay() = RekordMediaBridge.send("play")
                 override fun onPause() = RekordMediaBridge.send("pause")
                 override fun onSkipToNext() = RekordMediaBridge.send("nexttrack")
                 override fun onSkipToPrevious() = RekordMediaBridge.send("previoustrack")
@@ -138,16 +101,13 @@ class RekordMediaService : Service() {
     }
 
     /**
-     * While casting, the music comes out of the Chromecast: no audio focus (a
-     * navigation app or a phone call must not pause the living room), no
-     * pause when headphones are unplugged, and the volume keys with the screen off go
+     * While casting, the music comes out of the Chromecast: no pause when
+     * headphones are unplugged, and the volume keys with the screen off go
      * to the Cast device. The notification stays, showing the device name.
      */
     private fun applyCastTarget(rerender: Boolean = true) {
         if (castTarget != null) {
-            resumeOnGain = false
             unregisterNoisy()
-            abandonFocus()
             session.setPlaybackToRemote(castVolume())
         } else {
             session.setPlaybackToLocal(AudioManager.STREAM_MUSIC)
@@ -221,7 +181,6 @@ class RekordMediaService : Service() {
                 .build(),
         )
         if (state.playing && castTarget == null) {
-            requestFocus()
             registerNoisy()
         } else {
             unregisterNoisy()
@@ -242,43 +201,6 @@ class RekordMediaService : Service() {
                 inForeground = false
             }
             NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification)
-        }
-    }
-
-    private fun requestFocus() {
-        if (hasFocus) return
-        val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val request = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build(),
-                )
-                .setAcceptsDelayedFocusGain(true)
-                .setWillPauseWhenDucked(false)
-                .setOnAudioFocusChangeListener(focusListener, main)
-                .build()
-                .also { focusRequest = it }
-            audioManager.requestAudioFocus(request)
-        } else {
-            audioManager.requestAudioFocus(
-                focusListener,
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN,
-            )
-        }
-        // DELAYED (a phone call in progress): GAIN will arrive via the listener. If
-        // it is denied, we don't stop the user who just pressed play.
-        hasFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-    }
-
-    private fun abandonFocus() {
-        hasFocus = false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
-        } else {
-            audioManager.abandonAudioFocus(focusListener)
         }
     }
 
@@ -459,8 +381,6 @@ class RekordMediaService : Service() {
         artLoader.shutdownNow()
         main.removeCallbacksAndMessages(null)
         unregisterNoisy()
-        resumeOnGain = false
-        abandonFocus()
         session.isActive = false
         session.release()
         NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)

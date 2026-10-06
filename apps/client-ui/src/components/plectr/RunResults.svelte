@@ -29,7 +29,8 @@
    * Results over the whole stage: animated grade stamp, score count-up,
    * new-record ribbon (or the previous best), accuracy ring, max combo,
    * judgement bar, notes hit out of the notes judged (skipped excluded),
-   * FC / AP badges, then Rigioca / Prossimo brano / Cambia brano / Esci.
+   * FC / AP badges, then Continue (when the music plays on) / Play again /
+   * Next song / Change song / Exit.
    */
   import { onMount } from "svelte";
   import UiIcon from "../icons/UiIcon.svelte";
@@ -46,6 +47,7 @@
     onchange,
     onexit,
     onshare,
+    oncontinue,
   }: {
     data: ResultsData;
     hasNext?: boolean;
@@ -54,6 +56,8 @@
     onchange: () => void;
     onexit: () => void;
     onshare?: () => void;
+    /** The music plays on (next song already running): close and keep playing. */
+    oncontinue?: () => void;
   } = $props();
 
   const r = $derived(data.result);
@@ -94,7 +98,7 @@
   });
 </script>
 
-<div class="plectr-results" role="dialog" aria-modal="true" aria-labelledby="plectr-results-title">
+<div class="plectr-results plectr-overlay" role="dialog" aria-modal="true" aria-labelledby="plectr-results-title">
   <div class="plectr-results__card">
     <header class="plectr-results__head">
       <PlectrCover track={{ album_id: data.albumId, rel_path: data.relPath, title: data.title }} class="plectr-results__art" />
@@ -179,7 +183,13 @@
     {/if}
 
     <div class="plectr-results__actions">
-      <button bind:this={replayBtn} type="button" class="rk-btn rk-btn--primary" onclick={onreplay}>
+      {#if oncontinue}
+        <button type="button" class="rk-btn rk-btn--primary plectr-results__continue" onclick={oncontinue}>
+          <UiIcon name="play" />
+          {t("plectr.continue")}
+        </button>
+      {/if}
+      <button bind:this={replayBtn} type="button" class="rk-btn {oncontinue ? 'rk-btn--secondary' : 'rk-btn--primary'}" onclick={onreplay}>
         <UiIcon name="repeat" />
         {t("plectr.replay")}
       </button>

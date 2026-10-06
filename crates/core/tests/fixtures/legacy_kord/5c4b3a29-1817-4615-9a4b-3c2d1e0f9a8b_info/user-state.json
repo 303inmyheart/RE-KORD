@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "revision": 3,
+  "favorites": [
+    "Artista Uno/Primo Album/01 - Brano Uno.mp3"
+  ],
+  "recent": [],
+  "trackPlayCounts": {
+    "Artista Uno/Primo Album/02 - Brano Due.mp3": 9
+  },
+  "playlists": [],
+  "settings": {
+    "theme": "midnight",
+    "customTheme": {
+      "bg": "#181818",
+      "section": "#181818",
+      "accent": "#1a5fb4",
+      "accent2": "#99c1f1",
+      "bgImageFit": "contain",
+      "bgMode": "image",
+      "bgImage": "jpg",
+      "bgImageRev": 1782740539486
+    },
+    "vizMode": "mirror",
+    "restoreSession": true,
+    "defaultTab": "dashboard",
+    "locale": "it",
+    "libBrowse": "artists",
+    "libOverviewSort": "name",
+    "artistAlbumSort": "date",
+    "audioCrossfadeSec": 5,
+    "plectrDisableVizBackdrop": false,
+    "glassSurfaces": true,
+    "glassOpacity": 62
+  },
+  "shuffleExcludedAlbumIds": [],
+  "shuffleExcludedTrackRelPaths": [],
+  "trackMoods": {
+    "Artista Uno/Primo Album/01 - Brano Uno.mp3": [
+      "fun_quirky"
+    ]
+  }
+}

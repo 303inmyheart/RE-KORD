@@ -223,11 +223,6 @@
   color: color-mix(in srgb, var(--rk-ink) 46%, var(--rk-muted) 54%);
 }
 
-.track-row__plays-ic {
-  width: 0.75rem;
-  height: 0.75rem;
-  color: var(--rk-muted);
-}
 
 .track-row__meta {
   display: flex;
@@ -316,7 +311,7 @@
 .track-row__grip {
   cursor: grab;
   touch-action: none;
-  opacity: 0.5;
+  opacity: 0.6;
 }
 
 .track-row__grip:hover,
@@ -350,23 +345,48 @@
   }
 }
 
+/* Row actions are always visible (legacy): toggles read dimmed while off,
+   coloured while on, and brighten under the pointer. */
+.track-row__ic--fav,
+.track-row__ic--exclude {
+  opacity: 0.45;
+}
+
 .track-row__ic--fav.is-on,
 .track-row__ic--fav:hover {
+  opacity: 1;
   color: var(--rk-favorite);
 }
 
 .track-row__ic--playlist.is-on,
 .track-row__ic--exclude.is-on {
+  opacity: 1;
   color: var(--rk-accent-2);
 }
 
 .track-row__ic--exclude:hover:not(.is-on) {
+  opacity: 1;
   color: var(--rk-ink);
+}
+
+.track-row__ic--exclude.is-on:hover:not(:disabled) {
+  color: color-mix(in srgb, var(--rk-accent-2) 88%, var(--rk-ink) 12%);
 }
 
 .track-row__ic--exclude:disabled {
   cursor: not-allowed;
+  opacity: 1;
   color: var(--rk-accent-2);
+}
+
+/* Remove from this list (playlist): the legacy red ×. */
+.track-row__ic--danger {
+  color: var(--rk-danger);
+}
+
+.track-row__ic--danger:hover {
+  color: var(--rk-danger);
+  background: color-mix(in srgb, var(--rk-danger) 10%, transparent);
 }
 
 .track-row__in-coda {
@@ -466,6 +486,9 @@
   bottom: calc(100% + 4px);
   z-index: var(--rk-z-popover);
   min-width: 11.25rem;
+  max-width: min(22rem, calc(100vw - 16px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--rk-space-2xs);
   margin: 0;
   list-style: none;
@@ -612,43 +635,13 @@
   margin-left: var(--rk-space-xs);
 }
 
-/* Desktop with a mouse: row actions appear on hover / keyboard focus, so a
-   long list reads as titles, not as a wall of icons. State that matters stays
-   visible (a red heart, a blocked track). Visibility via opacity only — no
-   layout shift. */
-@media (hover: hover) and (pointer: fine) {
-  .track-row__tools--wide > *,
-  .track-row__grip {
-    opacity: 0;
-    transition: opacity 0.12s ease;
-  }
-
-  .track-row:hover .track-row__tools--wide > *,
-  .track-row:focus-within .track-row__tools--wide > *,
-  .track-row.is-menu-open .track-row__tools--wide > *,
-  .track-row:hover .track-row__grip,
-  .track-row:focus-within .track-row__grip,
-  .track-row__tools--wide > .track-row__ic--fav.is-on,
-  .track-row__tools--wide > .track-row__ic--exclude.is-on {
-    opacity: 1;
-  }
-}
+/* Row actions stay visible at rest (legacy): no hover-reveal, on desktop or
+   touch. Narrow lists (< 651px, see the container query above) fold them into
+   the ⋯ menu instead, exactly like the legacy compact row. */
 
 .track-row__stats .lib-meta-chip {
   flex: 0 0 auto;
   align-self: center;
-}
-
-/* Touch: always the kebab menu, whatever the width — hover-reveal does not
-   exist under a finger and a row of 40px targets eats the title. */
-@media (hover: none), (pointer: coarse) {
-  .track-row .track-row__tools--wide {
-    display: none;
-  }
-
-  .track-row .track-row__tools--compact {
-    display: contents;
-  }
 }
 
 /* Compact (list < 651px): art 44px, hide meta, lyrics in stats */

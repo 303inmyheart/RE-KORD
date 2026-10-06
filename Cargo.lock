@@ -3460,6 +3460,7 @@ dependencies = [
  "anyhow",
  "clap",
  "rekord-core",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

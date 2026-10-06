@@ -182,8 +182,8 @@
 
 /* —— Low-effects engines (WebKitGTK / Tauri on Linux) ———————— */
 
-/* `lib/platformCaps.ts` in the client sets `data-rk-lowfx` on <html> when the
-   engine composites in software: no infinite animations, no backdrop blur. */
+/* `lib/platformCaps.ts` in the client sets `data-rk-lowfx` on <html> on
+   WebKitGTK: static skeletons and list icons, no blur on the page body. */
 :root[data-rk-lowfx] .rk-skeleton {
   animation: none;
 }

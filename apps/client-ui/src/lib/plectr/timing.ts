@@ -1,72 +1,15 @@
 /**
- * Plectr timing rules, pure (no DOM): countdown at the chart tempo, note
- * speed as a lead time, latency offset, record eligibility, tap-test
- * calibration and the daily track seed.
+ * Plectr timing rules, pure (no DOM): note speed as a lead time, latency
+ * offset, record eligibility, tap-test calibration and the daily track seed.
  */
 import {
   BASE_LEAD_TIME,
-  COUNTDOWN_LEAD_IN_SECONDS,
   LATENCY_LIMIT_MS,
   NOTE_SPEED_MAX,
   NOTE_SPEED_MIN,
   RECORD_MIN_JUDGED_RATIO,
 } from "./config";
 import { clamp, stableHash } from "./math";
-
-/* ── Countdown ─────────────────────────────────────────────────────────── */
-
-export type CountdownLabel = "3" | "2" | "1" | "go";
-
-export type CountdownPlan = {
-  /** Seconds per step (one beat of the chart, folded into 0.5-0.8 s). */
-  stepSec: number;
-  /** Seconds from the start of the countdown to the audio start. */
-  total: number;
-  steps: { label: CountdownLabel; at: number }[];
-};
-
-/** One beat at `bpm`, doubled / halved into the 0.5-0.8 s range. */
-export function countdownStepSeconds(bpm: number): number {
-  if (!Number.isFinite(bpm) || bpm <= 0) return 0.6;
-  let beat = 60 / bpm;
-  for (let i = 0; i < 6 && beat < 0.5; i += 1) beat *= 2;
-  for (let i = 0; i < 6 && beat > 0.8 && beat / 2 >= 0.5; i += 1) beat /= 2;
-  return clamp(beat, 0.5, 0.8);
-}
-
-/**
- * "3 · 2 · 1 · VIA!": one step per beat; the notes already scroll during a
- * lead-in of at least `leadIn` seconds, the audio starts on "VIA!".
- */
-export function countdownPlan(bpm: number, leadIn = COUNTDOWN_LEAD_IN_SECONDS): CountdownPlan {
-  const stepSec = countdownStepSeconds(bpm);
-  const total = Math.max(leadIn, stepSec * 3);
-  return {
-    stepSec,
-    total,
-    steps: [
-      { label: "3", at: total - stepSec * 3 },
-      { label: "2", at: total - stepSec * 2 },
-      { label: "1", at: total - stepSec },
-      { label: "go", at: total },
-    ],
-  };
-}
-
-/** Label on screen `elapsed` seconds into the countdown (null = none). */
-export function countdownLabelAt(plan: CountdownPlan, elapsed: number): CountdownLabel | null {
-  if (elapsed >= plan.total + plan.stepSec) return null;
-  let label: CountdownLabel | null = null;
-  for (const step of plan.steps) {
-    if (elapsed >= step.at) label = step.label;
-  }
-  return label;
-}
-
-/** Song time shown during the pre-roll: reaches `startAt` when the audio starts. */
-export function preRollSongTime(plan: CountdownPlan, elapsed: number, startAt: number): number {
-  return startAt - Math.max(0, plan.total - elapsed);
-}
 
 /* ── Note speed ────────────────────────────────────────────────────────── */
 
@@ -122,7 +65,7 @@ export type RunEligibilityInput = {
   /** "end" = the song reached its end (or the chart completed). */
   reason: "end" | "interrupted";
   failed?: boolean;
-  /** The run started at the top of the song (countdown from 0:00). */
+  /** The run started at the top of the song. */
   fromStart: boolean;
   /** Notes skipped (joined late, seek forward, grace period). */
   skipped: number;

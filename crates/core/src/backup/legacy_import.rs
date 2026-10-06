@@ -2,6 +2,7 @@
 //! and per-account personal data (`.kord/{account}_info`).
 
 use super::*;
+use std::collections::BTreeSet;
 
 pub(super) fn playlists_from_legacy_user_state(
     raw: &str,
@@ -636,161 +637,20 @@ pub fn sync_restored_library_metadata(db: &Db, music_root: &Path) -> Result<(u32
     Ok((albums, tracks))
 }
 
-/// Import per-account moods (and fill play counts / recent gaps) from
-/// `music_root/.kord/{account}_info/user-state.json` into the hub data_dir.
-pub fn import_legacy_account_user_state(
-    data_dir: &Path,
-    music_root: &Path,
-    mode: MoodImportMode,
-) -> Result<(u32, u32)> {
-    let kord = music_root.join(".kord");
-    if !kord.is_dir() {
-        return Ok((0, 0));
-    }
-    let mut accounts = 0u32;
-    let mut moods = 0u32;
-    for entry in fs::read_dir(&kord).with_context(|| format!("read {}", kord.display()))? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(account_id) = name.strip_suffix("_info") else {
-            continue;
-        };
-        if account_id.is_empty() || account_id == "global" {
-            continue;
-        }
-        let legacy_path = entry.path().join("user-state.json");
-        if !legacy_path.is_file() {
-            continue;
-        }
-        let raw = match fs::read_to_string(&legacy_path) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, path = %legacy_path.display(), "skip legacy user-state");
-                continue;
-            }
-        };
-        let Ok(legacy_val) = serde_json::from_str::<Value>(&raw) else {
-            continue;
-        };
-        let has_legacy_shape = legacy_val.get("trackPlayCounts").is_some()
-            || legacy_val.get("favorites").is_some()
-            || legacy_val.get("trackMoods").is_some()
-            || legacy_val.get("recent").is_some();
-        let converted = if has_legacy_shape {
-            match user_state::user_state_from_legacy_json(&raw) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(error = %e, path = %legacy_path.display(), "legacy user-state convert failed");
-                    continue;
-                }
-            }
-        } else if let Ok(s) = serde_json::from_str::<UserStateV1>(&raw) {
-            s
-        } else {
-            continue;
-        };
-
-        // Dry run on a snapshot first: routine scans call this, and a write
-        // bumps the revision every client syncs on.
-        let mut probe = user_state::load_user_state(data_dir, account_id);
-        let (changed, n_moods) = apply_legacy_user_state(&mut probe, &converted, &legacy_val, mode);
-        if changed {
-            user_state::update_user_state(data_dir, account_id, None, |hub| {
-                apply_legacy_user_state(hub, &converted, &legacy_val, mode);
-            })?;
-            moods += n_moods;
-            accounts += 1;
-        }
-    }
-    Ok((accounts, moods))
-}
-
-/// Apply one legacy `user-state.json` onto `hub` per `mode`.
-/// Returns (changed, moods imported).
-pub(super) fn apply_legacy_user_state(
-    hub: &mut UserStateV1,
-    converted: &UserStateV1,
-    legacy_val: &Value,
-    mode: MoodImportMode,
-) -> (bool, u32) {
-    let mut changed = false;
-    let mut n_moods = 0u32;
-    match mode {
-        MoodImportMode::ReplaceFromLegacy => {
-            if (legacy_val.get("trackMoods").is_some() || !converted.track_moods.is_empty())
-                && hub.track_moods != converted.track_moods
-            {
-                n_moods += converted.track_moods.len() as u32;
-                hub.track_moods = converted.track_moods.clone();
-                changed = true;
-            }
-        }
-        MoodImportMode::FillEmpty => {
-            for (k, v) in &converted.track_moods {
-                if !hub.track_moods.contains_key(k) {
-                    hub.track_moods.insert(k.clone(), v.clone());
-                    n_moods += 1;
-                    changed = true;
-                }
-            }
-        }
-    }
-
-    for (k, v) in &converted.play_counts {
-        let cur = hub.play_counts.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-        let n = v.as_u64().unwrap_or(0);
-        if n > cur {
-            hub.play_counts.insert(k.clone(), Value::from(n));
-            changed = true;
-        }
-    }
-    if hub.recent_rel_paths.is_empty() && !converted.recent_rel_paths.is_empty() {
-        hub.recent_rel_paths = converted.recent_rel_paths.clone();
-        changed = true;
-    }
-    match mode {
-        MoodImportMode::ReplaceFromLegacy => {
-            if hub.excluded_rel_paths != converted.excluded_rel_paths {
-                hub.excluded_rel_paths = converted.excluded_rel_paths.clone();
-                changed = true;
-            }
-            // Full replace (including clearing hub-only album blocks).
-            // String keys remapped by `import_legacy_accounts_personal_data`.
-            if hub.excluded_album_ids != converted.excluded_album_ids {
-                hub.excluded_album_ids = converted.excluded_album_ids.clone();
-                changed = true;
-            }
-            if let Some(keys) = converted.settings.get("legacyExcludedAlbumKeys") {
-                if hub.settings.get("legacyExcludedAlbumKeys") != Some(keys) {
-                    hub.settings
-                        .insert("legacyExcludedAlbumKeys".into(), keys.clone());
-                    changed = true;
-                }
-            }
-            if !converted.settings.is_empty() {
-                for (k, v) in &converted.settings {
-                    if k == "legacyExcludedAlbumKeys" {
-                        continue;
-                    }
-                    if hub.settings.get(k) != Some(v) {
-                        hub.settings.insert(k.clone(), v.clone());
-                        changed = true;
-                    }
-                }
-            }
-        }
-        MoodImportMode::FillEmpty => {
-            if hub.excluded_rel_paths.is_empty() && !converted.excluded_rel_paths.is_empty() {
-                hub.excluded_rel_paths = converted.excluded_rel_paths.clone();
-                changed = true;
-            }
-        }
-    }
-    (changed, n_moods)
-}
+// ------------------------------------------------------------ personal data
+//
+// Legacy layout (`server/userState.mjs`, `server/librarySelection.mjs`):
+//
+// - `.kord/global_info/accounts.json`: `{ accounts: [{ id, name }] }`
+// - `.kord/{account}_info/user-state.json`: `favorites` (rel paths),
+//   `playlists` (`[{ id, name, tracks: [{ relPath, … }] }]`), `trackMoods`
+//   (`{ relPath: [mood, …] }`), `shuffleExcludedTrackRelPaths` (blocked
+//   tracks), `shuffleExcludedAlbumIds` (`"Artist::Album"` keys),
+//   `trackPlayCounts`, `recent`, `queue`, `settings`, `plectrBests`
+// - `.kord/{account}_info/library-selection.json`, `theme-bg.*`
+//
+// Every track is keyed by its path relative to the music root, the same key
+// RE-KORD 5 uses, so the import is a merge by rel_path.
 
 pub(super) fn normalize_import_rel_path(p: &str) -> String {
     let mut s = p.trim().replace('\\', "/");
@@ -841,127 +701,169 @@ pub(super) fn load_legacy_accounts_registry(music_root: &Path) -> Vec<Account> {
     list
 }
 
-/// Union `legacy` into `hub` without overwriting anything set in the hub.
-/// Returns true when `hub` changed.
-pub(super) fn merge_user_state(hub: &mut UserStateV1, legacy: UserStateV1) -> bool {
-    let mut changed = false;
-    for (k, v) in legacy.track_moods {
-        if !hub.track_moods.contains_key(&k) {
-            hub.track_moods.insert(k, v);
-            changed = true;
+/// Key that ignores case, punctuation and how accented letters are encoded
+/// (precomposed, or a letter plus a combining mark as NFD file systems store
+/// them): non-ASCII characters are dropped, and a combining mark also drops
+/// the letter it decorates. Only used when it designates one indexed path.
+fn fold_path_key(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if ('\u{300}'..='\u{36f}').contains(&c) {
+            out.pop();
+        } else if c.is_ascii_alphanumeric() || c == '/' {
+            out.push(c.to_ascii_lowercase());
         }
     }
-    for (k, v) in legacy.play_counts {
-        let cur = hub
-            .play_counts
-            .get(&k)
-            .and_then(|x| x.as_u64())
-            .unwrap_or(0);
-        let n = v.as_u64().unwrap_or(0);
-        if n > cur {
-            hub.play_counts.insert(k, Value::from(n));
-            changed = true;
-        }
-    }
-    if hub.recent_rel_paths.is_empty() && !legacy.recent_rel_paths.is_empty() {
-        hub.recent_rel_paths = legacy.recent_rel_paths;
-        changed = true;
-    }
-    for p in legacy.excluded_rel_paths {
-        if !hub.excluded_rel_paths.contains(&p) {
-            hub.excluded_rel_paths.push(p);
-            changed = true;
-        }
-    }
-    for id in legacy.excluded_album_ids {
-        if !hub.excluded_album_ids.contains(&id) {
-            hub.excluded_album_ids.push(id);
-            changed = true;
-        }
-    }
-    for (k, v) in legacy.settings {
-        if !hub.settings.contains_key(&k) {
-            hub.settings.insert(k, v);
-            changed = true;
-        }
-    }
-    changed
+    out
 }
 
-/// Merge legacy accounts into the hub registry: same id or same display name
-/// maps onto the hub account, everything else is added; hub accounts are
-/// never dropped. Returns (legacy id → hub id, accounts added).
-pub(super) fn merge_legacy_registry(
-    data_dir: &Path,
-    legacy: &[Account],
-) -> Result<(BTreeMap<String, String>, u32)> {
-    let hub = accounts::ensure_accounts(data_dir)?;
-    let (targets, id_map) = resolve_restore_account_targets(legacy, &hub);
-    let mut merged = hub.clone();
-    let mut added = 0u32;
-    for acc in targets {
-        if !merged.iter().any(|h| h.id == acc.id) {
-            merged.push(acc);
-            added += 1;
+fn insert_unique<K: std::hash::Hash + Eq, V: PartialEq>(
+    map: &mut std::collections::HashMap<K, Option<V>>,
+    key: K,
+    value: V,
+) {
+    match map.get_mut(&key) {
+        None => {
+            map.insert(key, Some(value));
+        }
+        Some(slot) => {
+            if slot.as_ref() != Some(&value) {
+                *slot = None;
+            }
         }
     }
-    if added > 0 {
-        accounts::replace_accounts_registry(data_dir, &merged)?;
+}
+
+/// Maps legacy rel_paths onto indexed ones: exact, the `Tracce` → `Tracks`
+/// rename, then case-insensitive, then [`fold_path_key`], the last two only
+/// when they point at a single track.
+pub(super) struct TrackPathResolver {
+    exact: std::collections::HashSet<String>,
+    lower: std::collections::HashMap<String, Option<String>>,
+    folded: std::collections::HashMap<String, Option<String>>,
+}
+
+impl TrackPathResolver {
+    pub(super) fn new(paths: impl IntoIterator<Item = String>) -> Self {
+        let mut r = Self {
+            exact: Default::default(),
+            lower: Default::default(),
+            folded: Default::default(),
+        };
+        for p in paths {
+            insert_unique(&mut r.lower, p.to_lowercase(), p.clone());
+            let folded = fold_path_key(&p);
+            if !folded.is_empty() {
+                insert_unique(&mut r.folded, folded, p.clone());
+            }
+            r.exact.insert(p);
+        }
+        r
     }
-    Ok((id_map, added))
+
+    fn from_db(db: &Db) -> Self {
+        Self::new(db.all_track_rel_paths().unwrap_or_default())
+    }
+
+    /// The indexed rel_path a legacy one designates, if any.
+    pub(super) fn resolve(&self, legacy: &str) -> Option<String> {
+        let norm = normalize_import_rel_path(legacy);
+        if norm.is_empty() {
+            return None;
+        }
+        if self.exact.contains(&norm) {
+            return Some(norm);
+        }
+        let raw = legacy.trim().replace('\\', "/");
+        let raw = raw.trim_start_matches('/');
+        if self.exact.contains(raw) {
+            return Some(raw.to_string());
+        }
+        if let Some(Some(p)) = self.lower.get(&norm.to_lowercase()) {
+            return Some(p.clone());
+        }
+        let folded = fold_path_key(&norm);
+        if folded.is_empty() {
+            return None;
+        }
+        self.folded.get(&folded).cloned().flatten()
+    }
+
+    /// Indexed path when there is one; otherwise the normalised legacy path
+    /// (recorded in `unmatched`), which links up if the file is indexed later.
+    fn map(&self, legacy: &str, unmatched: &mut BTreeSet<String>) -> String {
+        match self.resolve(legacy) {
+            Some(p) => p,
+            None => {
+                let n = normalize_import_rel_path(legacy);
+                if !n.is_empty() {
+                    unmatched.insert(n.clone());
+                }
+                n
+            }
+        }
+    }
+
+    fn is_indexed(&self, rel: &str) -> bool {
+        self.exact.contains(rel)
+    }
 }
 
-/// Import registry + per-account favorites, playlists, selection, theme-bg and
-/// user-state from `music_root/.kord`, merging with the hub (see
-/// [`LegacyImportMode::Merge`]).
-/// Returns `(accounts, moods, favorites, playlists, playlist_tracks, selections, registry)`.
-pub fn import_legacy_accounts_personal_data(
-    db: &Db,
-    data_dir: &Path,
-    music_root: &Path,
-) -> Result<(u32, u32, u32, u32, u32, u32, u32)> {
-    import_legacy_accounts_personal_data_with(db, data_dir, music_root, LegacyImportMode::Merge)
+/// Legacy blocked-album keys (`"Artist::Album"`, or a folder) → hub album ids.
+struct AlbumKeyResolver {
+    by_folder: std::collections::HashMap<String, i64>,
+    by_folder_lower: std::collections::HashMap<String, Option<i64>>,
+    by_artist_album: std::collections::HashMap<(String, String), Option<i64>>,
 }
 
-pub fn import_legacy_accounts_personal_data_with(
-    db: &Db,
-    data_dir: &Path,
-    music_root: &Path,
-    mode: LegacyImportMode,
-) -> Result<(u32, u32, u32, u32, u32, u32, u32)> {
-    let (counts, _) =
-        import_legacy_accounts_personal_data_opts(db, data_dir, music_root, mode, false)?;
-    Ok(counts)
-}
+impl AlbumKeyResolver {
+    fn from_db(db: &Db) -> Self {
+        let mut r = Self {
+            by_folder: Default::default(),
+            by_folder_lower: Default::default(),
+            by_artist_album: Default::default(),
+        };
+        for a in db.list_albums().unwrap_or_default() {
+            let folder = a.folder_key.replace('\\', "/");
+            insert_unique(&mut r.by_folder_lower, folder.to_lowercase(), a.id);
+            insert_unique(
+                &mut r.by_artist_album,
+                (
+                    a.artist_name.trim().to_lowercase(),
+                    a.name.trim().to_lowercase(),
+                ),
+                a.id,
+            );
+            r.by_folder.insert(folder, a.id);
+        }
+        r
+    }
 
-/// Has this hub account been used in next yet? Favorites, playlists or any
-/// setting count; play counts / moods alone do not (old builds copied those
-/// from the legacy library after every scan).
-fn hub_account_is_fresh(db: &Db, data_dir: &Path, account_id: &str) -> bool {
-    let favorites = db
-        .export_favorite_rel_paths(account_id)
-        .map(|v| v.is_empty())
-        .unwrap_or(false);
-    let playlists = db
-        .list_playlists(account_id)
-        .map(|v| v.is_empty())
-        .unwrap_or(false);
-    favorites
-        && playlists
-        && user_state::load_user_state(data_dir, account_id)
-            .settings
-            .is_empty()
+    fn resolve(&self, key: &str) -> Option<i64> {
+        let folder = legacy_album_key_to_folder(key.trim());
+        if let Some(id) = self.by_folder.get(&folder) {
+            return Some(*id);
+        }
+        if let Some(Some(id)) = self.by_folder_lower.get(&folder.to_lowercase()) {
+            return Some(*id);
+        }
+        let (artist, album) = key.split_once("::")?;
+        self.by_artist_album
+            .get(&(artist.trim().to_lowercase(), album.trim().to_lowercase()))
+            .copied()
+            .flatten()
+    }
 }
 
 /// Merge legacy `plectrBests` into the client's `settings.plectr` store
 /// (`apps/client-ui/src/lib/plectr/records.ts`): the better record per track
-/// wins (score, then accuracy). Returns true when the store changed.
+/// wins (score, then accuracy). Returns how many records were added or improved.
 pub(super) fn merge_plectr_bests(
     settings: &mut serde_json::Map<String, Value>,
     bests: &Value,
-) -> bool {
+) -> u32 {
     let Some(bests) = bests.as_object().filter(|b| !b.is_empty()) else {
-        return false;
+        return 0;
     };
     let mut store = settings
         .get("plectr")
@@ -985,7 +887,7 @@ pub(super) fn merge_plectr_bests(
         .map(str::to_string);
     let score = |v: &Value| v.get("score").and_then(|x| x.as_f64());
     let accuracy = |v: &Value| v.get("accuracy").and_then(|x| x.as_f64()).unwrap_or(0.0);
-    let mut changed = false;
+    let mut changed = 0u32;
     let mut latest: Option<String> = store
         .get("lastRunAt")
         .and_then(|v| v.as_str())
@@ -996,7 +898,7 @@ pub(super) fn merge_plectr_bests(
             .map(|o| o.entry("bests").or_insert_with(|| json!({})))
             .and_then(|b| b.as_object_mut())
         else {
-            return false;
+            return 0;
         };
         for (rel, best) in bests {
             let rel = normalize_import_rel_path(rel);
@@ -1021,7 +923,7 @@ pub(super) fn merge_plectr_bests(
             };
             if better {
                 map.insert(rel, best.clone());
-                changed = true;
+                changed += 1;
                 if let Some(at) = updated {
                     if latest.as_deref().is_none_or(|l| at > l) {
                         latest = Some(at.to_string());
@@ -1030,17 +932,169 @@ pub(super) fn merge_plectr_bests(
             }
         }
     }
-    if !changed {
-        return false;
+    if changed == 0 {
+        return 0;
     }
     if let (Some(obj), Some(at)) = (store.as_object_mut(), latest) {
         obj.insert("lastRunAt".into(), Value::String(at));
     }
     settings.insert("plectr".into(), store);
-    true
+    changed
 }
 
-/// What happened to one legacy account during an import.
+/// Recent tracks kept per account (same cap as the client).
+const RECENT_CAP: usize = 100;
+/// Unmatched paths listed per account in a report (the count is complete).
+const UNMATCHED_LIST_CAP: usize = 50;
+/// Settings key holding blocked-album keys that match no indexed album yet.
+const LEGACY_ALBUM_KEYS: &str = "legacyExcludedAlbumKeys";
+
+/// What one import added, per category.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LegacyImportCounts {
+    /// Favorites added (linked + parked).
+    pub favorites: u32,
+    /// Of `favorites`, those whose file is not indexed: they link on a scan.
+    pub favorites_parked: u32,
+    pub playlists: u32,
+    pub playlist_tracks: u32,
+    pub playlist_tracks_parked: u32,
+    /// Tracks that received moods.
+    pub moods: u32,
+    /// Tracks blocked from shuffle.
+    pub excluded_tracks: u32,
+    /// Albums blocked from shuffle.
+    pub excluded_albums: u32,
+    /// Tracks whose play count went up.
+    pub play_counts: u32,
+    pub recent: u32,
+    /// Settings keys added.
+    pub settings: u32,
+    pub plectr_bests: u32,
+    pub selections: u32,
+    pub theme_backgrounds: u32,
+}
+
+impl LegacyImportCounts {
+    fn add(&mut self, o: &Self) {
+        self.favorites += o.favorites;
+        self.favorites_parked += o.favorites_parked;
+        self.playlists += o.playlists;
+        self.playlist_tracks += o.playlist_tracks;
+        self.playlist_tracks_parked += o.playlist_tracks_parked;
+        self.moods += o.moods;
+        self.excluded_tracks += o.excluded_tracks;
+        self.excluded_albums += o.excluded_albums;
+        self.play_counts += o.play_counts;
+        self.recent += o.recent;
+        self.settings += o.settings;
+        self.plectr_bests += o.plectr_bests;
+        self.selections += o.selections;
+        self.theme_backgrounds += o.theme_backgrounds;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum LegacyAccountStatus {
+    /// Merged by this run (the counts may be zero: nothing was missing).
+    #[default]
+    Imported,
+    /// Legacy files unchanged since an earlier import: left alone, so what
+    /// was removed in RE-KORD 5 since then stays removed.
+    Unchanged,
+    /// Not imported; see `reason`.
+    Skipped,
+}
+
+/// One legacy account (`.kord/{id}_info`) in an import report.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LegacyAccountReport {
+    pub legacy_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_name: Option<String>,
+    /// Hub account the data went (or would go) to.
+    pub hub_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hub_name: Option<String>,
+    pub status: LegacyAccountStatus,
+    /// `not_registered` (deleted in legacy), `no_data`, `already_imported`, `read_error`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The hub account was created by this import.
+    pub created: bool,
+    pub counts: LegacyImportCounts,
+    /// Legacy paths that match no indexed track (first ones only).
+    pub unmatched_paths: Vec<String>,
+    pub unmatched_count: u32,
+    /// Blocked-album keys that match no indexed album.
+    pub unmatched_album_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum LegacyImportTrigger {
+    /// First start (or first scan) on a legacy library.
+    #[default]
+    Auto,
+    /// Admin panel / API.
+    Manual,
+    /// `rekord-server --legacy-import`.
+    Cli,
+}
+
+/// Outcome of a legacy import (or of a dry run).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LegacyImportReport {
+    pub trigger: LegacyImportTrigger,
+    /// Nothing was written.
+    pub dry_run: bool,
+    pub ran_at: String,
+    pub music_root: String,
+    /// `<music root>/.kord` exists.
+    pub kord_found: bool,
+    pub album_meta_merged: u32,
+    pub track_meta_merged: u32,
+    /// The legacy library database could not be read (personal data still imported).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_error: Option<String>,
+    /// Hub accounts created from the legacy registry.
+    pub accounts_added: u32,
+    pub totals: LegacyImportCounts,
+    pub unmatched_count: u32,
+    pub accounts: Vec<LegacyAccountReport>,
+}
+
+impl LegacyImportReport {
+    /// Accounts merged by this run.
+    pub fn imported_accounts(&self) -> usize {
+        self.accounts
+            .iter()
+            .filter(|a| a.status == LegacyAccountStatus::Imported)
+            .count()
+    }
+}
+
+/// How an import runs.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LegacyImportOptions {
+    pub mode: LegacyImportMode,
+    pub trigger: LegacyImportTrigger,
+    /// Compute the report without writing anything.
+    pub dry_run: bool,
+    /// Merge again accounts whose legacy files did not change since the last
+    /// import (brings back what was removed in RE-KORD 5 meanwhile).
+    pub force: bool,
+}
+
+/// What happened to one legacy account, as remembered in the marker.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LegacyAccountOutcome {
@@ -1048,342 +1102,651 @@ pub struct LegacyAccountOutcome {
     pub imported: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Digest of the legacy files that were imported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_at: Option<String>,
 }
 
-/// `(accounts, moods, favorites, playlists, playlist_tracks, selections, registry)`.
-pub type PersonalImportCounts = (u32, u32, u32, u32, u32, u32, u32);
+/// The files of one legacy account.
+struct LegacyAccountFiles {
+    legacy_id: String,
+    dir: PathBuf,
+    user_state: Option<String>,
+    selection: Option<String>,
+    theme_bg: Option<PathBuf>,
+    read_error: Option<String>,
+}
 
-/// Personal data import. `only_fresh`: accounts already used in next are
-/// left alone (automatic first-start import); the explicit sync merges.
-pub fn import_legacy_accounts_personal_data_opts(
-    db: &Db,
-    data_dir: &Path,
-    music_root: &Path,
-    mode: LegacyImportMode,
-    only_fresh: bool,
-) -> Result<(PersonalImportCounts, BTreeMap<String, LegacyAccountOutcome>)> {
-    let mut outcomes: BTreeMap<String, LegacyAccountOutcome> = BTreeMap::new();
-    let kord = music_root.join(".kord");
-    if !kord.is_dir() {
-        return Ok(((0, 0, 0, 0, 0, 0, 0), outcomes));
-    }
-
-    let mut registry_n = 0u32;
-    let list = load_legacy_accounts_registry(music_root);
-    let mut id_map: BTreeMap<String, String> = BTreeMap::new();
-    match mode {
-        LegacyImportMode::Replace => {
-            if !list.is_empty() {
-                registry_n = accounts::replace_accounts_registry(data_dir, &list)?.len() as u32;
+impl LegacyAccountFiles {
+    fn load(legacy_id: String, dir: PathBuf) -> Self {
+        let mut read_error = None;
+        let mut read = |name: &str| -> Option<String> {
+            let p = dir.join(name);
+            if !p.is_file() {
+                return None;
             }
-        }
-        LegacyImportMode::Merge => {
-            if !list.is_empty() {
-                let (map, added) = merge_legacy_registry(data_dir, &list)?;
-                id_map = map;
-                registry_n = added;
+            match fs::read_to_string(&p) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    warn!(error = %e, path = %p.display(), "cannot read legacy file");
+                    read_error = Some(format!("{name}: {e}"));
+                    None
+                }
             }
+        };
+        let user_state = read("user-state.json");
+        let selection = read("library-selection.json");
+        let theme_bg = [
+            "theme-bg.jpg",
+            "theme-bg.jpeg",
+            "theme-bg.png",
+            "theme-bg.webp",
+            "theme-bg.gif",
+        ]
+        .iter()
+        .map(|n| dir.join(n))
+        .find(|p| p.is_file());
+        Self {
+            legacy_id,
+            dir,
+            user_state,
+            selection,
+            theme_bg,
+            read_error,
         }
     }
-    // The legacy name of the default account ("Default") replaces the stock
-    // one a fresh hub starts with.
-    if let Some(legacy_default) = list.iter().find(|a| a.id == DEFAULT_ACCOUNT_ID) {
-        let hub = accounts::ensure_accounts(data_dir)?;
-        // "Locale" was the stock name of earlier next builds.
-        let rename = hub.iter().any(|a| {
-            a.id == DEFAULT_ACCOUNT_ID
-                && (a.name == accounts::DEFAULT_ACCOUNT_NAME || a.name == "Locale")
-                && a.name != legacy_default.name
-        });
-        if rename {
-            accounts::update_account(data_dir, DEFAULT_ACCOUNT_ID, Some(&legacy_default.name))?;
-        }
+
+    fn has_data(&self) -> bool {
+        self.user_state.is_some() || self.selection.is_some() || self.theme_bg.is_some()
     }
-    let registered: std::collections::HashSet<String> = accounts::ensure_accounts(data_dir)?
-        .into_iter()
-        .map(|a| a.id)
-        .collect();
 
-    let album_folder_to_id: BTreeMap<String, i64> = db
-        .list_albums()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|a| (a.folder_key.replace('\\', "/"), a.id))
-        .collect();
+    /// Digest of what an import reads, to recognise an unchanged account.
+    fn fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(self.user_state.as_deref().unwrap_or("").as_bytes());
+        h.update([0u8]);
+        h.update(self.selection.as_deref().unwrap_or("").as_bytes());
+        h.update([0u8]);
+        if let Some(meta) = self.theme_bg.as_ref().and_then(|p| fs::metadata(p).ok()) {
+            h.update(meta.len().to_le_bytes());
+        }
+        h.finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    }
+}
 
-    let mut accounts_synced = 0u32;
-    let mut moods_imported = 0u32;
-    let mut favorites_linked = 0u32;
-    let mut playlists_imported = 0u32;
-    let mut playlist_tracks_linked = 0u32;
-    let mut selections_imported = 0u32;
-
-    for entry in fs::read_dir(&kord).with_context(|| format!("read {}", kord.display()))? {
+/// Every `.kord/{id}_info` folder, sorted by id.
+fn legacy_account_dirs(kord: &Path) -> Result<Vec<(String, PathBuf)>> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(kord).with_context(|| format!("read {}", kord.display()))? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(legacy_id) = account_id_from_info_dir_name(&name) else {
-            continue;
-        };
-        let account_id = id_map.get(&legacy_id).cloned().unwrap_or(legacy_id.clone());
-        // Folders of accounts deleted in legacy (or never registered) must not
-        // turn into hub state files.
-        if !registered.contains(&account_id) {
-            outcomes.insert(
-                legacy_id,
-                LegacyAccountOutcome {
-                    hub_id: account_id,
-                    imported: false,
-                    reason: Some("not_registered".into()),
-                },
-            );
-            continue;
+        if let Some(id) = account_id_from_info_dir_name(&name) {
+            out.push((id, entry.path()));
         }
-        if only_fresh && !hub_account_is_fresh(db, data_dir, &account_id) {
-            outcomes.insert(
-                legacy_id,
-                LegacyAccountOutcome {
-                    hub_id: account_id,
-                    imported: false,
-                    reason: Some("hub_account_in_use".into()),
-                },
-            );
-            continue;
-        }
-        outcomes.insert(
-            legacy_id,
-            LegacyAccountOutcome {
-                hub_id: account_id.clone(),
-                imported: true,
-                reason: None,
-            },
-        );
-        let info_dir = entry.path();
-        let mut touched = false;
+    }
+    out.sort();
+    Ok(out)
+}
 
-        let legacy_path = info_dir.join("user-state.json");
-        if legacy_path.is_file() {
-            let raw = match fs::read_to_string(&legacy_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(error = %e, path = %legacy_path.display(), "skip legacy user-state");
-                    String::new()
+/// Legacy user-state with every path mapped onto the catalog.
+struct LegacyPersonal {
+    favorites: Vec<String>,
+    playlists: Vec<PlaylistBackup>,
+    state: UserStateV1,
+    plectr: Value,
+    unmatched: BTreeSet<String>,
+    unmatched_album_keys: Vec<String>,
+}
+
+fn convert_legacy_personal(
+    raw: &str,
+    tracks: &TrackPathResolver,
+    albums: &AlbumKeyResolver,
+) -> Result<LegacyPersonal> {
+    let mut unmatched = BTreeSet::new();
+    let (favorites, mut playlists) = playlists_from_legacy_user_state(raw)?;
+    let favorites: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        favorites
+            .iter()
+            .map(|p| tracks.map(p, &mut unmatched))
+            .filter(|p| !p.is_empty() && seen.insert(p.clone()))
+            .collect()
+    };
+    for pl in &mut playlists {
+        for t in &mut pl.tracks {
+            t.rel_path = tracks.map(&t.rel_path, &mut unmatched);
+        }
+        pl.tracks.retain(|t| !t.rel_path.is_empty());
+    }
+
+    let legacy = user_state::user_state_from_legacy_json(raw)?;
+    let mut state = UserStateV1 {
+        settings: legacy.settings,
+        ..Default::default()
+    };
+    let moods = crate::track_moods::normalize_track_moods_map(legacy.track_moods);
+    for (rel, moods) in moods {
+        let rel = tracks.map(&rel, &mut unmatched);
+        state.track_moods.entry(rel).or_insert(moods);
+    }
+    for (rel, n) in legacy.play_counts {
+        let rel = tracks.map(&rel, &mut unmatched);
+        let n = n.as_u64().unwrap_or(0);
+        let cur = state
+            .play_counts
+            .get(&rel)
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if n > cur {
+            state.play_counts.insert(rel, Value::from(n));
+        }
+    }
+    for rel in legacy.recent_rel_paths {
+        let rel = tracks.map(&rel, &mut unmatched);
+        if !state.recent_rel_paths.contains(&rel) {
+            state.recent_rel_paths.push(rel);
+        }
+    }
+    for rel in legacy.excluded_rel_paths {
+        let rel = tracks.map(&rel, &mut unmatched);
+        if !state.excluded_rel_paths.contains(&rel) {
+            state.excluded_rel_paths.push(rel);
+        }
+    }
+    state.excluded_album_ids = legacy.excluded_album_ids;
+    let mut unmatched_album_keys = Vec::new();
+    if let Some(keys) = state.settings.remove(LEGACY_ALBUM_KEYS) {
+        for key in keys
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|k| k.as_str())
+        {
+            match albums.resolve(key) {
+                Some(id) => {
+                    if !state.excluded_album_ids.contains(&id) {
+                        state.excluded_album_ids.push(id);
+                    }
                 }
-            };
-            if !raw.is_empty() {
-                if let Ok((fav, pls)) = playlists_from_legacy_user_state(&raw) {
-                    let fav: Vec<String> = fav
-                        .into_iter()
-                        .map(|p| normalize_import_rel_path(&p))
-                        .filter(|p| !p.is_empty())
+                None => unmatched_album_keys.push(key.to_string()),
+            }
+        }
+    }
+    if let Some(Value::Object(q)) = state.settings.get_mut("legacyQueue") {
+        if let Some(Value::Array(paths)) = q.get_mut("relPaths") {
+            for p in paths.iter_mut() {
+                if let Some(s) = p.as_str() {
+                    *p = Value::String(tracks.resolve(s).unwrap_or_else(|| s.to_string()));
+                }
+            }
+        }
+    }
+
+    let plectr = serde_json::from_str::<Value>(raw)
+        .ok()
+        .and_then(|v| v.get("plectrBests").cloned())
+        .and_then(|v| match v {
+            Value::Object(map) => Some(Value::Object(
+                map.into_iter()
+                    .map(|(rel, best)| (tracks.map(&rel, &mut unmatched), best))
+                    .collect(),
+            )),
+            _ => None,
+        })
+        .unwrap_or(Value::Null);
+
+    Ok(LegacyPersonal {
+        favorites,
+        playlists,
+        state,
+        plectr,
+        unmatched,
+        unmatched_album_keys,
+    })
+}
+
+/// Union the legacy state into `hub`. Nothing the hub has is replaced: moods
+/// and settings only fill gaps, play counts keep the higher value, recent
+/// tracks are appended after the hub's own, blocked tracks / albums are a
+/// union. With `hub_in_use` (the account already has settings in RE-KORD 5)
+/// the language and the legacy queue are left out: they would change what
+/// the person sees on the next start.
+fn merge_legacy_state(
+    hub: &mut UserStateV1,
+    legacy: &LegacyPersonal,
+    unmatched_album_keys: &[String],
+    hub_in_use: bool,
+) -> LegacyImportCounts {
+    let mut c = LegacyImportCounts::default();
+    let l = &legacy.state;
+    for (k, v) in &l.track_moods {
+        if !hub.track_moods.contains_key(k) {
+            hub.track_moods.insert(k.clone(), v.clone());
+            c.moods += 1;
+        }
+    }
+    for (k, v) in &l.play_counts {
+        let cur = hub.play_counts.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+        let n = v.as_u64().unwrap_or(0);
+        if n > cur {
+            hub.play_counts.insert(k.clone(), Value::from(n));
+            c.play_counts += 1;
+        }
+    }
+    for p in &l.recent_rel_paths {
+        if hub.recent_rel_paths.len() >= RECENT_CAP {
+            break;
+        }
+        if !hub.recent_rel_paths.contains(p) {
+            hub.recent_rel_paths.push(p.clone());
+            c.recent += 1;
+        }
+    }
+    for p in &l.excluded_rel_paths {
+        if !hub.excluded_rel_paths.contains(p) {
+            hub.excluded_rel_paths.push(p.clone());
+            c.excluded_tracks += 1;
+        }
+    }
+    for id in &l.excluded_album_ids {
+        if !hub.excluded_album_ids.contains(id) {
+            hub.excluded_album_ids.push(*id);
+            c.excluded_albums += 1;
+        }
+    }
+    let has_queue = hub.settings.contains_key("queue");
+    for (k, v) in &l.settings {
+        let skip = hub_in_use && k == "locale" || k == "legacyQueue" && has_queue;
+        if !skip && !hub.settings.contains_key(k) {
+            hub.settings.insert(k.clone(), v.clone());
+            c.settings += 1;
+        }
+    }
+    if !unmatched_album_keys.is_empty() {
+        let mut keys: Vec<Value> = hub
+            .settings
+            .get(LEGACY_ALBUM_KEYS)
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for k in unmatched_album_keys {
+            let v = Value::String(k.clone());
+            if !keys.contains(&v) {
+                keys.push(v);
+            }
+        }
+        hub.settings
+            .insert(LEGACY_ALBUM_KEYS.into(), Value::Array(keys));
+    }
+    c.plectr_bests = merge_plectr_bests(&mut hub.settings, &legacy.plectr);
+    c
+}
+
+/// Everything an import run shares between accounts.
+struct ImportCtx<'a> {
+    db: &'a Db,
+    data_dir: &'a Path,
+    opts: LegacyImportOptions,
+    tracks: TrackPathResolver,
+    albums: AlbumKeyResolver,
+    previous: BTreeMap<String, LegacyAccountOutcome>,
+}
+
+impl ImportCtx<'_> {
+    /// Already imported from the same files into the same hub account.
+    fn unchanged(&self, files: &LegacyAccountFiles, hub_id: &str, fingerprint: &str) -> bool {
+        if self.opts.force || self.opts.mode == LegacyImportMode::Replace {
+            return false;
+        }
+        match self.previous.get(&files.legacy_id) {
+            Some(prev) if prev.imported && prev.hub_id == hub_id => match &prev.fingerprint {
+                Some(fp) => fp == fingerprint,
+                // Imported by an earlier version, which recorded no digest.
+                None => true,
+            },
+            _ => false,
+        }
+    }
+
+    fn import_account(
+        &self,
+        files: &LegacyAccountFiles,
+        hub_id: &str,
+        report: &mut LegacyAccountReport,
+    ) -> Result<()> {
+        let dry = self.opts.dry_run;
+        let replace = self.opts.mode == LegacyImportMode::Replace;
+        let c = &mut report.counts;
+
+        if let Some(raw) = files.user_state.as_deref() {
+            match convert_legacy_personal(raw, &self.tracks, &self.albums) {
+                Ok(legacy) => {
+                    report.unmatched_count = legacy.unmatched.len() as u32;
+                    report.unmatched_paths = legacy
+                        .unmatched
+                        .iter()
+                        .take(UNMATCHED_LIST_CAP)
+                        .cloned()
                         .collect();
-                    let mut pls_norm = pls;
-                    for pl in &mut pls_norm {
-                        for t in &mut pl.tracks {
-                            t.rel_path = normalize_import_rel_path(&t.rel_path);
-                        }
-                    }
-                    let (f, (p, t)) = match mode {
-                        LegacyImportMode::Replace => (
-                            db.replace_favorites_by_rel_paths(&account_id, &fav)?,
-                            db.replace_playlists_backup(&account_id, &pls_norm)?,
-                        ),
-                        LegacyImportMode::Merge => (
-                            db.merge_favorites_by_rel_paths(&account_id, &fav)?,
-                            db.merge_playlists_backup(&account_id, &pls_norm)?,
-                        ),
-                    };
-                    favorites_linked += f;
-                    playlists_imported += p;
-                    playlist_tracks_linked += t;
-                    touched |= f > 0 || p > 0 || t > 0 || mode == LegacyImportMode::Replace;
+                    report.unmatched_album_keys = legacy.unmatched_album_keys.clone();
+                    self.import_favorites_playlists(hub_id, &legacy, c)?;
+                    self.import_state(hub_id, &legacy, c)?;
                 }
-                let plectr = serde_json::from_str::<Value>(&raw)
-                    .ok()
-                    .and_then(|v| v.get("plectrBests").cloned())
-                    .unwrap_or(Value::Null);
-                match user_state::user_state_from_legacy_json(&raw) {
-                    Ok(mut ustate) => {
-                        remap_legacy_excluded_albums(&mut ustate, &album_folder_to_id);
-                        match mode {
-                            LegacyImportMode::Replace => {
-                                moods_imported += ustate.track_moods.len() as u32;
-                                user_state::update_user_state(data_dir, &account_id, None, |s| {
-                                    *s = ustate;
-                                    merge_plectr_bests(&mut s.settings, &plectr);
-                                })?;
-                                touched = true;
-                            }
-                            LegacyImportMode::Merge => {
-                                // Dry run first: an unchanged state is not rewritten.
-                                let mut probe = user_state::load_user_state(data_dir, &account_id);
-                                let before = probe.track_moods.len();
-                                let merged = merge_user_state(&mut probe, ustate.clone());
-                                let plectr_changed =
-                                    merge_plectr_bests(&mut probe.settings, &plectr);
-                                if merged || plectr_changed {
-                                    moods_imported += (probe.track_moods.len() - before) as u32;
-                                    user_state::update_user_state(
-                                        data_dir,
-                                        &account_id,
-                                        None,
-                                        |s| {
-                                            merge_user_state(s, ustate);
-                                            merge_plectr_bests(&mut s.settings, &plectr);
-                                        },
-                                    )?;
-                                    touched = true;
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            error = %e,
-                            path = %legacy_path.display(),
-                            "legacy user-state convert failed"
-                        );
-                    }
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        path = %files.dir.join("user-state.json").display(),
+                        "legacy user-state unreadable"
+                    );
+                    report.reason = Some("read_error".into());
                 }
             }
         }
 
-        // Selection may live under *_info (legacy) — next uses accounts/{id}/.
-        let sel_src = info_dir.join("library-selection.json");
-        // New accounts get an empty selection file: that is not a choice.
-        let hub_has_selection = account_id == DEFAULT_ACCOUNT_ID
-            || selection::read_library_selection(data_dir, &account_id)
+        // Selection: new accounts get an empty one, which is not a choice.
+        let hub_has_selection = hub_id == DEFAULT_ACCOUNT_ID
+            || selection::read_library_selection(self.data_dir, hub_id)
                 .map(|s| {
                     selection::get_selection_filter_mode(&s)
                         != selection::SelectionFilterMode::Empty
                 })
                 .unwrap_or(false);
-        if sel_src.is_file() && (mode == LegacyImportMode::Replace || !hub_has_selection) {
-            if let Ok(raw) = fs::read_to_string(&sel_src) {
-                if let Ok(sel) = serde_json::from_str::<selection::LibrarySelection>(&raw) {
-                    if selection::write_library_selection(data_dir, &account_id, &sel).is_ok() {
-                        selections_imported += 1;
-                        touched = true;
+        if let Some(raw) = files.selection.as_deref() {
+            if replace || !hub_has_selection {
+                if let Ok(sel) = serde_json::from_str::<selection::LibrarySelection>(raw) {
+                    if dry
+                        || selection::write_library_selection(self.data_dir, hub_id, &sel).is_ok()
+                    {
+                        c.selections += 1;
                     }
                 }
             }
         }
 
-        let hub_has_theme = user_state::find_theme_bg_path(data_dir, &account_id).is_some();
-        if mode == LegacyImportMode::Replace || !hub_has_theme {
-            for bg in [
-                "theme-bg.jpg",
-                "theme-bg.jpeg",
-                "theme-bg.png",
-                "theme-bg.webp",
-                "theme-bg.gif",
-            ] {
-                let src = info_dir.join(bg);
-                if !src.is_file() {
-                    continue;
+        if let Some(src) = files.theme_bg.as_ref() {
+            let hub_has_theme = user_state::find_theme_bg_path(self.data_dir, hub_id).is_some();
+            if replace || !hub_has_theme {
+                let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
+                if dry {
+                    c.theme_backgrounds += 1;
+                } else {
+                    let dest = user_state::theme_bg_path_for_ext(self.data_dir, hub_id, ext);
+                    if let Some(parent) = dest.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    let _ = user_state::delete_theme_bg(self.data_dir, hub_id);
+                    if fs::copy(src, &dest).is_ok() {
+                        c.theme_backgrounds += 1;
+                    }
                 }
-                let ext = Path::new(bg)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("jpg");
-                let dest = user_state::theme_bg_path_for_ext(data_dir, &account_id, ext);
-                if let Some(parent) = dest.parent() {
-                    let _ = fs::create_dir_all(parent);
-                }
-                let _ = user_state::delete_theme_bg(data_dir, &account_id);
-                if fs::copy(&src, &dest).is_ok() {
-                    touched = true;
-                }
-                break;
             }
         }
+        Ok(())
+    }
 
-        if touched {
-            accounts_synced += 1;
+    fn import_favorites_playlists(
+        &self,
+        hub_id: &str,
+        legacy: &LegacyPersonal,
+        c: &mut LegacyImportCounts,
+    ) -> Result<()> {
+        let db = self.db;
+        if self.opts.mode == LegacyImportMode::Replace {
+            let linked = db.replace_favorites_by_rel_paths(hub_id, &legacy.favorites)?;
+            c.favorites = legacy.favorites.len() as u32;
+            c.favorites_parked = c.favorites.saturating_sub(linked);
+            let (p, t) = db.replace_playlists_backup(hub_id, &legacy.playlists)?;
+            c.playlists = p;
+            c.playlist_tracks = legacy.playlists.iter().map(|p| p.tracks.len() as u32).sum();
+            c.playlist_tracks_parked = c.playlist_tracks.saturating_sub(t);
+            return Ok(());
+        }
+        let present: std::collections::HashSet<String> =
+            db.export_favorite_rel_paths(hub_id)?.into_iter().collect();
+        let missing: Vec<String> = legacy
+            .favorites
+            .iter()
+            .filter(|p| !present.contains(*p))
+            .cloned()
+            .collect();
+        c.favorites = missing.len() as u32;
+        c.favorites_parked = missing
+            .iter()
+            .filter(|p| !self.tracks.is_indexed(p))
+            .count() as u32;
+        if !self.opts.dry_run && !missing.is_empty() {
+            db.merge_favorites_by_rel_paths(hub_id, &missing)?;
+        }
+        let (p, t, parked) =
+            db.merge_playlists_backup_opts(hub_id, &legacy.playlists, self.opts.dry_run)?;
+        c.playlists = p;
+        c.playlist_tracks = t;
+        c.playlist_tracks_parked = parked;
+        Ok(())
+    }
+
+    fn import_state(
+        &self,
+        hub_id: &str,
+        legacy: &LegacyPersonal,
+        c: &mut LegacyImportCounts,
+    ) -> Result<()> {
+        if self.opts.mode == LegacyImportMode::Replace {
+            let mut fresh = UserStateV1::default();
+            let counts =
+                merge_legacy_state(&mut fresh, legacy, &legacy.unmatched_album_keys, false);
+            user_state::update_user_state(self.data_dir, hub_id, None, |s| *s = fresh)?;
+            add_state_counts(c, &counts);
+            return Ok(());
+        }
+        // Work on a copy first: an unchanged state is not rewritten (a write
+        // bumps the revision every client syncs on).
+        let mut probe = user_state::load_user_state(self.data_dir, hub_id);
+        let in_use = !probe.settings.is_empty();
+        let counts = merge_legacy_state(&mut probe, legacy, &legacy.unmatched_album_keys, in_use);
+        let album_keys_changed = !legacy.unmatched_album_keys.is_empty()
+            && user_state::load_user_state(self.data_dir, hub_id)
+                .settings
+                .get(LEGACY_ALBUM_KEYS)
+                != probe.settings.get(LEGACY_ALBUM_KEYS);
+        if !self.opts.dry_run && (!counts.is_empty() || album_keys_changed) {
+            user_state::update_user_state(self.data_dir, hub_id, None, |s| {
+                merge_legacy_state(s, legacy, &legacy.unmatched_album_keys, in_use);
+            })?;
+        }
+        add_state_counts(c, &counts);
+        Ok(())
+    }
+}
+
+fn add_state_counts(c: &mut LegacyImportCounts, s: &LegacyImportCounts) {
+    c.moods += s.moods;
+    c.play_counts += s.play_counts;
+    c.recent += s.recent;
+    c.excluded_tracks += s.excluded_tracks;
+    c.excluded_albums += s.excluded_albums;
+    c.settings += s.settings;
+    c.plectr_bests += s.plectr_bests;
+}
+
+/// Import (or preview) the personal data of every legacy account into the
+/// hub. Legacy accounts map onto hub accounts with the same id, then the same
+/// display name (`default` always onto `default`); the others are created
+/// with their legacy id and name. Hub accounts are never removed.
+fn import_personal_data(
+    db: &Db,
+    data_dir: &Path,
+    music_root: &Path,
+    opts: LegacyImportOptions,
+    previous: BTreeMap<String, LegacyAccountOutcome>,
+    report: &mut LegacyImportReport,
+) -> Result<BTreeMap<String, LegacyAccountOutcome>> {
+    let mut outcomes = previous.clone();
+    let kord = music_root.join(".kord");
+    if !kord.is_dir() {
+        return Ok(outcomes);
+    }
+    if opts.dry_run && opts.mode == LegacyImportMode::Replace {
+        bail!("a dry run only previews the merge");
+    }
+
+    let legacy_registry = load_legacy_accounts_registry(music_root);
+    let legacy_names: BTreeMap<String, String> = legacy_registry
+        .iter()
+        .map(|a| (a.id.clone(), a.name.clone()))
+        .collect();
+    let hub_before = accounts::ensure_accounts(data_dir)?;
+    let mut id_map: BTreeMap<String, String> = BTreeMap::new();
+    let mut created: std::collections::HashSet<String> = Default::default();
+    let mut registered: BTreeMap<String, String> = hub_before
+        .iter()
+        .map(|a| (a.id.clone(), a.name.clone()))
+        .collect();
+    if !legacy_registry.is_empty() {
+        match opts.mode {
+            LegacyImportMode::Replace => {
+                let list = accounts::replace_accounts_registry(data_dir, &legacy_registry)?;
+                report.accounts_added = list.len() as u32;
+                registered = list.into_iter().map(|a| (a.id, a.name)).collect();
+            }
+            LegacyImportMode::Merge => {
+                let (targets, map) = resolve_restore_account_targets(&legacy_registry, &hub_before);
+                id_map = map;
+                let mut merged = hub_before.clone();
+                for acc in targets {
+                    if !merged.iter().any(|h| h.id == acc.id) {
+                        created.insert(acc.id.clone());
+                        registered.insert(acc.id.clone(), acc.name.clone());
+                        merged.push(acc);
+                    }
+                }
+                report.accounts_added = created.len() as u32;
+                if !opts.dry_run && !created.is_empty() {
+                    accounts::replace_accounts_registry(data_dir, &merged)?;
+                }
+            }
+        }
+    }
+    // The legacy name of the default account replaces the stock one a fresh
+    // hub starts with ("Locale" was the stock name of earlier builds).
+    if let Some(legacy_default) = legacy_registry.iter().find(|a| a.id == DEFAULT_ACCOUNT_ID) {
+        let stock = registered
+            .get(DEFAULT_ACCOUNT_ID)
+            .is_some_and(|n| n == accounts::DEFAULT_ACCOUNT_NAME || n == "Locale");
+        if stock && registered.get(DEFAULT_ACCOUNT_ID) != Some(&legacy_default.name) {
+            if !opts.dry_run {
+                accounts::update_account(data_dir, DEFAULT_ACCOUNT_ID, Some(&legacy_default.name))?;
+            }
+            registered.insert(DEFAULT_ACCOUNT_ID.into(), legacy_default.name.clone());
         }
     }
 
-    Ok((
-        (
-            accounts_synced,
-            moods_imported,
-            favorites_linked,
-            playlists_imported,
-            playlist_tracks_linked,
-            selections_imported,
-            registry_n,
-        ),
-        outcomes,
-    ))
+    let ctx = ImportCtx {
+        db,
+        data_dir,
+        opts,
+        tracks: TrackPathResolver::from_db(db),
+        albums: AlbumKeyResolver::from_db(db),
+        previous,
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+
+    for (legacy_id, dir) in legacy_account_dirs(&kord)? {
+        let files = LegacyAccountFiles::load(legacy_id.clone(), dir);
+        let hub_id = id_map
+            .get(&legacy_id)
+            .cloned()
+            .unwrap_or_else(|| legacy_id.clone());
+        let mut acc = LegacyAccountReport {
+            legacy_id: legacy_id.clone(),
+            legacy_name: legacy_names.get(&legacy_id).cloned(),
+            hub_id: hub_id.clone(),
+            hub_name: registered.get(&hub_id).cloned(),
+            created: created.contains(&hub_id),
+            ..Default::default()
+        };
+        let skip = |acc: &mut LegacyAccountReport, status, reason: &str| {
+            acc.status = status;
+            acc.reason = Some(reason.to_string());
+        };
+        // Folders of accounts deleted in legacy (or never registered) must
+        // not turn into hub accounts.
+        if !registered.contains_key(&hub_id) {
+            skip(&mut acc, LegacyAccountStatus::Skipped, "not_registered");
+        } else if !files.has_data() {
+            let reason = if files.read_error.is_some() {
+                "read_error"
+            } else {
+                "no_data"
+            };
+            skip(&mut acc, LegacyAccountStatus::Skipped, reason);
+        } else {
+            let fingerprint = files.fingerprint();
+            if ctx.unchanged(&files, &hub_id, &fingerprint) {
+                skip(&mut acc, LegacyAccountStatus::Unchanged, "already_imported");
+            } else {
+                ctx.import_account(&files, &hub_id, &mut acc)?;
+                if acc.reason.is_none() {
+                    acc.status = LegacyAccountStatus::Imported;
+                    outcomes.insert(
+                        legacy_id.clone(),
+                        LegacyAccountOutcome {
+                            hub_id: hub_id.clone(),
+                            imported: true,
+                            reason: None,
+                            fingerprint: Some(fingerprint),
+                            imported_at: Some(now.clone()),
+                        },
+                    );
+                } else {
+                    acc.status = LegacyAccountStatus::Skipped;
+                }
+            }
+        }
+        if acc.status == LegacyAccountStatus::Skipped {
+            // A later run tries again.
+            let keep = outcomes.get(&legacy_id).is_some_and(|o| o.imported);
+            if !keep {
+                outcomes.insert(
+                    legacy_id.clone(),
+                    LegacyAccountOutcome {
+                        hub_id: hub_id.clone(),
+                        imported: false,
+                        reason: acc.reason.clone(),
+                        fingerprint: None,
+                        imported_at: None,
+                    },
+                );
+            }
+        }
+        report.totals.add(&acc.counts);
+        report.unmatched_count += acc.unmatched_count;
+        report.accounts.push(acc);
+    }
+    Ok(outcomes)
 }
 
-/// One-shot: merge studio metadata from sidecars + `.kord/rekord.db`, and
-/// merge personal data (moods, excludes, settings, favorites, playlists,
-/// selection) from `.kord/{account}_info/user-state.json` into the hub.
-/// Never drops next-only accounts, favorites or playlists.
-pub fn sync_legacy_library_data(
-    db: &Db,
-    data_dir: &Path,
-    music_root: &Path,
-) -> Result<LegacySyncReport> {
-    sync_legacy_library_data_with(db, data_dir, music_root, LegacyImportMode::Merge)
-}
-
-pub fn sync_legacy_library_data_with(
-    db: &Db,
-    data_dir: &Path,
-    music_root: &Path,
-    mode: LegacyImportMode,
-) -> Result<LegacySyncReport> {
-    let (album_meta_merged, track_meta_merged) = sync_restored_library_metadata(db, music_root)?;
-    // After import: drop stubs reintroduced by bad sidecars (e.g. genre "e").
-    let _ = db.clear_weak_studio_placeholders();
-
-    let (
-        accounts_moods_synced,
-        moods_imported,
-        favorites_linked,
-        playlists_imported,
-        playlist_tracks_linked,
-        selections_imported,
-        accounts_registry,
-    ) = import_legacy_accounts_personal_data_with(db, data_dir, music_root, mode)?;
-
-    info!(
-        album_meta_merged,
-        track_meta_merged,
-        accounts_moods_synced,
-        moods_imported,
-        favorites_linked,
-        playlists_imported,
-        playlist_tracks_linked,
-        selections_imported,
-        accounts_registry,
-        ?mode,
-        "legacy library sync finished"
-    );
-    Ok(LegacySyncReport {
-        album_meta_merged,
-        track_meta_merged,
-        accounts_moods_synced,
-        moods_imported,
-        favorites_linked,
-        playlists_imported,
-        playlist_tracks_linked,
-        selections_imported,
-        accounts_registry,
-    })
-}
-
-/// Marker of the automatic legacy import (`<data_dir>/legacy-import.json`):
-/// once written, scans and restarts never import legacy data again, so
-/// whatever is cleared in next stays cleared. The explicit "sync legacy meta"
-/// remains available as a merge.
+/// Marker of the legacy import (`<data_dir>/legacy-import.json`). Version 2
+/// records, per legacy account, a digest of the files imported, so a later
+/// run (automatic or manual) leaves unchanged accounts alone: what is removed
+/// in RE-KORD 5 stays removed. A marker written by an earlier version (no
+/// version) makes the automatic import run once more, for the accounts that
+/// version skipped.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LegacyImportMarker {
+    #[serde(default)]
+    pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1395,9 +1758,13 @@ pub struct LegacyImportMarker {
     /// Legacy account id → what happened to it.
     #[serde(default)]
     pub accounts: BTreeMap<String, LegacyAccountOutcome>,
+    /// Report of the latest run that wrote something.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_report: Option<LegacyImportReport>,
 }
 
 pub const LEGACY_IMPORT_MARKER: &str = "legacy-import.json";
+pub const LEGACY_IMPORT_MARKER_VERSION: u32 = 2;
 
 pub fn legacy_import_marker_path(data_dir: &Path) -> PathBuf {
     data_dir.join(LEGACY_IMPORT_MARKER)
@@ -1416,84 +1783,241 @@ fn write_legacy_import_marker(data_dir: &Path, marker: &LegacyImportMarker) -> R
     Ok(())
 }
 
-/// A legacy library (`.kord`) is next to the music and was never imported.
-pub fn legacy_import_pending(data_dir: &Path, music_root: &Path) -> bool {
-    let opted_out = std::env::var("REKORD_SKIP_LEGACY_IMPORT")
+fn legacy_import_opted_out() -> bool {
+    std::env::var("REKORD_SKIP_LEGACY_IMPORT")
         .map(|v| !v.trim().is_empty() && v.trim() != "0")
-        .unwrap_or(false);
-    !opted_out
-        && music_root.join(".kord").is_dir()
-        && read_legacy_import_marker(data_dir)
-            .and_then(|m| m.imported_at)
-            .is_none()
+        .unwrap_or(false)
 }
 
-/// First start on a legacy library: import everything once (library
-/// metadata, accounts registry, settings, favorites, playlists, selections,
-/// play counts, moods, exclusions, theme backgrounds, Plectr records) and
-/// write the marker. Accounts already used in next are not touched. Needs an
+/// A legacy library (`.kord`) is next to the music and the automatic import
+/// has not run yet (or ran with a version that skipped accounts in use).
+pub fn legacy_import_pending(data_dir: &Path, music_root: &Path) -> bool {
+    !legacy_import_opted_out()
+        && music_root.join(".kord").is_dir()
+        && read_legacy_import_marker(data_dir)
+            .is_none_or(|m| m.imported_at.is_none() || m.version < LEGACY_IMPORT_MARKER_VERSION)
+}
+
+/// Import legacy data into the hub: library metadata (`.kord/rekord.db`, then
+/// sidecars), the accounts registry, and per account favorites, playlists,
+/// moods, blocked tracks and albums, play counts, recent tracks, settings,
+/// Plectr records, library selection and theme background. A merge by
+/// default (see [`LegacyImportMode::Merge`]), idempotent, and a preview with
+/// `dry_run`. Needs an indexed catalog to link tracks; paths not indexed are
+/// kept (favorites and playlist entries are parked until a scan finds them)
+/// and listed in the report.
+pub fn run_legacy_import(
+    db: &Db,
+    data_dir: &Path,
+    music_root: &Path,
+    opts: LegacyImportOptions,
+) -> Result<LegacyImportReport> {
+    let mut report = LegacyImportReport {
+        trigger: opts.trigger,
+        dry_run: opts.dry_run,
+        ran_at: chrono::Utc::now().to_rfc3339(),
+        music_root: music_root.to_string_lossy().into_owned(),
+        kord_found: music_root.join(".kord").is_dir(),
+        ..Default::default()
+    };
+    if !opts.dry_run {
+        // A broken legacy database must not block the personal data.
+        match sync_restored_library_metadata(db, music_root) {
+            Ok((a, t)) => {
+                report.album_meta_merged = a;
+                report.track_meta_merged = t;
+            }
+            Err(e) => {
+                warn!(error = %e, "legacy library metadata import failed");
+                report.metadata_error = Some(e.to_string());
+            }
+        }
+        // Drop stubs reintroduced by bad sidecars (e.g. genre "e").
+        let _ = db.clear_weak_studio_placeholders();
+    }
+    let marker = read_legacy_import_marker(data_dir);
+    let previous = marker
+        .as_ref()
+        .map(|m| m.accounts.clone())
+        .unwrap_or_default();
+    let outcomes = import_personal_data(db, data_dir, music_root, opts, previous, &mut report)?;
+
+    log_legacy_import_report(&report);
+    if !opts.dry_run && report.kord_found {
+        let prev = marker.unwrap_or_default();
+        write_legacy_import_marker(
+            data_dir,
+            &LegacyImportMarker {
+                version: LEGACY_IMPORT_MARKER_VERSION,
+                imported_at: prev.imported_at.or_else(|| Some(report.ran_at.clone())),
+                music_root: Some(report.music_root.clone()),
+                album_meta_merged: prev.album_meta_merged + report.album_meta_merged,
+                track_meta_merged: prev.track_meta_merged + report.track_meta_merged,
+                accounts: outcomes,
+                last_report: Some(report.clone()),
+            },
+        )?;
+        let t = &report.totals;
+        crate::diagnostics::log_activity(
+            data_dir,
+            crate::diagnostics::ActivityEvent::new(
+                "system",
+                "legacyImport",
+                format!(
+                    "import dalla versione precedente: {} account, {} preferiti, {} playlist, {} mood, {} brani bloccati",
+                    report.imported_accounts(),
+                    t.favorites,
+                    t.playlists,
+                    t.moods,
+                    t.excluded_tracks
+                ),
+            )
+            .params(json!({
+                "accounts": report.imported_accounts(),
+                "favorites": t.favorites,
+                "playlists": t.playlists,
+                "moods": t.moods,
+                "blocked": t.excluded_tracks + t.excluded_albums,
+            })),
+        );
+    }
+    Ok(report)
+}
+
+fn log_legacy_import_report(report: &LegacyImportReport) {
+    let t = &report.totals;
+    info!(
+        trigger = ?report.trigger,
+        dry_run = report.dry_run,
+        music_root = %report.music_root,
+        album_meta_merged = report.album_meta_merged,
+        track_meta_merged = report.track_meta_merged,
+        accounts_imported = report.imported_accounts(),
+        accounts_added = report.accounts_added,
+        favorites = t.favorites,
+        playlists = t.playlists,
+        playlist_tracks = t.playlist_tracks,
+        moods = t.moods,
+        blocked_tracks = t.excluded_tracks,
+        blocked_albums = t.excluded_albums,
+        play_counts = t.play_counts,
+        recent = t.recent,
+        settings = t.settings,
+        plectr_bests = t.plectr_bests,
+        selections = t.selections,
+        theme_backgrounds = t.theme_backgrounds,
+        unmatched_paths = report.unmatched_count,
+        "legacy import finished"
+    );
+    for a in &report.accounts {
+        info!(
+            legacy_account = %a.legacy_id,
+            hub_account = %a.hub_id,
+            status = ?a.status,
+            reason = a.reason.as_deref().unwrap_or(""),
+            created = a.created,
+            favorites = a.counts.favorites,
+            playlists = a.counts.playlists,
+            moods = a.counts.moods,
+            blocked_tracks = a.counts.excluded_tracks,
+            blocked_albums = a.counts.excluded_albums,
+            play_counts = a.counts.play_counts,
+            settings = a.counts.settings,
+            unmatched_paths = a.unmatched_count,
+            "legacy import account"
+        );
+        if a.unmatched_count > 0 {
+            warn!(
+                legacy_account = %a.legacy_id,
+                count = a.unmatched_count,
+                first = ?a.unmatched_paths.iter().take(5).collect::<Vec<_>>(),
+                "legacy paths not found in the library (kept; they link when the files are indexed)"
+            );
+        }
+        if !a.unmatched_album_keys.is_empty() {
+            warn!(
+                legacy_account = %a.legacy_id,
+                albums = ?a.unmatched_album_keys,
+                "legacy blocked albums not found in the library"
+            );
+        }
+    }
+}
+
+/// Merge legacy `.kord` data into the hub (admin panel and CLI). Accounts
+/// imported earlier from the same files are left alone.
+pub fn sync_legacy_library_data(
+    db: &Db,
+    data_dir: &Path,
+    music_root: &Path,
+) -> Result<LegacyImportReport> {
+    sync_legacy_library_data_with(db, data_dir, music_root, LegacyImportMode::Merge)
+}
+
+pub fn sync_legacy_library_data_with(
+    db: &Db,
+    data_dir: &Path,
+    music_root: &Path,
+    mode: LegacyImportMode,
+) -> Result<LegacyImportReport> {
+    run_legacy_import(
+        db,
+        data_dir,
+        music_root,
+        LegacyImportOptions {
+            mode,
+            trigger: LegacyImportTrigger::Manual,
+            ..Default::default()
+        },
+    )
+}
+
+/// First start on a legacy library: import everything (see
+/// [`run_legacy_import`]) and write the marker. Accounts already used in
+/// RE-KORD 5 are merged too, without replacing anything they have. Needs an
 /// indexed catalog (album ids, track links): run it after a scan.
 pub fn auto_import_legacy_once(
     db: &Db,
     data_dir: &Path,
     music_root: &Path,
-) -> Result<Option<LegacySyncReport>> {
+) -> Result<Option<LegacyImportReport>> {
     if !legacy_import_pending(data_dir, music_root) {
         return Ok(None);
     }
-    // A broken legacy database must not block the personal data (nor be
-    // retried on every scan): log it and go on.
-    let (album_meta_merged, track_meta_merged) = sync_restored_library_metadata(db, music_root)
-        .unwrap_or_else(|e| {
-            warn!(error = %e, "legacy library metadata import failed");
-            (0, 0)
-        });
-    let _ = db.clear_weak_studio_placeholders();
-    let (counts, outcomes) = import_legacy_accounts_personal_data_opts(
+    run_legacy_import(
         db,
         data_dir,
         music_root,
-        LegacyImportMode::Merge,
-        true,
-    )?;
-    let (
-        accounts_moods_synced,
-        moods_imported,
-        favorites_linked,
-        playlists_imported,
-        playlist_tracks_linked,
-        selections_imported,
-        accounts_registry,
-    ) = counts;
-    write_legacy_import_marker(
-        data_dir,
-        &LegacyImportMarker {
-            imported_at: Some(chrono::Utc::now().to_rfc3339()),
-            music_root: Some(music_root.to_string_lossy().into_owned()),
-            album_meta_merged,
-            track_meta_merged,
-            accounts: outcomes,
+        LegacyImportOptions {
+            trigger: LegacyImportTrigger::Auto,
+            ..Default::default()
         },
-    )?;
-    info!(
-        album_meta_merged,
-        track_meta_merged,
-        accounts_moods_synced,
-        favorites_linked,
-        playlists_imported,
-        selections_imported,
-        accounts_registry,
-        "legacy library imported (first start)"
-    );
-    Ok(Some(LegacySyncReport {
-        album_meta_merged,
-        track_meta_merged,
-        accounts_moods_synced,
-        moods_imported,
-        favorites_linked,
-        playlists_imported,
-        playlist_tracks_linked,
-        selections_imported,
-        accounts_registry,
-    }))
+    )
+    .map(Some)
+}
+
+/// What the admin panel shows about the legacy import.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyImportStatus {
+    pub music_root: Option<String>,
+    pub kord_found: bool,
+    pub pending: bool,
+    pub opted_out: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imported_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_report: Option<LegacyImportReport>,
+}
+
+pub fn legacy_import_status(data_dir: &Path, music_root: Option<&Path>) -> LegacyImportStatus {
+    let marker = read_legacy_import_marker(data_dir);
+    LegacyImportStatus {
+        music_root: music_root.map(|p| p.to_string_lossy().into_owned()),
+        kord_found: music_root.is_some_and(|r| r.join(".kord").is_dir()),
+        pending: music_root.is_some_and(|r| legacy_import_pending(data_dir, r)),
+        opted_out: legacy_import_opted_out(),
+        imported_at: marker.as_ref().and_then(|m| m.imported_at.clone()),
+        last_report: marker.and_then(|m| m.last_report),
+    }
 }

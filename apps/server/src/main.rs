@@ -43,12 +43,23 @@ struct Args {
     #[arg(long, default_value_t = false)]
     restore_exit: bool,
 
-    /// One-shot: sync studio metadata + personal moods from music_root/.kord into the hub DB
-    #[arg(long, default_value_t = false)]
+    /// One-shot: import legacy RE-KORD data from music_root/.kord (library
+    /// metadata, accounts, favorites, playlists, moods, blocked tracks, play
+    /// counts, settings) into the hub, merging with what it already has
+    #[arg(long, visible_alias = "legacy-import", default_value_t = false)]
     sync_legacy_meta: bool,
 
-    /// Exit after --sync-legacy-meta instead of serving
+    /// With --legacy-import: print what would be imported, write nothing
     #[arg(long, default_value_t = false)]
+    legacy_import_dry_run: bool,
+
+    /// With --legacy-import: merge again accounts already imported from the
+    /// same legacy files (brings back what was removed since)
+    #[arg(long, default_value_t = false)]
+    legacy_import_force: bool,
+
+    /// Exit after --legacy-import instead of serving
+    #[arg(long, visible_alias = "legacy-import-exit", default_value_t = false)]
     sync_legacy_exit: bool,
 }
 
@@ -159,24 +170,34 @@ async fn async_main(args: Args) -> Result<()> {
             };
             let Some(root) = root else {
                 anyhow::bail!(
-                    "--sync-legacy-meta requires music_root (set via settings or --music-root)"
+                    "--legacy-import requires music_root (set via settings or --music-root)"
                 );
             };
-            info!(path = %root.display(), "syncing legacy library metadata + personal data");
-            let report = backup::sync_legacy_library_data(&state.db, &data_dir, &root)?;
+            if !root.join(".kord").is_dir() {
+                anyhow::bail!(
+                    "no legacy data: {} does not exist",
+                    root.join(".kord").display()
+                );
+            }
             info!(
-                album_meta_merged = report.album_meta_merged,
-                track_meta_merged = report.track_meta_merged,
-                accounts_moods_synced = report.accounts_moods_synced,
-                moods_imported = report.moods_imported,
-                favorites_linked = report.favorites_linked,
-                playlists_imported = report.playlists_imported,
-                playlist_tracks_linked = report.playlist_tracks_linked,
-                selections_imported = report.selections_imported,
-                accounts_registry = report.accounts_registry,
-                "legacy sync finished"
+                path = %root.display(),
+                dry_run = args.legacy_import_dry_run,
+                "importing legacy RE-KORD data"
             );
-            if args.sync_legacy_exit {
+            let report = backup::run_legacy_import(
+                &state.db,
+                &data_dir,
+                &root,
+                backup::LegacyImportOptions {
+                    trigger: backup::LegacyImportTrigger::Cli,
+                    dry_run: args.legacy_import_dry_run,
+                    force: args.legacy_import_force,
+                    ..Default::default()
+                },
+            )?;
+            // The full report (per account, unmatched paths) on stdout.
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if args.sync_legacy_exit || args.legacy_import_dry_run {
                 return Ok(());
             }
         }

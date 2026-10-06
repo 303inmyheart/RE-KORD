@@ -1578,7 +1578,10 @@ impl Db {
         Ok(if exists { Some(joined) } else { None })
     }
 
-    pub fn set_album_cover_path(&self, folder_key: &str, cover: &Path) -> Result<()> {
+    /// Point an album at its new cover file. Returns the new `cover_version`
+    /// (the same value the library API reports), so the caller can hand it to
+    /// the client for cache-busting without a second read.
+    pub fn set_album_cover_path(&self, folder_key: &str, cover: &Path) -> Result<Option<String>> {
         let conn = self.lock();
         let cover_s = cover.to_string_lossy().into_owned();
         let version = catalog::cover_version_of(cover);
@@ -1589,7 +1592,7 @@ impl Db {
             "#,
             params![folder_key, cover_s, version],
         )?;
-        Ok(())
+        Ok(version)
     }
 
     pub fn all_album_folder_keys(&self) -> Result<std::collections::HashSet<String>> {

@@ -97,8 +97,6 @@ export const LATENCY_LIMIT_MS = 150;
 export const GRACE_SECONDS = 1.5;
 /** A run that did not start from the top needs this share of notes judged. */
 export const RECORD_MIN_JUDGED_RATIO = 0.6;
-/** Visual lead-in before the audio starts (countdown pre-roll). */
-export const COUNTDOWN_LEAD_IN_SECONDS = 2;
 /** Optional "challenge" mode: the run fails below this accuracy. */
 export const CHALLENGE_FAIL_ACCURACY = 0.3;
 export const CHALLENGE_MIN_JUDGED = 20;

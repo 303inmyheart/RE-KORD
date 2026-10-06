@@ -30,6 +30,11 @@ import { parseHubQueue } from "./queueSync";
 import { buildSearchIndex, searchTracks, trackMatchesQuery, type SearchIndex } from "./search";
 import { describeError, toasts } from "./toasts.svelte";
 import { watchOtherTabs } from "./tabSync";
+import {
+  broadcastLibraryChange,
+  watchLibraryChanges,
+  type LibraryChange,
+} from "./libraryEvents";
 import { normalizeCustomTheme } from "./themeCatalog";
 import {
   applyTheme,
@@ -1394,9 +1399,13 @@ class ClientSession {
       onAccount: (id) => void this.followAccountFromTab(id),
       onPrefs: (id) => this.followPrefsFromTab(id),
     });
+    const stopLibrary = watchLibraryChanges((change) =>
+      this.applyLibraryChange(change, { broadcast: false }),
+    );
     const stopConnection = this.watchConnection();
     return () => {
       stopTabs();
+      stopLibrary();
       stopConnection();
     };
   }
@@ -1611,9 +1620,34 @@ class ClientSession {
       "albums",
       () => api.albums(),
       (v) => {
+        // Covers / names changed elsewhere (Studio, another client): the
+        // player queue and the open album follow the fresh list.
+        const prev = new Map(this.allAlbums.map((a) => [a.id, a]));
+        const changed = v.filter((a) => {
+          const old = prev.get(a.id);
+          return (
+            old != null &&
+            ((old.cover_version ?? null) !== (a.cover_version ?? null) ||
+              old.has_cover !== a.has_cover ||
+              old.name !== a.name)
+          );
+        });
         // Track covers of albums known to have none are not requested.
         noteAlbumCovers(v);
         this.allAlbums = v;
+        if (changed.length) {
+          this.applyLibraryChange(
+            {
+              albums: changed.map((a) => ({
+                id: a.id,
+                name: a.name,
+                has_cover: a.has_cover,
+                cover_version: a.cover_version ?? null,
+              })),
+            },
+            { broadcast: false },
+          );
+        }
       },
     );
   }
@@ -1685,6 +1719,11 @@ class ClientSession {
     );
     for (const rel of changes.removed) byPath.delete(rel);
     for (const track of changes.updated) byPath.set(track.rel_path, track);
+    // Edited tracks (here, in Studio or on another client) also reach the
+    // lists on screen and the player queue / bar / OS media controls.
+    if (changes.updated.length) {
+      this.applyLibraryChange({ tracks: changes.updated }, { broadcast: false });
+    }
     this.catalogTracks = [...byPath.values()].sort(
       (a, b) =>
         a.artist_name.localeCompare(b.artist_name) ||
@@ -1713,18 +1752,81 @@ class ClientSession {
    * re-render anything — call this after a metadata save instead.
    */
   patchTrack(relPath: string, patch: Partial<Track>) {
+    this.applyLibraryChange({ tracks: [{ ...patch, rel_path: relPath }] });
+  }
+
+  /**
+   * One entry point for every library edit — made here (track / album edit,
+   * cover save, Studio apply) or reported by the hub (catalog delta, album
+   * list) or by another tab. Patches the lists on screen, the album
+   * selection, the player queue (bar, Listen view, queue, OS media controls)
+   * and the cover cache-busting versions in one go, then tells other tabs.
+   * Album-level fields (`name`, `cover_version`, `has_cover`) reach every
+   * track of that album.
+   */
+  applyLibraryChange(change: LibraryChange, opts: { broadcast?: boolean } = {}) {
+    const byPath = new Map<string, Partial<Track>>();
+    for (const item of change.tracks ?? []) {
+      if (!item?.rel_path) continue;
+      const { rel_path, ...rest } = item;
+      byPath.set(rel_path, { ...byPath.get(rel_path), ...rest });
+    }
+    const byAlbum = new Map<number, Partial<Album>>();
+    for (const item of change.albums ?? []) {
+      if (typeof item?.id !== "number") continue;
+      const { id, ...rest } = item;
+      byAlbum.set(id, { ...byAlbum.get(id), ...rest });
+    }
+    if (!byPath.size && !byAlbum.size) return;
+
+    const fromAlbum = new Map<number, Partial<Track>>();
+    for (const [id, a] of byAlbum) {
+      const p: Partial<Track> = {};
+      if (a.name != null) p.album_name = a.name;
+      if ("cover_version" in a) p.cover_version = a.cover_version ?? null;
+      if (a.has_cover != null) p.has_cover = a.has_cover;
+      if (Object.keys(p).length) fromAlbum.set(id, p);
+    }
+    const patchFor = (tr: Track): Partial<Track> | null => {
+      const a = tr.album_id != null ? fromAlbum.get(tr.album_id) : undefined;
+      const own = byPath.get(tr.rel_path);
+      if (!a && !own) return null;
+      return { ...a, ...own };
+    };
     const apply = (list: Track[]) => {
-      const i = list.findIndex((tr) => tr.rel_path === relPath);
-      if (i < 0) return list;
-      const next = list.slice();
-      next[i] = { ...list[i]!, ...patch };
-      return next;
+      let changed = false;
+      const next = list.map((tr) => {
+        const p = patchFor(tr);
+        if (!p) return tr;
+        changed = true;
+        return { ...tr, ...p };
+      });
+      return changed ? next : list;
     };
     this.catalogTracks = apply(this.catalogTracks);
     this.favorites = apply(this.favorites);
     this.tracks = apply(this.tracks);
     this.playlistTracks = apply(this.playlistTracks);
+
+    if (byAlbum.size) {
+      this.allAlbums = this.allAlbums.map((a) =>
+        byAlbum.has(a.id) ? { ...a, ...byAlbum.get(a.id) } : a,
+      );
+      noteAlbumCovers(this.allAlbums.filter((a) => byAlbum.has(a.id)));
+      const sel = this.selectedAlbum;
+      // In place: the album page keeps its identity (no tracklist reload).
+      if (sel && byAlbum.has(sel.id)) Object.assign(sel, byAlbum.get(sel.id));
+    }
+
+    player.patchTracks(patchFor);
     this.tick += 1;
+    if (opts.broadcast !== false) broadcastLibraryChange(change);
+  }
+
+  /** A new cover was saved for an album: every view and the player follow. */
+  noteAlbumCoverChanged(albumId: number, version?: string | number | null) {
+    const v = version != null && version !== "" ? version : Date.now();
+    this.applyLibraryChange({ albums: [{ id: albumId, has_cover: true, cover_version: v }] });
   }
 
   bumpMoodPrefs() {

@@ -37,7 +37,7 @@
   }
 </script>
 
-<nav class="bottom" aria-label={t("nav.mobileAria")}>
+<nav class="bottom mobile-bottom-nav" aria-label={t("nav.mobileAria")}>
   <div class="inner">
     <button
       type="button"
@@ -54,8 +54,8 @@
       aria-current={active === "studio" ? "page" : undefined}
       onclick={() => go("studio")}
     >
-      <!-- Static "listening" pose: never animated here (WebKitGTK cost). -->
-      <span class="icon"><GraphicEq animated={session.playing} /></span>
+      <!-- The live Studio icon, like the sidebar (legacy RekordNavIcon). -->
+      <span class="icon"><GraphicEq animated={session.playing} live /></span>
       <span class="label">{t("nav.studio")}</span>
     </button>
     <button

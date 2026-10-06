@@ -137,6 +137,7 @@
             onremoveFromQueue={() => player.removeFromQueue(index)}
             ontoggleExclude={() => player.toggleExcludeTrack(track)}
             onremove={() => player.removeFromQueue(index)}
+            removeInline={false}
           />
         {/each}
       </ul>

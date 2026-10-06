@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
-   * Mood filter: "Almeno uno / Tutti" segmented control + one labelled button
-   * per mood (glyph, name, count) filling the row. Moods with no tracks stay
-   * visible but quiet and inert.
+   * Mood filter: "Almeno uno / Tutti" segmented control + one button per mood
+   * (legacy: glyph + count, the mood's name in the tooltip / accessible label)
+   * filling the row. Moods with no tracks stay visible but quiet and inert.
    */
   import { Segmented } from "@rekord/ui";
   import TrackMoodGlyph from "../TrackMoodGlyph.svelte";
@@ -64,11 +64,11 @@
         disabled={empty}
         aria-pressed={on}
         title={t(trackMoodLabelKey(id))}
+        aria-label={`${t(trackMoodLabelKey(id))} (${count})`}
         onclick={() => ontoggle(id)}
       >
         <TrackMoodGlyph mood={id} inheritColor />
-        <span class="mood-filter__name">{t(trackMoodLabelKey(id))}</span>
-        <span class="mood-filter__count">{count}</span>
+        <span class="mood-filter__count" aria-hidden="true">{count}</span>
       </button>
     {/each}
   </div>
@@ -103,68 +103,55 @@
 
   .mood-filter__grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 100%), 1fr));
-    gap: 0.4rem;
+    grid-template-columns: repeat(auto-fill, minmax(min(4.6rem, 100%), 1fr));
+    gap: 0.45rem;
   }
 
   .mood-filter__btn {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
-    min-height: 2.6rem;
-    padding: 0.35rem 0.65rem;
-    border-radius: var(--rk-radius-md, 10px);
-    border: 1px solid color-mix(in srgb, var(--mood-c) 32%, var(--rk-line));
-    background: color-mix(in srgb, var(--mood-c) 8%, var(--rk-surface-2));
-    color: color-mix(in srgb, var(--mood-c) 75%, var(--rk-ink));
+    justify-content: center;
+    gap: 0.42rem;
+    min-height: 2.75rem;
+    padding: 0.45rem 0.52rem;
+    border-radius: var(--rk-radius-lg, 8px);
+    border: 1px solid color-mix(in srgb, var(--rk-line) 62%, transparent);
+    background: color-mix(in srgb, var(--rk-surface-2) 88%, transparent);
+    color: color-mix(in srgb, var(--rk-muted) 78%, var(--rk-ink) 22%);
     font: inherit;
-    text-align: left;
+    line-height: 1;
     cursor: pointer;
-    transition: background 0.12s ease, border-color 0.12s ease;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
   }
 
   .mood-filter__btn :global(svg) {
-    width: 1.1rem;
-    height: 1.1rem;
+    width: 1.22rem;
+    height: 1.22rem;
   }
 
-  .mood-filter__btn:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--mood-c) 60%, var(--rk-line));
+  .mood-filter__btn:hover:not(:disabled):not(.is-on) {
+    border-color: color-mix(in srgb, var(--mood-c) 45%, var(--rk-line));
+    background: color-mix(in srgb, var(--rk-surface-3) 76%, transparent);
+    color: color-mix(in srgb, var(--mood-c) 70%, var(--rk-ink));
   }
 
   .mood-filter__btn.is-on {
-    background: color-mix(in srgb, var(--mood-c) 24%, var(--rk-surface-2));
-    border-color: color-mix(in srgb, var(--mood-c) 75%, var(--rk-line));
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mood-c) 45%, transparent);
+    color: color-mix(in srgb, var(--mood-c) 90%, var(--rk-ink));
+    background: color-mix(in srgb, var(--mood-c) 16%, transparent);
+    border-color: color-mix(in srgb, var(--mood-c) 58%, var(--rk-line));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--mood-c) 22%, transparent);
   }
 
-  /* No tracks with this mood: readable but clearly inert (not a ghost at 25%). */
+  /* No tracks with this mood: inert. */
   .mood-filter__btn.is-empty {
-    cursor: default;
-    color: var(--rk-muted);
-    border-color: var(--rk-line);
-    border-style: dashed;
-    background: transparent;
-  }
-
-  .mood-filter__name {
-    min-width: 0;
-    font-size: var(--rk-fs-sm);
-    font-weight: 600;
-    color: var(--rk-ink);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .mood-filter__btn.is-empty .mood-filter__name {
-    color: var(--rk-muted);
+    cursor: not-allowed;
+    opacity: 0.45;
   }
 
   .mood-filter__count {
     font-size: var(--rk-fs-xs);
+    font-weight: 800;
     font-variant-numeric: tabular-nums;
-    color: var(--rk-muted);
+    color: inherit;
   }
 </style>

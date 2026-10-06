@@ -1,0 +1,6 @@
+{
+  "rowBadges.gapOnTitle": "Track missing date or genre in metadata",
+  "rowBadges.gapOffTitle": "Date or genre present in track metadata",
+  "rowBadges.moodOffTitle": "No mood set",
+  "rowBadges.moodOnTitle": "Moods: {{labels}}"
+}

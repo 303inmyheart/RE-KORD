@@ -1,5 +1,8 @@
 <script lang="ts">
-  /** Real pause: 70% scrim card over the stage. Input to the lanes is ignored meanwhile. */
+  /**
+   * The song is paused (from here, the dock or media keys) or Plectr opened on
+   * a paused song: a card over the lanes. Resume plays the song again at once.
+   */
   import { radioGroupKeys } from "../../lib/radioGroupKeys";
   import UiIcon from "../icons/UiIcon.svelte";
   import { t } from "../../lib/i18n.svelte";
@@ -35,15 +38,15 @@
   });
 </script>
 
-<div class="plectr-pause" role="dialog" aria-modal="true" aria-labelledby="plectr-pause-title">
+<div class="plectr-pause plectr-overlay" role="dialog" aria-modal="true" aria-labelledby="plectr-pause-title">
   <div class="plectr-pause__card">
-    <h3 id="plectr-pause-title">{t("plectr.paused.title")}</h3>
+    <h3 id="plectr-pause-title">{reason === "idle" ? t("plectr.paused.ready") : t("plectr.paused.title")}</h3>
     {#if reason !== "user"}
       <p class="plectr-pause__hint">{t(`plectr.paused.reason.${reason}`)}</p>
     {/if}
     <button bind:this={resumeBtn} type="button" class="rk-btn rk-btn--primary plectr-pause__main" onclick={onresume}>
       <UiIcon name="play" />
-      {t("plectr.resume")}
+      {reason === "idle" ? t("plectr.pick.play") : t("plectr.resume")}
     </button>
     <div class="plectr-pause__row">
       <button type="button" class="rk-btn rk-btn--secondary" onclick={onrestart}>

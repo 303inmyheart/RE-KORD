@@ -17,6 +17,7 @@
 <script lang="ts">
   import { CoverArt, type SelectOption } from "@rekord/ui";
   import { coverUrlFor, type Track } from "../lib/api";
+  import { floating } from "../lib/floatingPopover";
   import { formatTime, player } from "../lib/player";
   import { t, tp } from "../lib/i18n.svelte";
   import { session } from "../lib/session.svelte";
@@ -45,6 +46,7 @@
     /** Like React TrackListRow: queue/playlist always available unless opted out. */
     showQueueActions = true,
     showPlaylistAction = true,
+    removeInline = true,
     autoFocusActive = true,
     extraActions = null as import("svelte").Snippet | null,
     reorderIndex = null,
@@ -79,6 +81,8 @@
     playlistOptions?: SelectOption[];
     showQueueActions?: boolean;
     showPlaylistAction?: boolean;
+    /** `onremove` also gets the legacy red × among the row actions (playlists). */
+    removeInline?: boolean;
     autoFocusActive?: boolean;
     extraActions?: import("svelte").Snippet | null;
     /** Position in the reorderable list; enables the drag grip when set. */
@@ -135,6 +139,12 @@
     else player.removeFromQueueById(track.id);
   }
 
+  /** Legacy: every row can open the track editor, wherever it is listed. */
+  function editTrack() {
+    if (onedit) onedit();
+    else session.openTrackEdit(track);
+  }
+
   function addToPlaylist(playlistId: string) {
     if (onaddToPlaylist) onaddToPlaylist(playlistId);
     else void session.addToPlaylist(playlistId, track.id);
@@ -170,11 +180,13 @@
     };
     const releaseExclusive = claimTrackRowPopover(dismiss);
 
+    // Menus are lifted to <body> (use:floating): only one is open at a time.
     const insidePopover = (t: EventTarget | null) => {
       if (!(t instanceof Node)) return false;
       if (overflowEl?.contains(t)) return true;
       if (playlistAnchorEl?.contains(t)) return true;
-      return false;
+      const el = t instanceof Element ? t : t.parentElement;
+      return Boolean(el?.closest(".track-row__overflow-menu, .track-row__playlist-popover"));
     };
 
     const onPointerDown = (e: PointerEvent) => {
@@ -266,13 +278,11 @@
       <span class="track-row__title">{track.title}</span>
       <span class="track-row__stats">
         <span class="track-row__duration">{formatTime(track.duration_ms / 1000)}</span>
-        {#if plays > 0}
-          <span class="track-row__plays" title={tp("ui.trackRow.plays", plays)}>
-            <svg class="track-row__plays-ic" viewBox="0 0 24 24" aria-hidden="true">
-              <path fill="currentColor" d="M8 5.5v13l10.5-6.5z" />
-            </svg>{plays}
-          </span>
-        {/if}
+        <span
+          class="track-row__plays"
+          title={tp("ui.trackRow.plays", plays)}
+          aria-label={tp("ui.trackRow.plays", plays)}
+        >({plays})</span>
         <MetaBadgeCluster {missingMeta} {moods} variant="inline" />
         <TrackLyricsIcon kind={trackLyricsKind} class="track-row__lyrics-inline--stats" />
       </span>
@@ -286,25 +296,6 @@
   </button>
 
   <div class="track-row__actions">
-    {#if reorderIndex != null}
-      <button
-        type="button"
-        class="track-row__ic track-row__grip"
-        data-reorder-handle
-        title={t("trackRow.reorderTitle")}
-        aria-label={t("trackRow.reorderAria")}
-        onkeydown={(e) => {
-          if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-          e.preventDefault();
-          onreorderStep?.(e.key === "ArrowUp" ? -1 : 1);
-        }}
-      >
-        <span class="track-row__ic-glyph track-row__ic-glyph--svg" aria-hidden="true">
-          <UiIcon name="dragHandle" />
-        </span>
-      </button>
-    {/if}
-
     <div class="track-row__tools track-row__tools--wide">
       {#if showQueueActions}
         {#if inQueue}
@@ -366,7 +357,12 @@
             </span>
           </button>
           {#if playlistOpen}
-            <div class="track-row__playlist-popover rk-scroll" role="dialog" aria-label={t("trackRow.playlistTitle")}>
+            <div
+              class="track-row__playlist-popover rk-scroll"
+              role="dialog"
+              aria-label={t("trackRow.playlistTitle")}
+              use:floating={{ anchor: playlistAnchorEl, placement: "bottom-end" }}
+            >
               {#if resolvedPlaylistOptions.length}
                 <ul class="track-row__playlist-popover-list">
                   {#each resolvedPlaylistOptions as opt (opt.value)}
@@ -392,19 +388,17 @@
         </div>
       {/if}
 
-      {#if onedit}
-        <button
-          type="button"
-          class="track-row__ic track-row__ic--meta"
-          title={t("trackRow.editMeta")}
-          aria-label={t("trackRow.editMeta")}
-          onclick={() => onedit?.()}
-        >
-          <span class="track-row__ic-glyph track-row__ic-glyph--svg" aria-hidden="true">
-            <UiIcon name="edit" />
-          </span>
-        </button>
-      {/if}
+      <button
+        type="button"
+        class="track-row__ic track-row__ic--meta"
+        title={t("trackRow.editMeta")}
+        aria-label={t("trackRow.editMeta")}
+        onclick={editTrack}
+      >
+        <span class="track-row__ic-glyph track-row__ic-glyph--svg" aria-hidden="true">
+          <UiIcon name="edit" />
+        </span>
+      </button>
 
       {#if ontoggleExclude}
         <button
@@ -430,6 +424,19 @@
         </button>
       {/if}
 
+      {#if onremove && removeInline}
+        <button
+          type="button"
+          class="track-row__ic track-row__ic--danger"
+          title={t("trackRow.remove")}
+          aria-label={t("trackRow.remove")}
+          onclick={() => onremove?.()}
+        >
+          <span class="track-row__ic-glyph track-row__ic-glyph--svg" aria-hidden="true">
+            <UiIcon name="close" />
+          </span>
+        </button>
+      {/if}
     </div>
     <div class="track-row__tools track-row__tools--compact">
       <div class="track-row__overflow" bind:this={overflowEl}>
@@ -450,7 +457,11 @@
           </span>
         </button>
         {#if menuOpen}
-          <ul class="track-row__overflow-menu rk-scroll" role="menu">
+          <ul
+            class="track-row__overflow-menu rk-scroll"
+            role="menu"
+            use:floating={{ anchor: overflowEl, placement: "bottom-end" }}
+          >
             <li role="presentation">
               <button
                 type="button"
@@ -506,22 +517,20 @@
                 </button>
               </li>
             {/if}
-            {#if onedit}
-              <li role="presentation">
-                <button
-                  type="button"
-                  role="menuitem"
-                  class="track-row__overflow-item"
-                  title={t("trackRow.editMeta")}
-                  onclick={() => run(onedit)}
-                >
-                  <span class="track-row__overflow-item-glyph track-row__ic-glyph--svg" aria-hidden="true">
-                    <UiIcon name="edit" />
-                  </span>
-                  <span class="track-row__overflow-item-label">{t("trackRow.overflowEdit")}</span>
-                </button>
-              </li>
-            {/if}
+            <li role="presentation">
+              <button
+                type="button"
+                role="menuitem"
+                class="track-row__overflow-item"
+                title={t("trackRow.editMeta")}
+                onclick={() => run(editTrack)}
+              >
+                <span class="track-row__overflow-item-glyph track-row__ic-glyph--svg" aria-hidden="true">
+                  <UiIcon name="edit" />
+                </span>
+                <span class="track-row__overflow-item-label">{t("trackRow.overflowEdit")}</span>
+              </button>
+            </li>
             {#if ontoggleExclude}
               <li role="presentation">
                 <button
@@ -565,7 +574,12 @@
           </ul>
         {/if}
         {#if playlistOpen && showPlaylistAction}
-          <div class="track-row__playlist-popover rk-scroll" role="dialog" aria-label={t("trackRow.playlistTitle")}>
+          <div
+            class="track-row__playlist-popover rk-scroll"
+            role="dialog"
+            aria-label={t("trackRow.playlistTitle")}
+            use:floating={{ anchor: overflowEl, placement: "bottom-end" }}
+          >
             {#if resolvedPlaylistOptions.length}
               <ul class="track-row__playlist-popover-list">
                 {#each resolvedPlaylistOptions as opt (opt.value)}
@@ -590,6 +604,26 @@
         {/if}
       </div>
     </div>
+
+    <!-- Reorder handle last, where legacy had its ↑/↓ buttons. -->
+    {#if reorderIndex != null}
+      <button
+        type="button"
+        class="track-row__ic track-row__grip"
+        data-reorder-handle
+        title={t("trackRow.reorderTitle")}
+        aria-label={t("trackRow.reorderAria")}
+        onkeydown={(e) => {
+          if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+          e.preventDefault();
+          onreorderStep?.(e.key === "ArrowUp" ? -1 : 1);
+        }}
+      >
+        <span class="track-row__ic-glyph track-row__ic-glyph--svg" aria-hidden="true">
+          <UiIcon name="dragHandle" />
+        </span>
+      </button>
+    {/if}
 
     {#if extraActions}
       {@render extraActions()}

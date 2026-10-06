@@ -1,0 +1,241 @@
+{
+  "version": 1,
+  "revision": 4263,
+  "favorites": [
+    "Artista Uno/Primo Album/01 - Brano Uno.mp3",
+    "Band Due/Live： Night？/01 - Canzone ⧸ Remix.mp3",
+    "Artista Uno/Primo Album/99 - Cancellato.mp3"
+  ],
+  "recent": [
+    {
+      "id": "Artista Uno/Primo Album/02 - Brano Due.mp3",
+      "relPath": "Artista Uno/Primo Album/02 - Brano Due.mp3",
+      "title": "Brano Due",
+      "artist": "Artista Uno",
+      "album": "Primo Album",
+      "meta": {
+        "fileName": "02 - Brano Due.mp3",
+        "size": 3413266,
+        "mtime": 1777905053748.339,
+        "releaseDate": "2024-01-01",
+        "genre": "Hip Hop; Pop",
+        "lyrics": null,
+        "lyricsAutoChecked": false,
+        "moods": [],
+        "durationMs": 210000,
+        "trackNumber": 0,
+        "discNumber": 0,
+        "source": "discogs",
+        "url": "https://example.invalid/release/1",
+        "plectrBest": null
+      }
+    },
+    {
+      "id": "Artista Uno/Primo Album/01 - Brano Uno.mp3",
+      "relPath": "Artista Uno/Primo Album/01 - Brano Uno.mp3",
+      "title": "Brano Uno",
+      "artist": "Artista Uno",
+      "album": "Primo Album",
+      "meta": {
+        "fileName": "01 - Brano Uno.mp3",
+        "size": 3413266,
+        "mtime": 1777905053748.339,
+        "releaseDate": "2024-01-01",
+        "genre": "Hip Hop; Pop",
+        "lyrics": null,
+        "lyricsAutoChecked": false,
+        "moods": [],
+        "durationMs": 210000,
+        "trackNumber": 0,
+        "discNumber": 0,
+        "source": "discogs",
+        "url": "https://example.invalid/release/1",
+        "plectrBest": null
+      }
+    },
+    {
+      "id": "Band Due/Città/02 - Perché.mp3",
+      "relPath": "Band Due/Città/02 - Perché.mp3",
+      "title": "Perché",
+      "artist": "Band Due",
+      "album": "Città",
+      "meta": {
+        "fileName": "02 - Perché.mp3",
+        "size": 3413266,
+        "mtime": 1777905053748.339,
+        "releaseDate": "2024-01-01",
+        "genre": "Hip Hop; Pop",
+        "lyrics": null,
+        "lyricsAutoChecked": false,
+        "moods": [],
+        "durationMs": 210000,
+        "trackNumber": 0,
+        "discNumber": 0,
+        "source": "discogs",
+        "url": "https://example.invalid/release/1",
+        "plectrBest": null
+      }
+    }
+  ],
+  "trackPlayCounts": {
+    "Artista Uno/Primo Album/01 - Brano Uno.mp3": 14,
+    "Artista Uno/Primo Album/02 - Brano Due.mp3": 1,
+    "Band Due/Città/02 - Perché.mp3": 3,
+    "Artista Uno/Primo Album/99 - Cancellato.mp3": 2
+  },
+  "playlists": [
+    {
+      "id": "792c795a-01af-4d1d-b836-feb2b68284b9",
+      "name": "Queue Test Playlist - 01",
+      "tracks": [
+        {
+          "relPath": "Band Due/Live： Night？/01 - Canzone ⧸ Remix.mp3",
+          "title": "Canzone / Remix (Slowed)",
+          "artist": "Band Due",
+          "album": "Live: Night?"
+        },
+        {
+          "relPath": "Artista Uno/Primo Album/03 - Brano Tre.mp3",
+          "title": "Brano Tre",
+          "artist": "Artista Uno",
+          "album": "Primo Album"
+        }
+      ]
+    },
+    {
+      "id": "a3f1c2d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "name": "Queue Test Playlist - 01",
+      "tracks": [
+        {
+          "relPath": "Artista Uno/Primo Album/02 - Brano Due.mp3",
+          "title": "Brano Due",
+          "artist": "Artista Uno",
+          "album": "Primo Album"
+        }
+      ]
+    },
+    {
+      "id": "c0ffee00-1111-4222-8333-944455556666",
+      "name": "Mix",
+      "tracks": [
+        {
+          "relPath": "artista uno/primo album/04 - brano quattro.mp3",
+          "title": "Brano Quattro",
+          "artist": "Artista Uno",
+          "album": "Primo Album"
+        },
+        {
+          "relPath": "Artista Uno/Tracce/05 - Singolo.mp3",
+          "title": "Singolo",
+          "artist": "Artista Uno",
+          "album": "Tracks"
+        },
+        {
+          "relPath": "Artista Uno/Primo Album/99 - Cancellato.mp3",
+          "title": "Cancellato",
+          "artist": "Artista Uno",
+          "album": "Primo Album"
+        }
+      ]
+    }
+  ],
+  "queue": {
+    "tracks": [
+      {
+        "id": "Artista Uno/Primo Album/02 - Brano Due.mp3",
+        "relPath": "Artista Uno/Primo Album/02 - Brano Due.mp3",
+        "title": "Brano Due",
+        "artist": "Artista Uno",
+        "album": "Primo Album",
+        "meta": {
+          "fileName": "02 - Brano Due.mp3",
+          "size": 3413266,
+          "mtime": 1777905053748.339,
+          "releaseDate": "2024-01-01",
+          "genre": "Hip Hop; Pop",
+          "lyrics": null,
+          "lyricsAutoChecked": false,
+          "moods": [],
+          "durationMs": 210000,
+          "trackNumber": 0,
+          "discNumber": 0,
+          "source": "discogs",
+          "url": "https://example.invalid/release/1",
+          "plectrBest": null
+        }
+      }
+    ],
+    "currentIndex": 0
+  },
+  "settings": {
+    "theme": "midnight",
+    "customTheme": {
+      "bg": "#181818",
+      "section": "#181818",
+      "accent": "#1a5fb4",
+      "accent2": "#99c1f1",
+      "bgImageFit": "contain",
+      "bgMode": "image",
+      "bgImage": "jpg",
+      "bgImageRev": 1782740539486
+    },
+    "vizMode": "mirror",
+    "restoreSession": true,
+    "defaultTab": "dashboard",
+    "locale": "en",
+    "libBrowse": "artists",
+    "libOverviewSort": "name",
+    "artistAlbumSort": "date",
+    "audioCrossfadeSec": 5,
+    "plectrDisableVizBackdrop": false,
+    "glassSurfaces": true,
+    "glassOpacity": 62
+  },
+  "shuffleExcludedAlbumIds": [
+    "Band Due::Live： Night？",
+    "Gruppo Sparito::Album Perso"
+  ],
+  "shuffleExcludedTrackRelPaths": [
+    "Artista Uno/Primo Album/01 - Brano Uno.mp3",
+    "Artista Uno/Primo Album/03 - Brano Tre.mp3",
+    "Band Due/Città/02 - Perché.mp3"
+  ],
+  "trackMoods": {
+    "Artista Uno/Primo Album/01 - Brano Uno.mp3": [
+      "chill_relax",
+      "focus_study",
+      "dreamy_ethereal"
+    ],
+    "Artista Uno/Primo Album/03 - Brano Tre.mp3": [
+      "aggressive_heavy",
+      "bogus",
+      "uplifting_happy"
+    ],
+    "Band Due/Città/02 - Perché.mp3": [
+      "sad_melancholy"
+    ]
+  },
+  "plectrBests": {
+    "Artista Uno/Primo Album/01 - Brano Uno.mp3": {
+      "score": 27630,
+      "grade": "D",
+      "accuracy": 0.4448818897637795,
+      "maxCombo": 9,
+      "hits": 113,
+      "misses": 141,
+      "updatedAt": "2026-06-18T13:52:20.899Z"
+    },
+    "Artista Uno/Primo Album/02 - Brano Due.mp3": {
+      "score": 11400,
+      "grade": "D",
+      "accuracy": 0.20408163265306123,
+      "maxCombo": 21,
+      "hits": 30,
+      "misses": 117,
+      "updatedAt": "2026-06-16T10:26:25.683Z"
+    }
+  },
+  "playlistsMigrated": true,
+  "migratedLegacy": true,
+  "trackMoodsMigrated": true
+}

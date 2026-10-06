@@ -174,3 +174,27 @@ test("locale: it / en / de are kept, anything else falls back to Italian", async
   assert.equal(browserLocale(["fr", "es"]), "it");
   assert.equal(browserLocale([]), "it");
 });
+
+test("saving live $state collections (edit-track moods) never freezes the proxy", async () => {
+  // Regression: the track edit dialog saved `{ [relPath]: draftMoods }` with
+  // `draftMoods` a `$state` array; freezing the cached copy froze the proxy
+  // itself and Svelte threw `state_descriptors_fixed`, so nothing was saved.
+  const { proxy } = await import("svelte/internal/client");
+  const draftMoods = proxy(["chill_relax", "focus_study"]);
+  const excluded = proxy([KEPT]);
+  assert.throws(() => Object.freeze(proxy(["x"])), /state_descriptors_fixed/);
+  assert.doesNotThrow(() =>
+    patchUserPrefs({
+      trackMoods: { ...loadUserPrefs().trackMoods, [KEPT]: draftMoods },
+      excludedRelPaths: excluded,
+    }),
+  );
+  const saved = loadUserPrefs();
+  assert.deepEqual([...saved.trackMoods[KEPT]], ["chill_relax", "focus_study"]);
+  assert.deepEqual([...saved.excludedRelPaths], [KEPT]);
+  assert.ok(Object.isFrozen(saved.trackMoods[KEPT]));
+  // The caller's live state stays editable.
+  draftMoods.push("party_dance");
+  assert.equal(draftMoods.length, 3);
+  assert.deepEqual([...loadUserPrefs().trackMoods[KEPT]], ["chill_relax", "focus_study"]);
+});

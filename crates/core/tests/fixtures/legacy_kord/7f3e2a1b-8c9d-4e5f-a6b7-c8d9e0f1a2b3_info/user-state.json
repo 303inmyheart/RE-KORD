@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "revision": 268,
+  "favorites": [],
+  "recent": [
+    {
+      "id": "Artista Uno/Primo Album/01 - Brano Uno.mp3",
+      "relPath": "Artista Uno/Primo Album/01 - Brano Uno.mp3",
+      "title": "Brano Uno",
+      "artist": "Artista Uno",
+      "album": "Primo Album",
+      "meta": {
+        "fileName": "01 - Brano Uno.mp3",
+        "size": 3413266,
+        "mtime": 1777905053748.339,
+        "releaseDate": "2024-01-01",
+        "genre": "Hip Hop; Pop",
+        "lyrics": null,
+        "lyricsAutoChecked": false,
+        "moods": [],
+        "durationMs": 210000,
+        "trackNumber": 0,
+        "discNumber": 0,
+        "source": "discogs",
+        "url": "https://example.invalid/release/1",
+        "plectrBest": null
+      }
+    }
+  ],
+  "trackPlayCounts": {
+    "Artista Uno/Primo Album/01 - Brano Uno.mp3": 1
+  },
+  "playlists": [
+    {
+      "id": "7c5eb944-ebdf-46d3-878f-a76059a0777c",
+      "name": "fibra",
+      "tracks": [
+        {
+          "relPath": "Artista Uno/Primo Album/01 - Brano Uno.mp3",
+          "title": "Brano Uno",
+          "artist": "Artista Uno",
+          "album": "Primo Album"
+        }
+      ]
+    }
+  ],
+  "queue": {
+    "tracks": [],
+    "currentIndex": 0
+  },
+  "settings": {
+    "theme": "midnight",
+    "customTheme": {
+      "bg": "#181818",
+      "section": "#181818",
+      "accent": "#1a5fb4",
+      "accent2": "#99c1f1",
+      "bgImageFit": "contain",
+      "bgMode": "image",
+      "bgImage": "jpg",
+      "bgImageRev": 1782740539486
+    },
+    "vizMode": "mirror",
+    "restoreSession": true,
+    "defaultTab": "dashboard",
+    "locale": "en",
+    "libBrowse": "artists",
+    "libOverviewSort": "name",
+    "artistAlbumSort": "date",
+    "audioCrossfadeSec": 3,
+    "plectrDisableVizBackdrop": false,
+    "glassSurfaces": true,
+    "glassOpacity": 62
+  },
+  "shuffleExcludedAlbumIds": [],
+  "shuffleExcludedTrackRelPaths": [],
+  "trackMoods": {},
+  "plectrBests": {},
+  "playlistsMigrated": true,
+  "migratedLegacy": true,
+  "trackMoodsMigrated": true
+}

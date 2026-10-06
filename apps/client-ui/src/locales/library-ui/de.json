@@ -1,0 +1,6 @@
+{
+  "rowBadges.gapOnTitle": "Titel ohne Datum oder Genre in den Metadaten",
+  "rowBadges.gapOffTitle": "Datum oder Genre in den Titel-Metadaten vorhanden",
+  "rowBadges.moodOffTitle": "Keine Stimmung festgelegt",
+  "rowBadges.moodOnTitle": "Stimmungen: {{labels}}"
+}

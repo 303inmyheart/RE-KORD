@@ -68,6 +68,8 @@
   let timeRef = 0;
   let timeStamp = typeof performance !== "undefined" ? performance.now() : 0;
   let resize: (() => void) | null = null;
+  /** How early the synced line switches (s), see `karaokeActive`. */
+  const KARAOKE_LEAD_SEC = 0.18;
 
   const activeMode = $derived((mode ?? prefsMode) as VizMode);
 
@@ -84,16 +86,61 @@
       ? parsedLrc[lrcIdx + 1]?.text?.trim() || ""
       : "",
   );
-  const plainLyrics = $derived(
-    !parsedLrc.length && lyrics.trim()
-      ? lyrics
+
+  // ---- Karaoke (legacy look: big accent line, dim neighbours, dark stage) --
+  // Every line sits in one column that glides (transform only) so the active
+  // line stays centred, instead of the three lines being swapped in place.
+
+  /** Lines shown by karaoke: synced LRC, else plain text (legacy fallback). */
+  const plainLines = $derived(
+    parsedLrc.length || !lyrics.trim()
+      ? []
+      : lyrics
           .split(/\r?\n/)
-          .map((l) => l.trim())
-          .filter(Boolean)
-          .slice(0, 12)
-          .join("\n")
-      : "",
+          .map((l) => l.replace(/\[[^\]]*]/g, "").trim())
+          .filter(Boolean),
   );
+  const karaokeSynced = $derived(parsedLrc.length > 0);
+  const karaokeLines = $derived(
+    karaokeSynced ? parsedLrc.map((l) => l.text.trim()) : plainLines,
+  );
+  /**
+   * Synced: the LRC line, a hair early so the glide ends on the beat (the
+   * clock only ticks a few times per second). Plain text: legacy estimate
+   * from the progress through the track.
+   */
+  const karaokeActive = $derived.by(() => {
+    if (karaokeSynced) return currentLrcLineIndex(parsedLrc, currentTime + KARAOKE_LEAD_SEC);
+    const n = plainLines.length;
+    if (!n) return -1;
+    const dur = session.duration > 0 ? session.duration : 180;
+    const progress = Math.min(0.999, Math.max(0, currentTime / dur));
+    return Math.min(n - 1, Math.floor(progress * n));
+  });
+  /** The line the column is centred on (the first one before the song starts). */
+  const karaokeFocus = $derived(Math.max(0, karaokeActive));
+  const karaokeActiveText = $derived(
+    karaokeActive >= 0 ? karaokeLines[karaokeActive] || "" : "",
+  );
+
+  let karaokeViewport: HTMLDivElement | null = $state(null);
+  let karaokeTrack: HTMLDivElement | null = $state(null);
+  let karaokeOffset = $state(0);
+  /** No glide on the first placement (track change, expand): it would sweep the whole song. */
+  let karaokeInstant = $state(true);
+  let karaokeSongKey = "";
+
+  function placeKaraoke(instant: boolean) {
+    const vp = karaokeViewport;
+    const track = karaokeTrack;
+    if (!vp || !track) return;
+    const line = track.children[karaokeFocus] as HTMLElement | undefined;
+    if (!line) return;
+    const centre = vp.clientHeight * (expanded ? 0.44 : 0.5);
+    const next = Math.round(centre - (line.offsetTop + line.offsetHeight / 2));
+    karaokeInstant = instant;
+    karaokeOffset = next;
+  }
 
   function clearLoop() {
     cancelAnimationFrame(raf);
@@ -237,6 +284,27 @@
     syncLoop();
   });
 
+  // Re-centre when the active line, the lyrics or the layout change. Runs
+  // after the DOM update, so the new line is already measured.
+  $effect(() => {
+    void karaokeFocus;
+    void expanded;
+    const lines = karaokeLines;
+    if (activeMode !== "karaoke" || !karaokeTrack) return;
+    const songKey = `${session.current?.rel_path ?? ""}|${lines.length}|${expanded ? 1 : 0}`;
+    const instant = songKey !== karaokeSongKey;
+    karaokeSongKey = songKey;
+    placeKaraoke(instant);
+  });
+
+  $effect(() => {
+    const vp = karaokeViewport;
+    if (!vp || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => placeKaraoke(true));
+    ro.observe(vp);
+    return () => ro.disconnect();
+  });
+
   $effect(() => {
     if (!expanded) return;
     const onKey = (event: KeyboardEvent) => {
@@ -363,27 +431,37 @@
     <canvas class="viz-canvas listen-viz" bind:this={canvas} aria-hidden="true"></canvas>
 
     {#if activeMode === "karaoke"}
-      <div class="viz-karaoke-overlay" aria-live="polite">
-        {#if parsedLrc.length}
-          {#if expanded && previousLrcText}
-            <p class="viz-karaoke-overlay__line viz-karaoke-overlay__line--prev">
-              {previousLrcText}
-            </p>
-          {/if}
-          <p class="viz-karaoke-overlay__line viz-karaoke-overlay__line--current">
-            {currentLrcText || "…"}
-          </p>
-          {#if expanded && nextLrcText}
-            <p class="viz-karaoke-overlay__line viz-karaoke-overlay__line--next">
-              {nextLrcText}
-            </p>
-          {/if}
-        {:else if plainLyrics}
-          <pre class="viz-karaoke-overlay__plain">{plainLyrics}</pre>
+      <div class="viz-karaoke-overlay" class:is-expanded={expanded}>
+        {#if karaokeLines.length}
+          <div class="kara-viewport" bind:this={karaokeViewport}>
+            <div
+              class="kara-track"
+              class:is-instant={karaokeInstant}
+              bind:this={karaokeTrack}
+              style:transform={`translate3d(0, ${karaokeOffset}px, 0)`}
+            >
+              {#each karaokeLines as line, i (i)}
+                {@const dist = Math.abs(i - karaokeFocus)}
+                <p
+                  class="kara-line"
+                  class:is-active={i === karaokeActive}
+                  class:is-near={dist === 1}
+                  class:is-far={dist >= 2}
+                  class:is-gone={dist >= 4}
+                  class:is-break={!line}
+                >
+                  {line || "♪"}
+                </p>
+              {/each}
+            </div>
+          </div>
+          <!-- Screen readers get the sung line only, not the moving column. -->
+          <p class="kara-sr" aria-live="polite">{karaokeActiveText}</p>
         {:else}
-          <p class="viz-karaoke-overlay__line viz-karaoke-overlay__line--current">
-            {t("listen.karaokeEmpty")}
-          </p>
+          <div class="kara-empty">
+            <p class="kara-line is-active">{session.current?.title || "…"}</p>
+            <p class="kara-empty__hint">{t("listen.karaokeEmpty")}</p>
+          </div>
         {/if}
       </div>
     {:else if activeMode === "discowall" && !session.current}
@@ -504,7 +582,6 @@
     text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
   }
 
-  .viz-karaoke-overlay,
   .viz-lyrics-overlay {
     position: absolute;
     left: max(1rem, env(safe-area-inset-left, 0px) + 0.6rem);
@@ -523,45 +600,181 @@
     z-index: 2;
   }
 
-  .viz-karaoke-overlay {
-    top: 20%;
-    bottom: auto;
-    justify-content: center;
-  }
-
-  .viz-karaoke-overlay__line,
+  /* Legacy views/visualizer.css (.viz-lyrics-overlay). */
   .viz-lyrics-overlay__current,
   .viz-lyrics-overlay__prev {
     margin: 0;
-    font-weight: 700;
-    letter-spacing: 0.01em;
-    text-shadow: 0 2px 16px rgba(0, 0, 0, 0.55);
+    max-width: 90vw;
+    align-self: center;
+    text-wrap: balance;
+    line-height: 1.2;
+    text-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.62),
+      0 6px 26px rgba(0, 0, 0, 0.55);
   }
 
-  .viz-karaoke-overlay__line--current,
   .viz-lyrics-overlay__current {
-    color: var(--rk-ink, #fff);
-    font-size: clamp(1.05rem, 2.4vw, 1.65rem);
+    font-size: clamp(1.12rem, 2.2vw, 2.05rem);
+    font-weight: 800;
+    color: color-mix(in srgb, var(--rk-accent) 76%, var(--rk-ink) 24%);
   }
 
-  .viz-karaoke-overlay__line--prev,
-  .viz-karaoke-overlay__line--next,
   .viz-lyrics-overlay__prev {
-    color: color-mix(in srgb, var(--rk-ink, #fff) 55%, transparent);
-    font-size: clamp(0.85rem, 1.6vw, 1.1rem);
+    font-size: clamp(0.92rem, 1.55vw, 1.35rem);
+    color: color-mix(in srgb, var(--rk-ink) 56%, transparent);
+    opacity: 0.52;
   }
 
-  .viz-karaoke-overlay__plain {
-    margin: 0;
-    white-space: pre-wrap;
+  /*
+   * Karaoke — legacy look (views/visualizer.css .viz-karaoke-overlay): dark
+   * stage (legacy dimmed the canvas with brightness(0.58); a flat veil is the
+   * same and costs nothing per frame), big heavy accent line, neighbours at
+   * text 58% / opacity 0.56. New: the whole song is one column that glides
+   * slowly to keep the active line centred. Only `transform` / `opacity`
+   * move; the column is its own layer, so the canvas below never repaints.
+   */
+  .viz-karaoke-overlay {
+    /* The Listen panel is short: a size that leaves the neighbours visible. */
+    --kara-size: clamp(1.1rem, 1.9vw, 1.6rem);
+    --kara-side-scale: 0.7;
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
     text-align: center;
-    color: var(--rk-ink, #fff);
-    font: inherit;
-    font-weight: 600;
-    font-size: clamp(0.9rem, 1.8vw, 1.2rem);
-    line-height: var(--rk-lh);
-    text-shadow: 0 2px 16px rgba(0, 0, 0, 0.55);
-    max-height: 50vh;
+    background: rgba(0, 0, 0, 0.32);
+  }
+
+  .viz-karaoke-overlay.is-expanded {
+    --kara-size: clamp(2rem, 4.8vw, 4.6rem);
+    --kara-side-scale: 0.5;
+    background: rgba(0, 0, 0, 0.36);
+  }
+
+  .kara-viewport {
+    position: absolute;
+    inset: 0;
     overflow: hidden;
+    padding-inline: clamp(1rem, 4vw, 3rem);
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent 0%,
+      #000 18%,
+      #000 82%,
+      transparent 100%
+    );
+    mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 82%, transparent 100%);
+  }
+
+  .viz-karaoke-overlay.is-expanded .kara-viewport {
+    padding-bottom: max(
+      env(safe-area-inset-bottom, 0px),
+      var(--viz-expanded-bottom-clear, 0px)
+    );
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent 0%,
+      #000 16%,
+      #000 76%,
+      transparent 96%
+    );
+    mask-image: linear-gradient(to bottom, transparent 0%, #000 16%, #000 76%, transparent 96%);
+  }
+
+  .kara-track {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    will-change: transform;
+    /* Slow, soft glide from line to line. */
+    transition: transform 0.95s cubic-bezier(0.33, 0, 0.2, 1);
+  }
+
+  .kara-track.is-instant {
+    transition: none;
+  }
+
+  .kara-line {
+    margin: 0;
+    max-width: min(90vw, 100%);
+    padding-block: 0.08em;
+    font-size: var(--kara-size);
+    font-weight: 850;
+    line-height: 1.12;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+    color: color-mix(in srgb, var(--rk-ink) 58%, transparent);
+    opacity: 0.32;
+    transform: scale(var(--kara-side-scale));
+    transform-origin: center;
+    text-shadow: 0 2px 3px rgba(0, 0, 0, 0.6);
+    transition:
+      transform 0.6s cubic-bezier(0.33, 0, 0.2, 1),
+      opacity 0.6s ease,
+      color 0.6s ease;
+  }
+
+  .kara-line.is-near {
+    opacity: 0.56;
+  }
+
+  .kara-line.is-far {
+    opacity: 0.26;
+  }
+
+  .kara-line.is-gone {
+    opacity: 0;
+  }
+
+  .kara-line.is-break {
+    font-weight: 600;
+  }
+
+  .kara-line.is-active {
+    opacity: 1;
+    transform: scale(1);
+    color: color-mix(in srgb, var(--rk-accent) 80%, var(--rk-ink) 20%);
+    text-shadow:
+      0 2px 3px rgba(0, 0, 0, 0.72),
+      0 10px 34px rgba(0, 0, 0, 0.62);
+  }
+
+  .kara-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    padding: clamp(1rem, 4vw, 3rem);
+  }
+
+  .kara-empty__hint {
+    margin: 0;
+    font-size: var(--rk-fs-sm);
+    font-weight: 600;
+    color: color-mix(in srgb, var(--rk-ink) 58%, transparent);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  }
+
+  .kara-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .kara-track,
+    .kara-line {
+      transition: none;
+    }
   }
 </style>

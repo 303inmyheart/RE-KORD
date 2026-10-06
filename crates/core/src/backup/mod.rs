@@ -168,28 +168,6 @@ fn extract_prefix(
     Ok(n)
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacySyncReport {
-    pub album_meta_merged: u32,
-    pub track_meta_merged: u32,
-    pub accounts_moods_synced: u32,
-    pub moods_imported: u32,
-    pub favorites_linked: u32,
-    pub playlists_imported: u32,
-    pub playlist_tracks_linked: u32,
-    pub selections_imported: u32,
-    pub accounts_registry: u32,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum MoodImportMode {
-    /// Insert missing mood keys only (safe after routine scans).
-    FillEmpty,
-    /// Replace hub moods with legacy `.kord` map (repair / one-shot sync).
-    ReplaceFromLegacy,
-}
-
 /// How `.kord` personal data meets what the hub already has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LegacyImportMode {

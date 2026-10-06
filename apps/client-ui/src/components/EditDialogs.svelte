@@ -148,18 +148,14 @@
       const prev = { ...loadUserPrefs().trackMoods };
       // Stable key = rel_path (legacy parity / survives a re-scan).
       delete prev[String(tr.id)];
-      const trackMoods = { ...prev, [tr.rel_path]: draftMoods };
+      const trackMoods = { ...prev, [tr.rel_path]: $state.snapshot(draftMoods) };
       patchUserPrefs({ trackMoods });
       session.bumpMoodPrefs();
-      tr.title = draftTitle.trim() || tr.title;
-      tr.genre = genre;
-      if (releaseDate) tr.release_date = releaseDate;
-      tr.lyrics = draftLyrics || null;
-      // Lists are $state.raw: replace the track in them (also bumps session.tick).
+      // Lists, the queue, the player bar and the OS media controls follow.
       session.patchTrack(tr.rel_path, {
-        title: tr.title,
+        title: draftTitle.trim() || tr.title,
         genre,
-        lyrics: tr.lyrics,
+        lyrics: draftLyrics || null,
         ...(releaseDate ? { release_date: releaseDate } : {}),
       });
       session.closeEdit();
@@ -263,20 +259,19 @@
         label: label || undefined,
         country: country || undefined,
       });
-      a.name = draftAlbumTitle.trim() || a.name;
-      if (releaseDate) a.release_date = releaseDate;
-      a.label = label || null;
-      a.country = country || null;
-      a.has_album_meta = true;
-      // `allAlbums` is $state.raw: swap in a copy so grids and Studio scans see it.
-      const patch = {
-        name: a.name,
-        release_date: a.release_date,
-        label: a.label,
-        country: a.country,
-        has_album_meta: true,
-      };
-      session.allAlbums = session.allAlbums.map((x) => (x.id === a.id ? { ...x, ...patch } : x));
+      // Album page, grids, its tracks (album name) and the player bar follow.
+      session.applyLibraryChange({
+        albums: [
+          {
+            id: a.id,
+            name: draftAlbumTitle.trim() || a.name,
+            ...(releaseDate ? { release_date: releaseDate } : {}),
+            label: label || null,
+            country: country || null,
+            has_album_meta: true,
+          },
+        ],
+      });
       session.closeEdit();
     } catch (e) {
       editError = e instanceof Error ? e.message : String(e);
@@ -346,8 +341,9 @@
     busy = true;
     editError = "";
     try {
-      await api.artworkUpload(a.folder_key, coverFile);
-      a.has_cover = true;
+      const res = await api.artworkUpload(a.folder_key, coverFile);
+      // New `?v=` on every cover URL of the album: tiles, rows, bar, OS controls.
+      session.noteAlbumCoverChanged(a.id, res?.coverVersion);
       session.closeEdit();
     } catch (e) {
       editError = e instanceof Error ? e.message : String(e);
@@ -485,11 +481,12 @@
             class:on
             style:--mood-c={TRACK_MOOD_COLORS[id]}
             aria-pressed={on}
+            title={t(trackMoodLabelKey(id))}
+            aria-label={t(trackMoodLabelKey(id))}
             disabled={!on && draftMoods.length >= 3}
             onclick={() => toggleMood(id)}
           >
             <span class="mood-btn__glyph"><TrackMoodGlyph mood={id} inheritColor /></span>
-            <span class="mood-btn__label">{t(trackMoodLabelKey(id))}</span>
           </button>
         {/each}
       </div>
@@ -905,11 +902,11 @@
     font-size: var(--rk-fs-1);
   }
 
-  /* Mood picker: glyph + name on every chip, so the choice reads without
-     hovering. Off chips are quiet but legible (no opacity / grayscale filter). */
+  /* Mood picker (legacy): icon-only squares, the name in the tooltip. Off
+     moods are ghosted in their own hue, on moods are filled. */
   .mood-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(9.25rem, 1fr));
+    grid-template-columns: repeat(7, minmax(0, 1fr));
     gap: 0.4rem;
     margin-top: 0.1rem;
     max-width: 100%;
@@ -917,66 +914,59 @@
 
   .mood-btn {
     --mood-c: var(--rk-muted);
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 0.45rem;
+    justify-content: center;
     min-width: 0;
-    min-height: 2.25rem;
-    padding: 0.3rem 0.6rem;
-    border-radius: var(--rk-radius-chip);
-    border: 1px solid var(--rk-line);
-    background: var(--rk-surface-2);
-    color: var(--rk-muted-strong);
+    min-height: 2.35rem;
+    padding: 0.3rem;
+    border-radius: var(--rk-radius-lg);
+    border: 1px solid color-mix(in srgb, var(--rk-line) 82%, var(--mood-c) 18%);
+    background: color-mix(in srgb, var(--rk-surface-2) 97%, var(--rk-muted) 3%);
+    color: color-mix(in srgb, var(--rk-muted) 58%, var(--mood-c) 42%);
     font: inherit;
-    font-size: var(--rk-fs-2);
-    font-weight: 600;
-    line-height: var(--rk-lh-tight);
-    text-align: left;
+    line-height: 0;
     cursor: pointer;
+    opacity: 0.45;
     transition:
       border-color 0.12s ease,
-      background 0.12s ease;
+      background 0.12s ease,
+      opacity 0.12s ease;
   }
 
   .mood-btn__glyph {
     display: inline-flex;
     flex-shrink: 0;
-    color: color-mix(in srgb, var(--mood-c) 80%, var(--rk-ink));
   }
 
   .mood-btn__glyph :global(svg) {
-    width: 1rem;
-    height: 1rem;
+    width: 1.1rem;
+    height: 1.1rem;
     display: block;
   }
 
-  .mood-btn__label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .mood-btn:hover:not(.on):not(:disabled) {
-    border-color: color-mix(in srgb, var(--mood-c) 45%, var(--rk-line));
-    background: color-mix(in srgb, var(--mood-c) 8%, var(--rk-surface-2));
-    color: var(--rk-ink);
+    opacity: 0.8;
+    border-color: color-mix(in srgb, var(--rk-line) 58%, var(--mood-c) 42%);
+    background: color-mix(in srgb, var(--mood-c) 9%, var(--rk-surface-2));
+    color: color-mix(in srgb, var(--mood-c) 70%, var(--rk-ink));
   }
 
   .mood-btn.on {
-    border-color: color-mix(in srgb, var(--mood-c) 65%, var(--rk-line));
-    background: color-mix(in srgb, var(--mood-c) 24%, var(--rk-surface-2));
-    color: var(--rk-ink);
+    opacity: 1;
+    border-color: color-mix(in srgb, var(--mood-c) 68%, var(--rk-line));
+    background: color-mix(in srgb, var(--mood-c) 30%, var(--rk-surface-2));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--mood-c) 35%, transparent);
+    color: color-mix(in srgb, var(--mood-c) 92%, var(--rk-ink));
   }
 
   .mood-btn:disabled {
     cursor: not-allowed;
-    color: var(--rk-muted);
-    background: transparent;
+    opacity: 0.22;
   }
 
-  .mood-btn:disabled .mood-btn__glyph {
-    color: var(--rk-muted);
+  .mood-btn:focus-visible {
+    opacity: 1;
   }
 
   .lyrics-row {
@@ -1143,9 +1133,9 @@
     font-size: var(--rk-fs-sm);
   }
 
-  @media (max-width: 559.98px) {
+  @media (max-width: 379.98px) {
     .mood-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
     }
   }
 </style>

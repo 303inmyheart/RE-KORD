@@ -1,11 +1,15 @@
 <script lang="ts">
   import { ActionRow, Banner, Button, Panel } from "@rekord/ui";
   import { admin } from "../lib/admin.svelte";
-  import { t } from "../lib/i18n.svelte";
+  import { formatDateTime, t } from "../lib/i18n.svelte";
+  import LegacyImportCard from "./LegacyImportCard.svelte";
 
   let fileInput = $state<HTMLInputElement | null>(null);
 
   const locked = $derived(admin.busy || !admin.canManage);
+  const legacy = $derived(admin.legacy);
+  const legacyReport = $derived(admin.legacyReport ?? admin.legacy?.lastReport ?? null);
+  const noLegacyData = $derived(legacy != null && !legacy.kordFound);
 
   function pickFile() {
     fileInput?.click();
@@ -46,13 +50,38 @@
 </Panel>
 
 <Panel title={t("backup.legacy.title")}>
-  <p class="hint">{t("backup.legacy.hint")}</p>
+  <p class="hint">{t("backup.legacy.importHint")}</p>
+  {#if legacy}
+    <p class="status">
+      {#if !legacy.kordFound}
+        {t("backup.legacy.notFound")}
+      {:else if legacy.pending}
+        {t(legacy.optedOut ? "backup.legacy.optedOut" : "backup.legacy.pending")}
+      {:else if legacy.importedAt}
+        {t("backup.legacy.importedAt", { when: formatDateTime(legacy.importedAt) })}
+      {/if}
+    </p>
+  {/if}
   <ActionRow>
-    <Button variant="ghost" disabled={locked} onclick={() => void admin.syncLegacyMeta()}>
-      {t("backup.legacy.sync")}
+    <Button
+      disabled={locked || noLegacyData}
+      onclick={() => void admin.importLegacy()}
+    >
+      {t("backup.legacy.import")}
+    </Button>
+    <Button
+      variant="ghost"
+      disabled={locked || noLegacyData}
+      onclick={() => void admin.importLegacy({ dryRun: true })}
+    >
+      {t("backup.legacy.preview")}
     </Button>
   </ActionRow>
+  {#if legacyReport}
+    <LegacyImportCard report={legacyReport} />
+  {/if}
   <p class="hint after">{t("legacy.hint")}</p>
+  <p class="hint after">{t("backup.legacy.hint")}</p>
 </Panel>
 
 <style>
@@ -65,6 +94,12 @@
 
   .hint.after {
     margin: 0.7rem 0 0;
+  }
+
+  .status {
+    margin: 0 0 0.8rem;
+    font-size: var(--rk-fs-sm);
+    line-height: var(--rk-lh);
   }
 
   .secret {

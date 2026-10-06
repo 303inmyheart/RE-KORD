@@ -5,9 +5,10 @@ Capacitor app, released up to 4.4 and a final version also numbered 5.0. Both ca
 number 5.0, so this guide says "legacy" for the old app and "RE-KORD 5" for the new one.
 The legacy source is kept in the repository at the tag `legacy-5.0`.
 
-Your music files are not touched. Your personal data (favorites, playlists, moods, play
-counts, settings, accounts, Plectr records, curated metadata) is carried over
-**automatically** the first time RE-KORD 5 scans the same music folder. A backup is still
+Your music files are not touched. Your personal data (favorites, playlists, moods, tracks
+blocked from shuffle, play counts, settings, accounts, Plectr records, curated metadata) is
+carried over **automatically** the first time RE-KORD 5 scans the same music folder, also
+into accounts you already use in RE-KORD 5. A backup is still
 the safest way to move, and it is required when the new hub runs on another machine.
 
 Read the whole page once before you start.
@@ -66,26 +67,57 @@ the legacy app used and choose **Save path**. On a headless hub you can instead 
 
 ## 3. Bring your data over
 
-### Automatic: the one-time legacy import
+### Automatic: the legacy import
 
-When the music folder contains a legacy `.kord` folder, the first scan imports it **once**:
+Legacy RE-KORD kept your personal data next to the music, in `<music>/.kord`:
+
+| File | Contents |
+|---|---|
+| `global_info/accounts.json` | the accounts (`id`, `name`) |
+| `<account>_info/user-state.json` | favorites, playlists, moods (`trackMoods`), tracks and albums blocked from shuffle (`shuffleExcludedTrackRelPaths`, `shuffleExcludedAlbumIds`), play counts, recent tracks, queue, settings, Plectr records |
+| `<account>_info/library-selection.json`, `theme-bg.*` | library selection, theme background |
+| `rekord.db` | curated library metadata |
+
+The Electron data folder (`~/.config/rekord` on Linux, `%APPDATA%\RE-KORD` on Windows)
+only holds machine settings (`music-root.config.json`) and the browser storage of the old
+window; achievements and XP are computed from play counts, favorites, playlists, moods and
+Plectr records, so they come back with them.
+
+When the music folder contains a legacy `.kord` folder, the first scan imports it:
 
 - curated metadata: titles, full dates, genres, track and disc numbers, hand-edited
   fields, added and updated times;
-- the accounts registry (legacy names; the `default` account stays "Default");
-- per account: settings, favorites, playlists (in their legacy order), library selection,
-  play counts, recent tracks, moods, shuffle exclusions, theme backgrounds and Plectr
-  records.
+- the accounts: each legacy account goes to the RE-KORD 5 account with the same id, then
+  the same name (`default` always to `default`); the others are created with their legacy
+  id and name. Folders of accounts deleted in the legacy app are skipped;
+- per account: favorites, playlists (in their legacy order), moods, blocked tracks and
+  albums, play counts, recent tracks, settings, library selection, theme background and
+  Plectr records.
+
+It is a **merge**, also for accounts you have already used in RE-KORD 5: favorites,
+playlists, moods and blocked tracks are added next to yours; a play count keeps the higher
+value; settings, a theme background or a library selection you already have are kept (the
+language too); nothing is removed. Tracks are matched by their path in the music folder
+(also across a different letter case, accented letters stored differently, and the
+`Tracce` → `Tracks` rename). Paths whose file is no longer there are kept, link up again
+if the file comes back, and are listed in the result.
 
 At start-up the hub also looks for the legacy machine settings (`music-root.config.json` in
 the Electron data folders or `REKORD_USER_CONFIG_DIR`) and copies, once, the Discogs token,
 the YouTube cookies and the Cloudflare login state, but only where RE-KORD 5 has none yet.
 
-The outcome is recorded in `<data dir>/legacy-import.json`. Later scans and restarts never
-import again, so anything you delete in RE-KORD 5 stays deleted. Accounts you have already
-used in RE-KORD 5 are left alone. To skip the automatic import, start the hub with
-`REKORD_SKIP_LEGACY_IMPORT=1` (and `REKORD_SKIP_LEGACY_CONFIG_IMPORT=1` for the
+The outcome is recorded in `<data dir>/legacy-import.json`, with a digest of each account's
+legacy files and the report of the last run. Later scans and restarts do not import again,
+and a manual import leaves alone the accounts whose legacy files did not change, so
+anything you delete in RE-KORD 5 stays deleted. To skip the automatic import, start the hub
+with `REKORD_SKIP_LEGACY_IMPORT=1` (and `REKORD_SKIP_LEGACY_CONFIG_IMPORT=1` for the
 credentials).
+
+> **Upgraded with an early 5.0 build?** Its automatic import skipped every account already
+> used in RE-KORD 5 (the Default account always), so favorites, blocked tracks, moods and
+> playlists were missing. RE-KORD 5 recognises the old `legacy-import.json` and runs the
+> import once more at the next start (after the library scan), for those accounts only. You
+> can also run it right away with the button below.
 
 ### From the backup ZIP
 
@@ -106,26 +138,36 @@ the backup. Accounts are matched **by display name** (case-insensitive): an exis
 account with the same name keeps its id and receives the backup's data; other accounts are
 added. The restore schedules a library scan on its own.
 
-### Manual sync from `.kord`
+### Manual import from `.kord`
 
-To merge a legacy `.kord` folder again later (for example after copying more data from the
-old machine):
+To run the import now, see what it would add, or merge again after copying more data from
+the old machine:
 
-- **Admin panel**: **Library › Maintenance › Import data from the previous version**, or
-  **Backup › Restore from the previous version › Import data from .kord**.
+- **Admin panel** (`http://<hub>:7420/admin`, on the hub computer): **Backup › Import from
+  legacy RE-KORD**. **Import from legacy RE-KORD** runs it and shows the result per category
+  and per account (with the paths not found in the library); **Preview (changes nothing)**
+  shows the same counts without writing anything. **Library › Maintenance** has the same
+  button.
 - **Client**, one legacy account into the current one: *Settings › System › Backup ›
   Import from legacy .kord folder…*
-- **Command line**:
+- **Command line** (while the hub is stopped):
 
   ```bash
-  rekord-server --music-root /path/to/Music --sync-legacy-meta --sync-legacy-exit
+  # preview: prints the report as JSON, writes nothing
+  rekord-server --music-root /path/to/Music --legacy-import --legacy-import-dry-run
+  # import, then exit (add --legacy-import-force to merge again accounts
+  # already imported from the same files, bringing back what you removed)
+  rekord-server --music-root /path/to/Music --legacy-import --legacy-import-exit
   ```
 
-This is a **merge**. Legacy metadata only fills empty fields (placeholder genres such as
-`Music` or `Unknown` are replaced by the richer legacy value), and personal data is merged
-into what the hub already has. Nothing on the hub is deleted, and values you typed in
-RE-KORD 5 are never overwritten, so running it after you have started using RE-KORD 5 loses
-nothing.
+  `--sync-legacy-meta` / `--sync-legacy-exit` still work as aliases.
+- **API**: `GET /api/v1/legacy-import` (status and last report),
+  `POST /api/v1/legacy-import[?dryRun=true][&force=true]`.
+
+Legacy metadata only fills empty fields (placeholder genres such as `Music` or `Unknown`
+are replaced by the richer legacy value) and values you typed in RE-KORD 5 are never
+overwritten, so running it after you have started using RE-KORD 5 loses nothing. Each run
+is logged (counts per category, paths not found) and appears in the activity log.
 
 ## 4. Reconnect your devices
 
@@ -237,8 +279,8 @@ Test procedure for maintainers, on each desktop platform before a release:
 
 ## Rolling back
 
-RE-KORD 5 never modifies `music-root.config.json`, and the automatic import and
-`--sync-legacy-meta` only read `.kord`. Restoring a legacy ZIP, however, writes the backup's
+RE-KORD 5 never modifies `music-root.config.json`, and the legacy import (automatic,
+admin panel or `--legacy-import`) only reads `.kord`. Restoring a legacy ZIP, however, writes the backup's
 `kord-db/` into `<music>/.kord` (the same data the legacy app had when you exported it):
 copy `<music>/.kord` aside first if you want an exact way back.
 

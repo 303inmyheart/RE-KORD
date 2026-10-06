@@ -26,7 +26,7 @@
    * Cache-buster per album after an apply/upload: the hub serves covers with a
    * long max-age, so the same URL would keep showing the old image.
    */
-  let coverVersions = $state<Record<number, number>>({});
+  let coverVersions = $state<Record<number, string | number>>({});
 
   const canWrite = $derived(studioAccess.canWrite);
   const writeTitle = $derived(studioAccess.reason ?? undefined);
@@ -54,9 +54,9 @@
     coverAlbumId != null ? (coverAlbums.find((a) => a.id === coverAlbumId) ?? null) : null,
   );
 
-  function versioned(url: string, v: number | undefined): string {
+  function versioned(url: string, v: string | number | undefined): string {
     if (!v) return url;
-    return `${url}${url.includes("?") ? "&" : "?"}v=${v}`;
+    return `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(String(v))}`;
   }
 
   const currentCoverSrc = $derived.by(() => {
@@ -116,9 +116,14 @@
 
   /** Show the new cover at once, then reload albums so other views follow. */
   async function afterCoverChange(albumId: number, label: string, res: unknown) {
-    // The hub's `coverVersion` keeps the URL stable across clients; fall back to now.
-    const v = Number((res as { coverVersion?: unknown } | null)?.coverVersion);
-    coverVersions = { ...coverVersions, [albumId]: Number.isFinite(v) && v > 0 ? v : Date.now() };
+    // The hub's `coverVersion` is the album's new `cover_version` (the same on
+    // every client); fall back to now for an older hub.
+    const raw = (res as { coverVersion?: unknown } | null)?.coverVersion;
+    const v = typeof raw === "string" || typeof raw === "number" ? raw : "";
+    const version = v !== "" && v !== 0 ? v : Date.now();
+    coverVersions = { ...coverVersions, [albumId]: version };
+    // Player bar, queue, tiles and rows of this album show it at once.
+    session.noteAlbumCoverChanged(albumId, version);
     msg = t("studio.covers.saved", { album: label });
     try {
       await session.loadAllAlbums();

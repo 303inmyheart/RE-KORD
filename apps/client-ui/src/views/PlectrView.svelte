@@ -1,15 +1,16 @@
 <script lang="ts">
   /**
-   * Plectr — rhythm game mode on the library. A portrait 9:16 stage in every
-   * layout: a framed device between two side panels on desktop, centred with
-   * an info sheet on tablets, immersive full screen (no app chrome) on
-   * phones.
+   * Plectr — rhythm game on the song the player is playing (legacy dock
+   * behaviour): opening the view starts the game at once on the current
+   * track, from where it is, without pausing, seeking or restarting it. The
+   * game follows the player: next song → new chart, new run; pause in the
+   * dock → the notes freeze. Difficulty switches live (1 / 2 / 3 or the
+   * buttons on the stage) from the current position. With nothing in the
+   * player the pick screen offers a song; picking one plays it and starts.
    *
-   * Flow: pick (track, difficulty) → prepare (song loaded paused at 0:00,
-   * chart built) → countdown at the chart tempo with a note lead-in → play →
-   * real pause → results (the player waits: no crossfade, no auto-advance) →
-   * replay / next / change / exit (back to the previous view, music resumed
-   * if it was playing).
+   * A portrait 9:16 stage in every layout: a framed device between two side
+   * panels on desktop, centred with an info sheet on tablets, immersive full
+   * screen (no app chrome, the shell inert underneath) on phones.
    */
   import { onMount, untrack } from "svelte";
   import "../styles/plectr.css";
@@ -48,8 +49,7 @@
   import { DIFFICULTIES, MIN_NOTES_PER_DIFFICULTY } from "../lib/plectr/config";
   import { plectrNav, type PlectrSection } from "../lib/plectr/nav.svelte";
   import { plectrRecords } from "../lib/plectr/persist.svelte";
-  import { PlectrPlayerHold } from "../lib/plectr/playerHold";
-  import { selectPlectrCareer } from "../lib/plectr/records";
+  import { difficultyBest, selectPlectrCareer } from "../lib/plectr/records";
   import type { StageArt } from "../lib/plectr/renderer";
   import { downloadShareCard } from "../lib/plectr/shareCard";
   import { resolveLightStage, writeMeasuredSlow } from "../lib/plectr/stageQuality";
@@ -57,11 +57,11 @@
   import type { DifficultyId, GameResult } from "../lib/plectr/types";
   import type { VizMode } from "../lib/visualizer/vizCanvasEngine";
 
-  type Phase = "pick" | "prepare" | "stage" | "results";
+  type Phase = "pick" | "stage";
   type Layout = "phone" | "tablet" | "desktop";
   type PlectrTrack = Pick<Track, "rel_path" | "title" | "artist_name" | "album_id"> & Partial<Track>;
 
-  /* ── Chart loading (follows the run's track, not the player) ── */
+  /* ── Chart loading (follows the player's track) ── */
   let chartState = $state<ChartLoaderState>(idleChartState());
   const loader = new ChartLoader(
     {
@@ -74,28 +74,23 @@
     },
   );
 
-  const hold = new PlectrPlayerHold();
   const initial = plectrNav.take();
 
   let rootEl = $state<HTMLElement | null>(null);
   let stageRef = $state<GameStage | null>(null);
   let section = $state<PlectrSection>(initial.section);
-  let phase = $state<Phase>("pick");
-  let stagePhase = $state<StagePhase>("countdown");
-  let pauseReason = $state<PauseReason>("user");
+  /** The user asked for the pick screen ("Change song") while music plays. */
+  let picking = $state(initial.track != null);
+  let stagePhase = $state<StagePhase>("loading");
+  let pauseReason = $state<PauseReason>("idle");
   let layout = $state<Layout>("desktop");
   let selected = $state<PlectrTrack | null>(initial.track);
-  let target = $state<PlectrTrack | null>(null);
-  let startAt = $state(0);
   let startToken = $state(0);
   let results = $state<ResultsData | null>(null);
   let lastRun = $state<{ relPath: string; result: GameResult } | null>(null);
   let stats = $state<LiveStats | null>(null);
   let showSettings = $state(false);
   let showInfo = $state(false);
-  /** Waiting for the player to load the picked song (then paused at 0:00). */
-  let pendingLoad = $state(false);
-  let pendingSince = 0;
   let slowTick = $state(0);
   let artState = $state<{ albumId: number | null; art: StageArt; dataUrl: string | null }>({
     albumId: null,
@@ -103,9 +98,10 @@
     dataUrl: null,
   });
   let vizMode = $state<VizMode>(plectrBackdropMode(loadUserPrefs().visualizerMode));
-  /** Music was playing when Plectr took the player over: resume it on exit. */
-  let resumeOnExit: boolean | null = null;
   let exited = false;
+  /** Results of a song the player already left close by themselves after this. */
+  const RESULTS_LINGER_MS = 7000;
+  let resultsTimer = 0;
 
   const store = $derived(plectrRecords.store);
   const settings = $derived(store.settings);
@@ -117,10 +113,12 @@
   const career = $derived(selectPlectrCareer(store));
   const leadTime = $derived(leadTimeFor(settings.speed));
 
+  /** The game runs on whatever the player holds; nothing there → pick screen. */
+  const target = $derived<PlectrTrack | null>(session.current);
+  const phase = $derived<Phase>(target && !picking ? "stage" : "pick");
+
   const chartSet = $derived(
-    chartState.phase === "ready" && target && chartState.relPath === target.rel_path
-      ? chartState.chartSet
-      : null,
+    chartState.phase === "ready" && target && chartState.relPath === target.rel_path ? chartState.chartSet : null,
   );
   const playableIds = $derived(
     DIFFICULTIES.filter((d) => (chartSet?.charts[d.id]?.notes.length ?? 0) >= MIN_NOTES_PER_DIFFICULTY).map(
@@ -136,24 +134,20 @@
     target && chartState.phase === "error" && chartState.relPath === target.rel_path ? chartState.errorCode : null,
   );
   const loadProgress = $derived(
-    !target
-      ? 0
-      : chartSet
-        ? 1
-        : chartState.stage === "fetch"
-          ? 0.05 + chartState.progress * 0.3
-          : chartState.stage === "decode"
-            ? 0.35 + chartState.progress * 0.25
-            : 0.6 + chartState.progress * 0.4,
+    chartSet
+      ? 1
+      : chartState.stage === "fetch"
+        ? 0.05 + chartState.progress * 0.3
+        : chartState.stage === "decode"
+          ? 0.35 + chartState.progress * 0.25
+          : 0.6 + chartState.progress * 0.4,
   );
   const loadLabel = $derived(
-    pendingLoad
-      ? t("plectr.loading.song")
-      : chartState.stage === "fetch"
-        ? t("plectr.loading.fetch")
-        : chartState.stage === "decode"
-          ? t("plectr.loading.decode")
-          : t("plectr.loading.analyze"),
+    chartState.stage === "fetch"
+      ? t("plectr.loading.fetch")
+      : chartState.stage === "decode"
+        ? t("plectr.loading.decode")
+        : t("plectr.loading.analyze"),
   );
 
   /** Same "song of the day" as the pick screen. */
@@ -164,12 +158,13 @@
     return sorted[dailyIndex(dayKey(), sorted.length)] ?? null;
   });
   /** Track shown in the panels: the run's, else the pick screen's choice. */
-  const panelTrack = $derived<PlectrTrack | null>(target ?? selected ?? session.current ?? daily);
-  const immersive = $derived(layout === "phone" && phase !== "pick" && section === "play");
+  const panelTrack = $derived<PlectrTrack | null>(phase === "stage" ? target : (selected ?? target ?? daily));
+  const immersive = $derived(layout === "phone" && phase === "stage" && section === "play");
   const framed = $derived(layout !== "phone");
-  const playing = $derived(phase === "stage" && (stagePhase === "play" || stagePhase === "countdown"));
+  const live = $derived(phase === "stage" && stagePhase === "live");
   const hasNext = $derived(nextQueueIndex() >= 0);
   const currentLastRun = $derived(lastRun && panelTrack && lastRun.relPath === panelTrack.rel_path ? lastRun.result : null);
+  const currentBest = $derived(target ? difficultyBest(store, target.rel_path, activeDifficulty) : null);
 
   function nextQueueIndex(): number {
     const queue = session.queue;
@@ -181,79 +176,51 @@
 
   /* ── Flow ── */
 
+  /** Pick screen → play: the song starts in the player, the game on it. */
   function startTrack(track: PlectrTrack) {
-    if (resumeOnExit == null) resumeOnExit = player.playing;
     results = null;
     stats = null;
     showInfo = false;
-    target = track;
     selected = track;
     section = "play";
-    phase = "prepare";
-    stagePhase = "countdown";
-    hold.acquire(track.rel_path);
+    picking = false;
     plectrRecords.touchRecent(track.rel_path);
-    loader.load({ rel_path: track.rel_path, title: track.title });
     if (player.current?.rel_path === track.rel_path) {
-      pendingLoad = false;
-      if (player.playing) player.pause();
-      player.seek(0, { force: true });
-    } else {
-      pendingLoad = true;
-      pendingSince = performance.now();
-      const idx = session.queue.findIndex((tr) => tr.rel_path === track.rel_path);
-      if (idx >= 0) session.playQueueIndex(idx);
-      else if (track.id != null) void session.playGlobalRadio(track as Track);
-      else pendingLoad = false;
+      // Already in the player: keep its position, just make sure it plays.
+      if (!player.playing) void player.toggle();
+      return;
     }
+    const idx = session.queue.findIndex((tr) => tr.rel_path === track.rel_path);
+    if (idx >= 0) session.playQueueIndex(idx);
+    else if (track.id != null) void session.playGlobalRadio(track as Track);
   }
 
-  /** The picked song is in the player: hold it paused at 0:00. */
-  function onPlayerChange() {
+  /* The chart follows the player's track. */
+  $effect(() => {
     const tr = target;
-    if (!tr || phase !== "prepare" || !pendingLoad) return;
-    if (player.current?.rel_path !== tr.rel_path) return;
-    if (player.playing) {
-      player.pause();
-      player.seek(0, { force: true });
-      pendingLoad = false;
-    } else if (performance.now() - pendingSince > 1500) {
-      // Autoplay refused or still buffering: start from the top anyway.
-      player.seek(0, { force: true });
-      pendingLoad = false;
-    }
-  }
-
-  /* Prepare → stage once the chart is ready and the song waits at 0:00. */
-  $effect(() => {
-    if (phase !== "prepare" || !chart || !target || pendingLoad) return;
-    if (session.current?.rel_path !== target.rel_path) return;
+    const rel = tr?.rel_path ?? null;
     untrack(() => {
-      startAt = 0;
-      startToken += 1;
-      phase = "stage";
-    });
-  });
-
-  /* The player moved to another song by itself or from the dock. */
-  $effect(() => {
-    const cur = session.current;
-    const rel = cur?.rel_path ?? null;
-    untrack(() => {
-      if (!target || rel === target.rel_path || pendingLoad) return;
-      if (phase === "stage" || phase === "prepare") {
-        if (cur) startTrack(cur);
-        else backToPick();
-      } else if (phase === "results" && player.playing) {
-        // Results stay on the song that ended: the player waits.
-        player.pause();
+      if (!tr || !rel) {
+        loader.load(null);
+        return;
       }
+      loader.load({ rel_path: rel, title: tr.title });
+      // A new song: the last song's results stay a moment, then the new run takes over.
+      if (results && results.relPath !== rel) {
+        const shown = results;
+        window.clearTimeout(resultsTimer);
+        resultsTimer = window.setTimeout(() => {
+          if (results === shown) results = null;
+        }, RESULTS_LINGER_MS);
+      }
+      stats = null;
+      if (phase === "stage") plectrRecords.touchRecent(rel);
     });
   });
 
   /* Chart ready: warm the next track in the queue (legacy prefetch). */
   $effect(() => {
-    if (!chartSet || phase !== "stage" || stagePhase !== "play") return;
+    if (!chartSet || phase !== "stage") return;
     untrack(() => {
       const idx = nextQueueIndex();
       const next = idx >= 0 ? session.queue[idx] : null;
@@ -270,16 +237,12 @@
 
   function onFinish(report: RunReport) {
     const tr = target;
-    if (report.reason !== "end" || !tr || report.relPath !== tr.rel_path) return;
-    const eligible = isRecordEligible(report);
-    const { newRecord, previous } = plectrRecords.recordRun(report.relPath, report.result, report.difficulty, {
-      eligible,
-      // Grace skips after a pause/resume don't spoil a full run; a join or seek does.
-      fullRun: eligible && report.fromStart && report.jumped === 0,
-      fc: eligible && report.fc,
-      ap: eligible && report.ap,
-    });
-    lastRun = { relPath: report.relPath, result: report.result };
+    if (report.reason !== "end" || !tr || report.relPath !== tr.rel_path) {
+      // The song moved on right at its end: still record it, no results card.
+      if (report.reason === "end" && report.judged > 0) recordReport(report);
+      return;
+    }
+    const { eligible, newRecord, previous } = recordReport(report);
     results = {
       relPath: report.relPath,
       title: tr.title,
@@ -301,61 +264,63 @@
       fc: report.fc,
       ap: report.ap,
     };
-    phase = "results";
   }
 
+  function recordReport(report: RunReport) {
+    const eligible = isRecordEligible(report);
+    const out = plectrRecords.recordRun(report.relPath, report.result, report.difficulty, {
+      eligible,
+      // Grace skips after a pause / resume don't spoil a full run; a join or seek does.
+      fullRun: eligible && report.fromStart && report.jumped === 0,
+      fc: eligible && report.fc,
+      ap: eligible && report.ap,
+    });
+    if (report.judged > 0) lastRun = { relPath: report.relPath, result: report.result };
+    return { eligible, ...out };
+  }
+
+  /** Live switch: the stage starts a new run on the new chart from here. */
   function setDifficulty(id: DifficultyId) {
     if (chartSet && !playableIds.includes(id)) return;
     if (id === difficulty) return;
-    if (phase === "stage") {
-      // Mid-song: a new run from here (countdown, grace period).
-      startAt = player.currentTime;
-      startToken += 1;
-    }
     plectrRecords.setDifficulty(id);
   }
 
+  /** Explicit "from the top": seek to 0 and play at once (no countdown). */
   function restart() {
     if (!target) return;
-    if (player.playing) player.pause();
-    player.seek(0, { force: true });
     results = null;
-    startAt = 0;
-    startToken += 1;
-    phase = "stage";
+    player.seek(0);
+    if (!player.playing) void player.toggle();
+    window.setTimeout(() => (startToken += 1), 60);
   }
 
+  /** Results → play again: from the top of that song (it may have ended already). */
   function replay() {
-    if (target) startTrack(target);
+    const rel = results?.relPath;
+    if (!rel || rel === target?.rel_path) {
+      restart();
+      return;
+    }
+    const tr = session.queue.find((x) => x.rel_path === rel) ?? session.catalogTracks.find((x) => x.rel_path === rel);
+    results = null;
+    if (tr) startTrack(tr);
   }
 
   function playNext() {
-    const idx = nextQueueIndex();
-    const next = idx >= 0 ? session.queue[idx] : null;
-    if (next) startTrack(next);
+    results = null;
+    if (nextQueueIndex() >= 0) void player.next();
   }
 
-  function backToPick() {
+  function changeSong() {
     if (target) selected = target;
-    target = null;
     results = null;
-    phase = "pick";
-    hold.release();
-    loader.load(null);
+    picking = true;
   }
 
   function exitPlectr() {
     if (exited) return;
     exited = true;
-    const resume = resumeOnExit === true && phase !== "pick";
-    const pausedAtEnd = hold.pausedAtEnd;
-    target = null;
-    phase = "pick";
-    hold.release();
-    if (resume && !player.playing) {
-      if (pausedAtEnd) void player.next();
-      else void player.toggle();
-    }
     const idx = (history.state as { rkIdx?: unknown } | null)?.rkIdx;
     if (typeof idx === "number" && idx > 0) history.back();
     else session.navigate("dashboard");
@@ -375,7 +340,6 @@
   }
 
   function openSettings() {
-    if (phase === "stage" && (stagePhase === "play" || stagePhase === "countdown")) stageRef?.pause("user");
     showSettings = true;
   }
 
@@ -389,9 +353,9 @@
   }
 
   /**
-   * Esc closes what sits on top: the records view (back to the game) or the
-   * results card (back to the pick screen). The stage handles its own Esc
-   * (pause / resume); dialogs and the tablet info sheet close themselves.
+   * Esc closes what sits on top: the records view (back to the game), the
+   * results card, the pick screen opened from a song. The stage handles its
+   * own Esc (pause); dialogs and the tablet info sheet close themselves.
    */
   function onWindowKeyDown(event: KeyboardEvent) {
     if (event.key !== "Escape" || event.defaultPrevented || event.repeat) return;
@@ -403,9 +367,12 @@
     if (section === "records") {
       event.preventDefault();
       section = "play";
-    } else if (phase === "results" && results) {
+    } else if (results) {
       event.preventDefault();
-      backToPick();
+      results = null;
+    } else if (picking && target) {
+      event.preventDefault();
+      picking = false;
     }
   }
 
@@ -430,8 +397,24 @@
     const root = document.documentElement;
     if (immersive) root.setAttribute("data-plectr-immersive", "");
     else root.removeAttribute("data-plectr-immersive");
-    if (playing) root.setAttribute("data-plectr-playing", "");
+    if (live) root.setAttribute("data-plectr-playing", "");
     else root.removeAttribute("data-plectr-playing");
+  });
+
+  /*
+   * Phones: the game owns the screen. The app chrome underneath is hidden and
+   * made inert, so a tap on the stage can never reach the dock, the nav or
+   * anything behind it.
+   */
+  $effect(() => {
+    if (!immersive) return;
+    const els = [
+      ...document.querySelectorAll<HTMLElement>("header.top, nav.bottom, footer.player-dock, aside.rail"),
+    ].filter((el) => !el.inert);
+    for (const el of els) el.inert = true;
+    return () => {
+      for (const el of els) el.inert = false;
+    };
   });
 
   /* Deep link while the view is already open (Statistics → records). */
@@ -442,7 +425,10 @@
     untrack(() => {
       const next = plectrNav.take();
       section = next.section;
-      if (next.track && phase === "pick") selected = next.track;
+      if (next.track) {
+        selected = next.track;
+        picking = true;
+      }
     });
   });
 
@@ -471,8 +457,6 @@
     const ro = new ResizeObserver(measure);
     if (content) ro.observe(content);
 
-    const offState = player.subscribe(onPlayerChange);
-    const offPlay = player.subscribePlayState(onPlayerChange);
     const onPrefs = () => {
       vizMode = plectrBackdropMode(loadUserPrefs().visualizerMode);
     };
@@ -482,22 +466,10 @@
       mqPhone.removeEventListener("change", syncLayout);
       mqTablet.removeEventListener("change", syncLayout);
       ro.disconnect();
-      offState();
-      offPlay();
       window.removeEventListener("storage", onPrefs);
       document.documentElement.removeAttribute("data-plectr-immersive");
       document.documentElement.removeAttribute("data-plectr-playing");
-      if (!exited) {
-        const resume = resumeOnExit === true && phase !== "pick" && !player.playing;
-        const pausedAtEnd = hold.pausedAtEnd;
-        hold.release();
-        if (resume) {
-          if (pausedAtEnd) void player.next();
-          else void player.toggle();
-        }
-      } else {
-        hold.release();
-      }
+      window.clearTimeout(resultsTimer);
       loader.destroy();
       // Let a prefetch finish; the worker goes once nothing is pending.
       window.setTimeout(releaseAnalysisWorker, 30_000);
@@ -505,25 +477,12 @@
   });
 </script>
 
-{#snippet stageScreen()}
-  {#if phase === "pick"}
-    <PickScreen
-      {store}
-      selected={selected as Track | null}
-      {difficulty}
-      onselect={(tr) => {
-        selected = tr;
-        prefetchRhythmChart({ rel_path: tr.rel_path, title: tr.title });
-      }}
-      onplay={(tr) => startTrack(tr)}
-      ondifficulty={setDifficulty}
-      onrecords={() => (section = "records")}
-      onsettings={openSettings}
-    />
-  {:else if errorCode}
-    <div class="plectr-status plectr-status--error" role="alert">
+{#snippet stageOverlay()}
+  {#if errorCode}
+    <div class="plectr-status plectr-status--error plectr-overlay" role="alert">
       <PlectrCover track={target} size={256} class="plectr-status__art" />
       <p>{t(`plectr.errors.${errorCode}`)}</p>
+      <p class="plectr-status__sub">{t("plectr.loading.keepPlaying")}</p>
       <div class="plectr-status__actions">
         <button
           type="button"
@@ -533,20 +492,20 @@
           <UiIcon name="sync" />
           {t("plectr.retry")}
         </button>
-        <button type="button" class="rk-btn rk-btn--secondary" onclick={backToPick}>
+        <button type="button" class="rk-btn rk-btn--secondary" onclick={changeSong}>
           <UiIcon name="queueMusic" />
           {t("plectr.changeTrack")}
         </button>
-        {#if layout === "phone"}
-          <button type="button" class="rk-btn rk-btn--ghost" onclick={exitPlectr}>
-            <UiIcon name="close" />
-            {t("plectr.exit")}
+        {#if hasNext}
+          <button type="button" class="rk-btn rk-btn--ghost" onclick={playNext}>
+            <UiIcon name="next" />
+            {t("plectr.nextTrack")}
           </button>
         {/if}
       </div>
     </div>
-  {:else if phase === "prepare" || !chart || !target}
-    <div class="plectr-status" aria-live="polite" aria-busy="true">
+  {:else if !chart}
+    <div class="plectr-status plectr-status--loading plectr-overlay" aria-live="polite" aria-busy="true">
       <div class="plectr-prepare">
         <svg viewBox="0 0 120 120" class="plectr-prepare__ring" aria-hidden="true">
           <circle cx="60" cy="60" r="54" class="plectr-ring__track" />
@@ -561,19 +520,57 @@
         </svg>
         <PlectrCover track={target} size={256} class="plectr-prepare__art" />
       </div>
-      <strong class="plectr-status__title">{target?.title ?? ""}</strong>
       <p>{loadLabel}</p>
-      <button type="button" class="rk-btn rk-btn--ghost" onclick={backToPick}>
-        {t("plectr.cancel")}
-      </button>
+      <p class="plectr-status__sub">{t("plectr.loading.keepPlaying")}</p>
     </div>
+  {:else if results}
+    <RunResults
+      data={results}
+      {hasNext}
+      oncontinue={player.playing ? () => (results = null) : undefined}
+      onreplay={replay}
+      onnext={playNext}
+      onchange={changeSong}
+      onexit={exitPlectr}
+      onshare={share}
+    />
+  {:else if stagePhase === "paused" && !showSettings}
+    <PauseMenu
+      reason={pauseReason}
+      difficulty={activeDifficulty}
+      playable={playableIds}
+      onresume={() => stageRef?.resume()}
+      onrestart={restart}
+      onchange={changeSong}
+      ondifficulty={setDifficulty}
+      onsettings={openSettings}
+      onexit={exitPlectr}
+    />
+  {/if}
+{/snippet}
+
+{#snippet stageScreen()}
+  {#if phase === "pick" || !target}
+    <PickScreen
+      {store}
+      selected={selected as Track | null}
+      {difficulty}
+      onselect={(tr) => {
+        selected = tr;
+        prefetchRhythmChart({ rel_path: tr.rel_path, title: tr.title });
+      }}
+      onplay={(tr) => startTrack(tr)}
+      ondifficulty={setDifficulty}
+      onrecords={() => (section = "records")}
+      onsettings={openSettings}
+      onback={target ? () => (picking = false) : undefined}
+    />
   {:else}
     <GameStage
       bind:this={stageRef}
       {chart}
       relPath={target.rel_path}
       title={target.title}
-      {startAt}
       {startToken}
       {leadTime}
       latencyMs={settings.latencyMs}
@@ -585,38 +582,22 @@
       backdrop={settings.backdrop}
       art={artState.art}
       {vizMode}
+      difficulty={activeDifficulty}
+      playable={chartSet ? playableIds : []}
+      best={currentBest}
+      lastRun={currentLastRun}
       compact={layout === "phone"}
-      covered={phase === "results" || showSettings}
+      covered={!!results || showSettings || showInfo}
       watchFps={settings.lightStage === "auto" && !light}
+      overlay={stageOverlay}
       onphase={onStagePhase}
       onfinish={onFinish}
       onstats={(s) => (stats = s)}
       onlowfps={onLowFps}
+      ondifficulty={setDifficulty}
+      onsettings={openSettings}
+      onexit={layout === "phone" ? exitPlectr : undefined}
     />
-    {#if phase === "stage" && stagePhase === "paused"}
-      <PauseMenu
-        reason={pauseReason}
-        difficulty={activeDifficulty}
-        playable={playableIds}
-        onresume={() => stageRef?.resume()}
-        onrestart={restart}
-        onchange={backToPick}
-        ondifficulty={setDifficulty}
-        onsettings={openSettings}
-        onexit={exitPlectr}
-      />
-    {/if}
-    {#if phase === "results" && results}
-      <RunResults
-        data={results}
-        {hasNext}
-        onreplay={replay}
-        onnext={playNext}
-        onchange={backToPick}
-        onexit={exitPlectr}
-        onshare={share}
-      />
-    {/if}
   {/if}
 {/snippet}
 
@@ -638,7 +619,7 @@
       onpick={(tr) => {
         selected = tr;
         section = "play";
-        if (phase === "pick") return;
+        picking = true;
       }}
     />
   {:else}
@@ -659,7 +640,7 @@
             difficulty={activeDifficulty}
             {chart}
             lastRun={currentLastRun}
-            onchange={phase === "pick" ? undefined : backToPick}
+            onchange={phase === "pick" ? undefined : changeSong}
             onsettings={openSettings}
           />
         </aside>
@@ -672,10 +653,7 @@
             class="plectr-info-btn"
             aria-label={t("plectr.panel.info")}
             title={t("plectr.panel.info")}
-            onclick={() => {
-              if (stagePhase === "play" || stagePhase === "countdown") stageRef?.pause("user");
-              showInfo = true;
-            }}
+            onclick={() => (showInfo = true)}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true"
               ><path

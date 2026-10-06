@@ -209,8 +209,7 @@
   --glass-2: rgba(252, 226, 236, 0.92);
 }
 
-:root[data-glass-surfaces="1"][data-glass-backdrop="0"],
-:root[data-glass-surfaces="1"][data-rk-lowfx] {
+:root[data-glass-surfaces="1"][data-glass-backdrop="0"] {
   --glass-panel: color-mix(in srgb, var(--glass-1) 90%, transparent);
   --glass-panel-deep: color-mix(in srgb, var(--glass-2) 86%, transparent);
   --glass-panel-muted: color-mix(in srgb, var(--glass-1) 84%, transparent);
@@ -310,30 +309,56 @@
 }
 
 /*
- * Shell chrome — topbar + player: blur forte (legacy player-bar2 20px).
+ * Shell chrome — the few fixed surfaces that keep a real blur on every engine,
+ * WebKitGTK included (legacy glass-surfaces.css): context header 16px, player
+ * bar, icon rail and mobile nav 20px. Large, static, one layer each: the
+ * blur lives on their ::before and no animated child is ever blurred.
  */
 :root[data-glass-surfaces="1"] .rekord-context-header,
-:root[data-glass-surfaces="1"] .player-bar {
-  position: relative;
+:root[data-glass-surfaces="1"] .player-bar,
+:root[data-glass-surfaces="1"] .rekord-icon-rail,
+:root[data-glass-surfaces="1"] .mobile-bottom-nav {
   isolation: isolate;
   background: transparent;
-  border-color: var(--glass-edge);
-  box-shadow:
-    0 -4px 24px color-mix(in srgb, var(--rk-bg) 42%, transparent),
-    inset 0 1px 0 var(--glass-shine-soft);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 
+:root[data-glass-surfaces="1"] .player-bar {
+  position: relative;
+}
+
+:root[data-glass-surfaces="1"] .rekord-context-header,
+:root[data-glass-surfaces="1"] .player-bar {
+  border-color: var(--glass-edge);
+  box-shadow:
+    0 -4px 24px color-mix(in srgb, var(--rk-bg) 42%, transparent),
+    inset 0 1px 0 var(--glass-shine-soft);
+}
+
 :root[data-glass-surfaces="1"] .rekord-context-header {
+  /* Stays sticky (TopBar): that already positions the ::before. */
   box-shadow:
     0 4px 24px color-mix(in srgb, var(--rk-bg) 42%, transparent),
     inset 0 1px 0 var(--glass-shine-soft);
   border-bottom-color: var(--glass-edge);
 }
 
+:root[data-glass-surfaces="1"] .rekord-icon-rail {
+  border-right-color: var(--glass-edge);
+}
+
+:root[data-glass-surfaces="1"] .mobile-bottom-nav {
+  border-top-color: var(--glass-edge);
+  box-shadow:
+    0 -4px 24px color-mix(in srgb, var(--rk-bg) 42%, transparent),
+    inset 0 1px 0 var(--glass-shine-soft);
+}
+
 :root[data-glass-surfaces="1"] .rekord-context-header::before,
-:root[data-glass-surfaces="1"] .player-bar::before {
+:root[data-glass-surfaces="1"] .player-bar::before,
+:root[data-glass-surfaces="1"] .rekord-icon-rail::before,
+:root[data-glass-surfaces="1"] .mobile-bottom-nav::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -345,13 +370,23 @@
   backdrop-filter: blur(20px) saturate(1.4);
 }
 
-/* Without backdrop-filter (an engine that can't handle it or WebKitGTK/Tauri-Linux, see
-   lib/platformCaps.ts): same glass, just opaque enough, no blur —
-   not even on the dock, which stays above the list while it scrolls. */
+:root[data-glass-surfaces="1"] .rekord-context-header::before {
+  background: color-mix(in srgb, var(--glass-panel) 86%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  backdrop-filter: blur(16px) saturate(1.4);
+}
+
+:root[data-glass-surfaces="1"] .rekord-icon-rail::before {
+  background: color-mix(in srgb, var(--glass-panel-deep) 90%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.45);
+  backdrop-filter: blur(20px) saturate(1.45);
+}
+
+/* An engine that can't blur at all: same glass, just opaque enough. */
 :root[data-glass-surfaces="1"][data-glass-backdrop="0"] .rekord-context-header::before,
 :root[data-glass-surfaces="1"][data-glass-backdrop="0"] .player-bar::before,
-:root[data-glass-surfaces="1"][data-rk-lowfx] .rekord-context-header::before,
-:root[data-glass-surfaces="1"][data-rk-lowfx] .player-bar::before {
+:root[data-glass-surfaces="1"][data-glass-backdrop="0"] .rekord-icon-rail::before,
+:root[data-glass-surfaces="1"][data-glass-backdrop="0"] .mobile-bottom-nav::before {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   background: color-mix(in srgb, var(--glass-panel-deep) 92%, transparent);
@@ -362,11 +397,10 @@
 :root[data-glass-surfaces="1"][data-glass-backdrop="0"] .rk-surface-card.surface-card--toolbar-only:first-child::before,
 :root[data-glass-surfaces="1"][data-glass-backdrop="0"] .rk-hero::before,
 :root[data-glass-surfaces="1"][data-glass-backdrop="0"] .view-page__intro > .achievements-hero::before,
-:root[data-glass-surfaces="1"][data-rk-lowfx] .view-page__toolbar-band > :first-child::before,
-:root[data-glass-surfaces="1"][data-rk-lowfx] .page-toolbar-card::before,
-:root[data-glass-surfaces="1"][data-rk-lowfx] .rk-surface-card.surface-card--toolbar-only:first-child::before,
-:root[data-glass-surfaces="1"][data-rk-lowfx] .rk-hero::before,
-:root[data-glass-surfaces="1"][data-rk-lowfx] .view-page__intro > .achievements-hero::before,
+/* WebKitGTK: no blur under the live visualizer (it repaints up to 24 fps)
+   nor on the small theme-picker controls. */
+:root[data-glass-surfaces="1"][data-rk-lowfx] .listen-stage::before,
+:root[data-glass-surfaces="1"][data-rk-lowfx] .listen-page__stage::before,
 :root[data-glass-surfaces="1"][data-rk-lowfx] .theme-picker__btn,
 :root[data-glass-surfaces="1"][data-rk-lowfx] .theme-picker__menu {
   -webkit-backdrop-filter: none;

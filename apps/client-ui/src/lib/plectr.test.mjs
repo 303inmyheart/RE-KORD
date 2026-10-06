@@ -748,37 +748,6 @@ describe("record eligibility", () => {
     assert.equal(timing.isRecordEligible({ ...base, judged: 0 }), false));
 });
 
-describe("countdown timing", () => {
-  test("one beat per step, folded into 0.5-0.8 s", () => {
-    assert.equal(timing.countdownStepSeconds(120), 0.5);
-    assert.ok(Math.abs(timing.countdownStepSeconds(90) - 2 / 3) < 1e-9);
-    assert.equal(timing.countdownStepSeconds(160), 0.75, "fast tempo: two beats per step");
-    assert.equal(timing.countdownStepSeconds(60), 0.5, "slow tempo: half a beat");
-    assert.equal(timing.countdownStepSeconds(NaN), 0.6);
-    assert.equal(timing.countdownStepSeconds(40), 0.75);
-  });
-
-  test("3-2-1-VIA with a 2 s lead-in, audio on VIA", () => {
-    const plan = timing.countdownPlan(120);
-    assert.equal(plan.total, 2);
-    assert.equal(timing.countdownLabelAt(plan, 0.2), null);
-    assert.equal(timing.countdownLabelAt(plan, 0.5), "3");
-    assert.equal(timing.countdownLabelAt(plan, 1.2), "2");
-    assert.equal(timing.countdownLabelAt(plan, 1.6), "1");
-    assert.equal(timing.countdownLabelAt(plan, 2.1), "go");
-    assert.equal(timing.countdownLabelAt(plan, 2.6), null);
-    // Slow steps make the countdown longer than the lead-in.
-    assert.ok(Math.abs(timing.countdownPlan(80).total - 2.25) < 1e-9);
-  });
-
-  test("pre-roll clock reaches the start point on VIA", () => {
-    const plan = timing.countdownPlan(120);
-    assert.equal(timing.preRollSongTime(plan, 0, 30), 28);
-    assert.equal(timing.preRollSongTime(plan, 1, 30), 29);
-    assert.equal(timing.preRollSongTime(plan, 2, 30), 30);
-  });
-});
-
 describe("note speed as lead time", () => {
   test("1.0x = 1.6 s whatever the stage height", () => {
     assert.equal(timing.leadTimeFor(1), BASE_LEAD_TIME);
@@ -810,5 +779,57 @@ describe("latency", () => {
     assert.equal(timing.dailyIndex("2026-10-05", 50), timing.dailyIndex("2026-10-05", 50));
     assert.ok(timing.dailyIndex("2026-10-05", 50) < 50);
     assert.equal(timing.dailyIndex("x", 0), -1);
+  });
+});
+
+const renderer = await import("./plectr/renderer.ts");
+
+describe("live run (legacy dock behaviour)", () => {
+  const env = (now = 0) => ({ now, onMiss: () => {} });
+
+  test("the chart end is computed once and gates the completion scan", () => {
+    const run = engine.initialRunState([note(0, 5, 0), note(1, 9, 1, { type: "hold", duration: 2 })]);
+    assert.equal(run.lastEnd, 11);
+    for (const n of run.notes) n.hit = true;
+    assert.equal(engine.isChartRunComplete(run, 10.9), false);
+    assert.equal(engine.isChartRunComplete(run, 11 + HIT_WINDOWS.ok), true);
+  });
+
+  test("a difficulty switch mid-song starts the new chart from the current position", () => {
+    // Same moment, harder chart: everything behind is skipped (not missed), the next notes count.
+    const run = engine.initialRunState([note(0, 2, 0), note(1, 4, 1), note(2, 20.5, 2), note(3, 23, 3)]);
+    run.songTime = 20;
+    engine.skipNotesBefore(run, 20);
+    engine.startGrace(run, 20, GRACE_SECONDS);
+    engine.applyMisses(run, 21.6, env());
+    assert.equal(run.misses, 0);
+    assert.equal(run.skipped, 3, "two notes behind + one inside the grace");
+    assert.equal(run.jumped, 2);
+    run.songTime = 23.01;
+    engine.pressLane(run, 3, env());
+    assert.equal(run.hits, 1);
+  });
+
+  test("hit line and note size follow the legacy dock", () => {
+    assert.equal(renderer.hitLineY(600), 548, "52 px from the bottom on tall stages");
+    assert.equal(renderer.hitLineY(200), 167, "83.5% between the two limits");
+    assert.equal(renderer.hitLineY(100), 72, "at least 28 px from the bottom");
+    assert.deepEqual(renderer.noteSize(100), { w: 62, h: 14 });
+  });
+
+  test("Plectr never takes the player over nor asks for camera / microphone", () => {
+    const files = [
+      "../components/plectr/GameStage.svelte",
+      "../views/PlectrView.svelte",
+      "./plectr/playerBridge.ts",
+      "./plectr/renderer.ts",
+      "./plectr/backdrop.ts",
+    ].map((f) => readFileSync(new URL(f, import.meta.url), "utf8"));
+    for (const src of files) {
+      assert.ok(!/setHold|setSeekLock|setCrossfadeOverride|applyCrossfadeSec/.test(src), "no hold / seek lock / forced crossfade");
+      assert.ok(!/seek\(0,\s*\{\s*force/.test(src), "no forced seek to the top");
+      assert.ok(!/mediaDevices|getUserMedia/.test(src), "no camera / microphone");
+      assert.ok(!/countdown/i.test(src.replace(/\/\/.*|\/\*[\s\S]*?\*\/|no countdown/gi, "")), "no countdown");
+    }
   });
 });

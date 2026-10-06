@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "revision": 7626,
+  "favorites": [
+    "Artista Uno/Primo Album/02 - Brano Due.mp3",
+    "Artista Uno/Primo Album/03 - Brano Tre.mp3",
+    "Band Due/Città/02 - Perché.mp3",
+    "Artista Uno/Tracce/05 - Singolo.mp3"
+  ],
+  "recent": [
+    {
+      "id": "Band Due/Live： Night？/01 - Canzone ⧸ Remix.mp3",
+      "relPath": "Band Due/Live： Night？/01 - Canzone ⧸ Remix.mp3",
+      "title": "Canzone / Remix",
+      "artist": "Band Due",
+      "album": "Live: Night?",
+      "meta": {
+        "fileName": "01 - Canzone ⧸ Remix.mp3",
+        "size": 3413266,
+        "mtime": 1777905053748.339,
+        "releaseDate": "2024-01-01",
+        "genre": "Hip Hop; Pop",
+        "lyrics": null,
+        "lyricsAutoChecked": false,
+        "moods": [],
+        "durationMs": 210000,
+        "trackNumber": 0,
+        "discNumber": 0,
+        "source": "discogs",
+        "url": "https://example.invalid/release/1",
+        "plectrBest": null
+      }
+    }
+  ],
+  "trackPlayCounts": {
+    "Artista Uno/Primo Album/02 - Brano Due.mp3": 6,
+    "Artista Uno/Primo Album/03 - Brano Tre.mp3": 1,
+    "Artista Uno/Tracce/05 - Singolo.mp3": 4
+  },
+  "playlists": [
+    {
+      "id": "2d80720f-4b89-40ef-ad22-99026fdba655",
+      "name": "test",
+      "tracks": [
+        {
+          "relPath": "Artista Uno/Primo Album/03 - Brano Tre.mp3",
+          "title": "Brano Tre",
+          "artist": "Artista Uno",
+          "album": "Primo Album"
+        },
+        {
+          "relPath": "Band Due/Città/02 - Perché.mp3",
+          "title": "Perché",
+          "artist": "Band Due",
+          "album": "Città"
+        }
+      ]
+    }
+  ],
+  "queue": {
+    "tracks": [],
+    "currentIndex": 0
+  },
+  "settings": {
+    "theme": "custom",
+    "customTheme": {
+      "bg": "#181818",
+      "section": "#181818",
+      "accent": "#1a5fb4",
+      "accent2": "#99c1f1",
+      "bgImageFit": "contain",
+      "bgMode": "image",
+      "bgImage": "jpg",
+      "bgImageRev": 1782740539486
+    },
+    "vizMode": "mirror",
+    "restoreSession": true,
+    "defaultTab": "dashboard",
+    "locale": "it",
+    "libBrowse": "artists",
+    "libOverviewSort": "name",
+    "artistAlbumSort": "date",
+    "audioCrossfadeSec": 3,
+    "plectrDisableVizBackdrop": false,
+    "glassSurfaces": true,
+    "glassOpacity": 62
+  },
+  "shuffleExcludedAlbumIds": [],
+  "shuffleExcludedTrackRelPaths": [
+    "Artista Uno/Primo Album/02 - Brano Due.mp3"
+  ],
+  "trackMoods": {
+    "Artista Uno/Primo Album/02 - Brano Due.mp3": [
+      "energy_boost",
+      "party_dance",
+      "chill_relax"
+    ],
+    "Band Due/Città/02 - Perché.mp3": [
+      "chill_relax",
+      "romantic_intimacy",
+      "dark_tense"
+    ]
+  },
+  "plectrBests": {
+    "Band Due/Live： Night？/01 - Canzone ⧸ Remix.mp3": {
+      "score": 6300,
+      "grade": "D",
+      "accuracy": 0.21641791044776118,
+      "maxCombo": 13,
+      "hits": 29,
+      "misses": 105,
+      "updatedAt": "2026-06-07T17:23:03.496Z"
+    }
+  },
+  "playlistsMigrated": true,
+  "migratedLegacy": true,
+  "trackMoodsMigrated": true
+}

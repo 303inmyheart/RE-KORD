@@ -13,6 +13,7 @@
   "hub.activity.system.remoteAdminOn": "Systemvorgänge von anderen Geräten erlaubt",
   "hub.activity.system.remoteAdminOff": "Systemvorgänge auf den Rechner des Hubs beschränkt",
   "hub.activity.system.ytdlpUpdated": "yt-dlp aktualisiert: {{from}} → {{to}}",
+  "hub.activity.system.legacyImport": "Import aus dem alten RE-KORD: {{accounts}} Konten, {{favorites}} Favoriten, {{playlists}} Playlists, {{moods}} Stimmungen, {{blocked}} gesperrt",
   "hub.activity.favorites.added": "Favorit hinzugefügt (Titel {{trackId}})",
   "hub.activity.favorites.removed": "Favorit entfernt (Titel {{trackId}})",
   "hub.activity.playlist.created": "Playlist erstellt: {{name}}",

@@ -69,6 +69,8 @@ export type RunState = {
   finished: boolean;
   /** Notes exhausted, waiting for the track to end in the player. */
   awaitingTrackEnd: boolean;
+  /** End of the last note (head + hold), computed once. */
+  lastEnd: number;
 } & SongClockState;
 
 /** Side effects the engine asks the host for (vibration on miss). */
@@ -84,7 +86,10 @@ const BURST_HISTORY = 16;
 const FLASH_MS = 420;
 
 export function initialRunState(notes: ChartNote[]): RunState {
+  let lastEnd = 0;
+  for (const note of notes) lastEnd = Math.max(lastEnd, note.time + note.duration);
   return {
+    lastEnd,
     notes: notes.map((note) => ({ ...note })),
     activeHolds: [],
     score: 0,
@@ -207,9 +212,9 @@ export function upperBoundNoteIndex(notes: ChartNote[], time: number): number {
 
 export function isChartRunComplete(state: RunState, songTime: number): boolean {
   if (!state.notes.length) return false;
-  if (!state.notes.every((note) => note.hit || note.missed)) return false;
-  const lastEnd = state.notes.reduce((max, note) => Math.max(max, note.time + note.duration), 0);
-  return songTime >= lastEnd + HIT_WINDOWS.ok;
+  // Cheap test first: this runs every frame.
+  if (songTime < state.lastEnd + HIT_WINDOWS.ok) return false;
+  return state.notes.every((note) => note.hit || note.missed);
 }
 
 /**
@@ -318,6 +323,7 @@ export function applyMisses(state: RunState, songTime: number, env: JudgeEnv): v
 
 /** Ends holds that reached their tail, fails the ones let go too early. */
 export function completeHeldNotes(state: RunState, songTime: number, env: JudgeEnv): void {
+  if (!state.activeHolds.length) return;
   for (const note of state.activeHolds) {
     if (!note.holding || note.completed || note.missed) continue;
     const holdEnd = holdReleaseAt(note);

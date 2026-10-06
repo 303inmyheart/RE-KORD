@@ -96,9 +96,12 @@
 
 .plectr-device {
   position: relative;
-  height: min(var(--plectr-avail-h), 860px);
-  aspect-ratio: 9 / 16;
-  max-width: 100%;
+  /* Explicit 9:16 size: WebKit (WebKitGTK, Safari) sizes an `auto` grid
+     track from `aspect-ratio` + `max-width: 100%` as 0 px wide — the stage
+     vanished between the two side panels on the Linux desktop app. */
+  --plectr-device-h: min(var(--plectr-avail-h), 860px);
+  height: var(--plectr-device-h);
+  width: min(calc(var(--plectr-device-h) * 9 / 16), calc(100vw - var(--rk-rail-w, 0px) - 2rem));
   justify-self: center;
 }
 
@@ -195,7 +198,6 @@
 
 .plectr-page[data-layout="phone"] .plectr-device {
   height: auto;
-  aspect-ratio: auto;
   width: 100%;
 }
 
@@ -218,6 +220,8 @@
   --p-line: rgba(255, 255, 255, 0.1);
   color: var(--p-ink);
   color-scheme: dark;
+  touch-action: manipulation;
+  overscroll-behavior: none;
 }
 
 .plectr-page.is-immersive .plectr-layout,
@@ -860,7 +864,7 @@ html[data-plectr-playing] footer.player-dock:focus-within {
   border-radius: 50% !important;
 }
 
-/* ── Stage ── */
+/* ── Stage (legacy dock look: header + difficulty row, highway, HUD, pads) ── */
 
 .plectr-stage {
   position: absolute;
@@ -874,163 +878,191 @@ html[data-plectr-playing] footer.player-dock:focus-within {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  overscroll-behavior: none;
   overflow: hidden;
 }
 
-.plectr-strip {
+.plectr-head {
   position: relative;
-  flex: 0 0 40px;
+  flex: 0 0 auto;
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.5rem 0.6rem 0.55rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 3;
+}
+
+.plectr-head__top {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 3px 4px 0 0.85rem;
-  background: rgba(255, 255, 255, 0.035);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-  z-index: 2;
+  gap: 0.5rem;
+  min-width: 0;
 }
 
-.plectr-strip__progress {
+.plectr-head__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 0 1 auto;
+  max-width: 45%;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--rk-accent-2, #46e7ff);
+}
+
+.plectr-head__brand svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex-shrink: 0;
+}
+
+.plectr-head__brand span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.plectr-head__record {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-width: 0;
+  margin: 0;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+
+.plectr-head__record-label {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9aa8bd;
+}
+
+.plectr-head__record-label svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  color: var(--rk-accent-2, #46e7ff);
+}
+
+.plectr-head__record strong {
+  font-size: 0.82rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.plectr-head__record-empty {
+  font-weight: 700;
+  color: #9aa8bd;
+}
+
+.plectr-head__actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.plectr-head__btn {
+  appearance: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f3f6fb;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.plectr-head__btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.plectr-head__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.plectr-head__btn svg {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.plectr-head__diffs {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.plectr-head__diff {
+  appearance: none;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 0.35rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #9aa8bd;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.plectr-head__diff.is-active {
+  color: #f3f6fb;
+  border-color: color-mix(in srgb, var(--rk-accent, #f97316) 55%, transparent);
+  background: color-mix(in srgb, var(--rk-accent, #f97316) 20%, rgba(255, 255, 255, 0.05));
+}
+
+.plectr-head__diff:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.plectr-head__progress {
   position: absolute;
-  top: 0;
   left: 0;
   right: 0;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.08);
+  bottom: -1px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.06);
 }
 
-.plectr-strip__progress span {
+.plectr-head__progress span {
   display: block;
   height: 100%;
   background: linear-gradient(90deg, var(--rk-accent-2), var(--rk-accent));
   transform-origin: left center;
+  transform: scaleX(0);
 }
 
-.plectr-strip__score {
-  order: 1;
-  font-size: 1.25rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
-  line-height: 1;
+/* Phone: room for the notch / status bar, bigger buttons. */
+.plectr-stage.is-compact .plectr-head__btn {
+  width: 2.6rem;
+  height: 2.6rem;
 }
 
-.plectr-strip__combo {
-  order: 2;
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
+.plectr-stage.is-compact .plectr-head__diff {
+  min-height: 36px;
 }
 
-.plectr-strip__combo strong {
-  font-size: 1.0625rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-}
-
-.plectr-pips {
-  display: inline-flex;
-  gap: 3px;
-}
-
-.plectr-pips i {
-  width: 6px;
-  height: 14px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.15);
-}
-
-.plectr-pips i.is-on {
-  background: var(--plectr-perfect);
-}
-
-.plectr-pips i.is-on:nth-child(3) {
-  background: var(--plectr-timing);
-}
-
-.plectr-pips i.is-on:nth-child(4) {
-  background: #f97316;
-}
-
-.plectr-strip__pause {
-  order: 3;
-  appearance: none;
-  width: 40px;
-  height: 36px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: #f3f6fb;
-  cursor: pointer;
-}
-
-.plectr-strip__pause:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.plectr-strip__pause svg {
-  width: 22px;
-  height: 22px;
-}
-
-.plectr-strip__title {
-  display: none;
-}
-
-/* Phone strip: pause · title (marquee) · score · combo. */
-.plectr-stage.is-compact .plectr-strip {
-  flex-basis: 48px;
-  padding-left: 2px;
-  padding-right: 0.75rem;
-}
-
-.plectr-stage.is-compact .plectr-strip__pause {
-  order: 0;
-  width: 44px;
-  height: 44px;
-}
-
-.plectr-stage.is-compact .plectr-strip__title {
-  order: 1;
-  display: block;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  font-size: var(--rk-fs-2, 0.8125rem);
-  font-weight: 700;
-  color: #b8c3d6;
-  mask-image: linear-gradient(90deg, transparent, #000 6%, #000 90%, transparent);
-}
-
-.plectr-stage.is-compact .plectr-strip__title span {
-  display: inline-block;
-  padding-left: 6%;
-  animation: plectr-marquee 14s linear infinite;
-}
-
-.plectr-stage.is-compact .plectr-strip__score {
-  order: 2;
-}
-
-.plectr-stage.is-compact .plectr-strip__combo {
-  order: 3;
-  margin-left: 0;
-}
-
-@keyframes plectr-marquee {
-  0%,
-  12% {
-    transform: translateX(0);
-  }
-  88%,
-  100% {
-    transform: translateX(min(0px, calc(-100% + 40vw)));
-  }
-}
-
+/* The lanes own every touch: no scroll, zoom, long-press menu or selection. */
 .plectr-lanes {
   position: relative;
   flex: 1 1 auto;
@@ -1038,7 +1070,10 @@ html[data-plectr-playing] footer.player-dock:focus-within {
   display: flex;
   flex-direction: column;
   touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
   cursor: pointer;
+  contain: layout paint;
 }
 
 .plectr-stage__canvas {
@@ -1046,58 +1081,144 @@ html[data-plectr-playing] footer.player-dock:focus-within {
   min-height: 0;
   width: 100%;
   display: block;
+  touch-action: none;
+}
+
+/* Score / combo boxes over the highway (legacy dock HUD). */
+.plectr-hud {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  right: 6px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.plectr-hud__stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--rk-accent-2, #46e7ff) 22%, transparent), transparent 78%),
+    rgba(16, 21, 34, 0.92);
+  border: 1px solid color-mix(in srgb, var(--rk-accent-2, #46e7ff) 32%, rgba(255, 255, 255, 0.1));
+}
+
+.plectr-hud__stat span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #b8c3d6;
+}
+
+.plectr-hud__stat strong {
+  flex: 0 0 auto;
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.plectr-hud__stat--score strong {
+  color: var(--rk-accent-2, #46e7ff);
+}
+
+.plectr-hud__stat--combo strong {
+  color: var(--rk-accent, #f97316);
 }
 
 .plectr-pads {
-  flex: 0 0 clamp(72px, 11cqh, 88px);
+  flex: 0 0 clamp(58px, 10cqh, 76px);
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  background: #070a12;
+  gap: 0.28rem;
+  padding: 0 0.1rem 0.1rem;
+  background: var(--plectr-bg);
 }
 
 .plectr-pad {
   position: relative;
   display: grid;
   place-items: center;
+  align-content: center;
+  gap: 0.35rem;
+  border-radius: 6px;
   border-top: 3px solid var(--lane-color);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--lane-color) 14%, #0b0f18), #070a12 85%);
-  transition: background-color 60ms linear;
-}
-
-.plectr-pad + .plectr-pad {
-  border-left: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--lane-color) 28%, #10141f) 0%, #06080f 100%);
+  filter: saturate(0.92) brightness(0.9);
 }
 
 .plectr-pad.is-pressed {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--lane-color) 42%, #0b0f18), color-mix(in srgb, var(--lane-color) 12%, #070a12));
-  box-shadow: inset 0 6px 22px color-mix(in srgb, var(--lane-color) 45%, transparent);
+  filter: none;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--lane-color) 48%, #12182a), #05070d);
+  box-shadow: 0 -5px 16px color-mix(in srgb, var(--lane-color) 40%, transparent);
+}
+
+.plectr-pad.is-holding {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--lane-color) 62%, #1a2438), #070a12);
+}
+
+.plectr-pad.is-hit {
+  box-shadow: 0 -4px 14px color-mix(in srgb, var(--lane-color) 35%, transparent);
 }
 
 .plectr-pad.is-miss {
   border-top-color: var(--plectr-miss);
 }
 
+.plectr-pad__pip {
+  display: block;
+  width: min(36px, 34%);
+  height: 7px;
+  border-radius: 999px;
+  background: var(--lane-color);
+  opacity: 0.82;
+  pointer-events: none;
+}
+
+.plectr-pad.is-pressed .plectr-pad__pip,
+.plectr-pad.is-hit .plectr-pad__pip {
+  opacity: 1;
+}
+
+.plectr-pad.is-holding .plectr-pad__pip {
+  height: 9px;
+  opacity: 1;
+}
+
+.plectr-pad.is-miss .plectr-pad__pip {
+  background: var(--plectr-miss);
+}
+
 .plectr-pad__key {
-  min-width: 1.8rem;
-  padding: 0.15rem 0.5rem;
-  border-radius: 6px;
+  min-width: 1.6rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 5px;
   background: rgba(0, 0, 0, 0.4);
   border: 1px solid rgba(255, 255, 255, 0.14);
   color: #f3f6fb;
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   font-weight: 800;
   text-align: center;
   line-height: 1.4;
 }
 
-.plectr-pad.is-pressed .plectr-pad__key {
-  border-color: var(--lane-color);
-}
-
-/* Judgement: one word, colour by tone, pop 120 ms then fade 350 ms. */
+/* Judgement in the centre: one word, colour by tone, pop then fade. */
 .plectr-judge {
   position: absolute;
-  top: 22%;
+  top: 26%;
   left: 0;
   right: 0;
   text-align: center;
@@ -1105,11 +1226,14 @@ html[data-plectr-playing] footer.player-dock:focus-within {
   font-size: clamp(1.5rem, 10cqw, 2.75rem);
   font-weight: 900;
   font-style: italic;
-  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   line-height: 1;
   color: #fff;
-  text-shadow: 0 0 18px currentColor, 0 2px 0 rgba(0, 0, 0, 0.6);
-  animation: plectr-judge 800ms ease-out forwards;
+  text-shadow: 0 0 12px rgba(0, 0, 0, 0.85), 0 2px 8px rgba(0, 0, 0, 0.65);
+  animation: plectr-judge 700ms ease-out forwards;
+  will-change: transform, opacity;
+  z-index: 2;
 }
 
 .plectr-judge--perfect {
@@ -1131,13 +1255,13 @@ html[data-plectr-playing] footer.player-dock:focus-within {
 @keyframes plectr-judge {
   0% {
     opacity: 0;
-    transform: scale(1.4);
+    transform: scale(1.35);
   }
   15% {
     opacity: 1;
     transform: scale(1);
   }
-  56% {
+  60% {
     opacity: 1;
   }
   100% {
@@ -1147,21 +1271,24 @@ html[data-plectr-playing] footer.player-dock:focus-within {
 
 .plectr-judge__combo {
   position: absolute;
-  top: calc(22% + clamp(2rem, 12cqw, 3.2rem));
+  top: calc(26% + clamp(2rem, 12cqw, 3.2rem));
   left: 0;
   right: 0;
   text-align: center;
   pointer-events: none;
-  font-size: var(--rk-fs-2, 0.8125rem);
-  font-weight: 800;
+  font-size: clamp(0.9rem, 4.5cqw, 1.15rem);
+  font-weight: 900;
   letter-spacing: 0.12em;
-  color: rgba(255, 255, 255, 0.82);
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.86);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
   font-variant-numeric: tabular-nums;
+  z-index: 2;
 }
 
 .plectr-milestone {
   position: absolute;
-  top: 36%;
+  top: 40%;
   left: 0;
   right: 0;
   text-align: center;
@@ -1170,8 +1297,9 @@ html[data-plectr-playing] footer.player-dock:focus-within {
   font-weight: 900;
   font-style: italic;
   color: var(--plectr-perfect);
-  text-shadow: 0 0 24px rgba(70, 231, 255, 0.6);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
   animation: plectr-milestone 900ms ease-out forwards;
+  z-index: 2;
 }
 
 @keyframes plectr-milestone {
@@ -1192,38 +1320,50 @@ html[data-plectr-playing] footer.player-dock:focus-within {
   }
 }
 
-.plectr-countdown {
+/* Live difficulty switch: the new level flashes in the middle. */
+.plectr-diffflash {
   position: absolute;
-  inset: 0 0 clamp(72px, 11cqh, 88px);
-  display: grid;
-  place-items: center;
+  top: 52%;
+  left: 0;
+  right: 0;
+  text-align: center;
   pointer-events: none;
-  font-size: clamp(3.5rem, 34cqw, 9rem);
+  font-size: clamp(1rem, 6cqw, 1.6rem);
   font-weight: 900;
-  font-style: italic;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   color: #fff;
-  text-shadow: 0 0 40px rgba(70, 231, 255, 0.55);
-  animation: plectr-count 480ms ease-out forwards;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
+  animation: plectr-milestone 1100ms ease-out forwards;
+  z-index: 2;
 }
 
-.plectr-countdown.is-go {
-  color: var(--plectr-perfect);
-  font-size: clamp(2.75rem, 24cqw, 6.5rem);
+.plectr-diffflash--easy {
+  color: #4ade80;
 }
 
-@keyframes plectr-count {
-  0% {
-    opacity: 0;
-    transform: scale(1.6);
-  }
-  30% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  100% {
-    opacity: 0.85;
-    transform: scale(0.94);
-  }
+.plectr-diffflash--normal {
+  color: #fbbf24;
+}
+
+.plectr-diffflash--hard {
+  color: #f87171;
+}
+
+/* Overlays inside the lanes (status, pause, results): normal pointer handling. */
+.plectr-overlay {
+  touch-action: manipulation;
+  cursor: auto;
+}
+
+.plectr-stage .plectr-status {
+  z-index: 4;
+  background: rgba(6, 8, 15, 0.78);
+}
+
+.plectr-status__sub {
+  max-width: 18rem;
+  opacity: 0.85;
 }
 
 /* ── Pause ── */
@@ -2176,7 +2316,7 @@ html[data-plectr-playing] footer.player-dock:focus-within {
 @media (prefers-reduced-motion: reduce) {
   .plectr-judge,
   .plectr-milestone,
-  .plectr-countdown,
+  .plectr-diffflash,
   .plectr-results__grade {
     animation-duration: 1ms;
     animation-timing-function: linear;
@@ -2184,10 +2324,6 @@ html[data-plectr-playing] footer.player-dock:focus-within {
 
   .plectr-judge {
     animation: plectr-fade 800ms linear forwards;
-  }
-
-  .plectr-stage.is-compact .plectr-strip__title span {
-    animation: none;
   }
 
   .plectr-ring__value,

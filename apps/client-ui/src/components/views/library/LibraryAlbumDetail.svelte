@@ -13,6 +13,7 @@
   import TrackList from "../../TrackList.svelte";
   import UiIcon from "../../icons/UiIcon.svelte";
   import { api, coverUrlFor, type Album, type Track } from "../../../lib/api";
+  import { floating } from "../../../lib/floatingPopover";
   import { confirmDialog } from "../../../lib/confirm.svelte";
   import {
     canonicalGenreLabel,
@@ -33,16 +34,26 @@
   let genreBusy = $state(false);
   let genreErr = $state<string | null>(null);
   let genreAddWrapEl = $state<HTMLDivElement | null>(null);
+  let genreMenuEl = $state<HTMLUListElement | null>(null);
 
   onMount(() => {
     const onDocPointer = (ev: MouseEvent) => {
       if (!genrePickerOpen) return;
       const target = ev.target;
       if (target instanceof Node && genreAddWrapEl?.contains(target)) return;
+      // The menu lives on <body> (use:floating), outside the wrap.
+      if (target instanceof Node && genreMenuEl?.contains(target)) return;
       genrePickerOpen = false;
     };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") genrePickerOpen = false;
+    };
     document.addEventListener("mousedown", onDocPointer);
-    return () => document.removeEventListener("mousedown", onDocPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocPointer);
+      document.removeEventListener("keydown", onKey);
+    };
   });
 
   $effect(() => {
@@ -163,13 +174,6 @@
 </script>
 
 <div class="album-page">
-  <div class="album-page__back">
-    <button type="button" class="album-page__back-btn" onclick={() => void session.backLibrary()}>
-      <UiIcon name="chevronLeft" />
-      <span>{album.artist_name}</span>
-    </button>
-  </div>
-
   <section class="album-hero rk-surface-card album-detail">
     <button
       type="button"
@@ -182,28 +186,32 @@
       <span class="album-detail__cover-badge" aria-hidden="true"><UiIcon name="image" /></span>
     </button>
 
-    <div class="album-detail__info">
-      <p class="rk-eyebrow">{album.loose ? t("library.looseAlbum") : t("library.albumDetail")}</p>
-      <h1 class="album-detail__title">{album.name}</h1>
-      <p class="album-detail__meta">
-        <button type="button" class="album-detail__artist" onclick={() => void session.backLibrary()}>
-          {album.artist_name}
+    <!-- Legacy album hero: back chevron + eyebrow + status chips on the left,
+         the album actions on the right; the title and meta below. -->
+    <div class="album-detail__toprow">
+      <div class="page-toolbar__lead page-toolbar__lead--backrow album-detail__lead">
+        <button
+          type="button"
+          class="page-toolbar-back-ic album-detail__back"
+          title={`${t("library.backToArtistAria")}: ${album.artist_name}`}
+          aria-label={`${t("library.backToArtistAria")}: ${album.artist_name}`}
+          onclick={() => void session.backLibrary()}
+        >
+          <UiIcon name="chevronLeft" class="page-toolbar-back-ic__ic" />
         </button>
-        {#if releaseLabel}<span>{releaseLabel}</span>{/if}
-        {#if label}<span>{label}</span>{/if}
-        <span>{tp("library.tracksCount", tracks.length || album.track_count)}</span>
-        {#if totalMinutes > 0}<span>{t("library.albumMinutes", { n: totalMinutes })}</span>{/if}
-      </p>
-
-      <MetaBadgeCluster
-        variant="hero"
-        missingMeta={!albumHasAlbumMeta(album)}
-        tracksMissingMetaCount={tracksMissingMeta}
-        favoriteCount={favCount}
-        {albumExcluded}
-        {tracksExcludedCount}
-        loose={album.loose}
-      />
+        <div class="page-toolbar__textcol">
+          <p class="rk-eyebrow">{album.loose ? t("library.looseAlbum") : t("library.albumDetail")}</p>
+          <MetaBadgeCluster
+            variant="hero"
+            missingMeta={!albumHasAlbumMeta(album)}
+            tracksMissingMetaCount={tracksMissingMeta}
+            favoriteCount={favCount}
+            {albumExcluded}
+            {tracksExcludedCount}
+            loose={album.loose}
+          />
+        </div>
+      </div>
 
       <div class="album-detail__actions">
         <Button class="album-detail__play" disabled={!tracks.length} onclick={() => session.playSequence(tracks, 0)}>
@@ -214,10 +222,10 @@
           variant="ghost"
           disabled={!tracks.length}
           title={t("library.shuffleAlbum")}
+          aria-label={t("library.shuffleAlbum")}
           onclick={() => session.playPoolShuffle(tracks)}
         >
           <UiIcon name="shuffle" />
-          <span class="album-detail__btn-label">{t("library.shuffleAlbum")}</span>
         </Button>
         <EntityInfoAction {artistDir} albumDir={album.loose ? null : albumDir} loose={album.loose} title={album.name} />
         <Button variant="ghost" title={t("library.editAlbum")} aria-label={t("library.editAlbum")} onclick={() => session.openAlbumEdit()}>
@@ -225,6 +233,7 @@
         </Button>
         <Button
           variant="ghost"
+          class={albumExcluded ? "album-detail__exclude is-on" : "album-detail__exclude"}
           aria-pressed={albumExcluded}
           title={t("library.shuffleBlock")}
           aria-label={t("library.shuffleBlock")}
@@ -233,6 +242,20 @@
           <UiIcon name="exclude" />
         </Button>
       </div>
+    </div>
+
+    <h1 class="album-detail__title">{album.name}</h1>
+
+    <div class="album-detail__info">
+      <p class="album-detail__meta">
+        <button type="button" class="album-detail__artist" onclick={() => void session.backLibrary()}>
+          {album.artist_name}
+        </button>
+        {#if releaseLabel}<span>{releaseLabel}</span>{/if}
+        {#if label}<span>{label}</span>{/if}
+        <span>{tp("library.tracksCount", tracks.length || album.track_count)}</span>
+        {#if totalMinutes > 0}<span>{t("library.albumMinutes", { n: totalMinutes })}</span>{/if}
+      </p>
 
       <div class="album-detail__genres" role="list" aria-label={t("library.albumGenresAria")}>
         {#each trackGenreStats as g (g.key)}
@@ -274,7 +297,12 @@
               <span>{t("trackMeta.fieldGenreAdd")}</span>
             </button>
             {#if genrePickerOpen}
-              <ul class="track-row__overflow-menu album-hero__genre-menu rk-scroll" role="menu">
+              <ul
+                bind:this={genreMenuEl}
+                class="track-row__overflow-menu album-hero__genre-menu rk-scroll"
+                role="menu"
+                use:floating={{ anchor: genreAddWrapEl, placement: "bottom-start", minWidth: 200 }}
+              >
                 {#each genreOptions as opt (opt)}
                   <li role="presentation">
                     <button type="button" role="menuitem" class="track-row__overflow-item" onclick={() => void addGenre(opt)}>
@@ -329,53 +357,46 @@
     min-width: 0;
   }
 
-  .album-page__back {
-    display: flex;
-  }
-
-  .album-page__back-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    max-width: 100%;
-    min-height: 2.25rem;
-    padding: 0.25rem 0.75rem 0.25rem 0.4rem;
-    border-radius: 999px;
-    border: 1px solid var(--rk-line);
-    background: var(--rk-surface-2);
-    color: var(--rk-ink);
-    font: inherit;
-    font-size: var(--rk-fs-sm);
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .album-page__back-btn span {
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .album-page__back-btn :global(svg) {
-    width: 1.15rem;
-    height: 1.15rem;
-    flex-shrink: 0;
-  }
-
-  .album-page__back-btn:hover {
-    border-color: var(--rk-line-strong, var(--rk-line));
-  }
-
+  /* Legacy album hero: cover spanning the left column; on the right a
+     toolbar row (back chevron, eyebrow + chips | actions), the title, then
+     the meta line and the genre chips. */
   .album-detail {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 1.5rem;
+    grid-template-columns: clamp(140px, 16vw, 200px) minmax(0, 1fr);
+    grid-template-rows: auto auto 1fr;
+    gap: 0.9rem 1.5rem;
     align-items: start;
     padding: var(--rk-space-lg, 1.25rem);
   }
 
+  .album-detail__toprow {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.6rem 1rem;
+    min-width: 0;
+  }
+
+  .album-detail__lead {
+    align-items: flex-start;
+    min-width: 0;
+  }
+
+  .album-detail__lead :global(.page-toolbar-back-ic) {
+    align-self: flex-start;
+    margin-top: 0.08rem;
+  }
+
+  .album-detail__lead :global(.rk-eyebrow) {
+    margin: 0;
+  }
+
   .album-detail__cover {
+    grid-column: 1;
+    grid-row: 1 / -1;
     position: relative;
     padding: 0;
     border: none;
@@ -386,8 +407,8 @@
   }
 
   .album-detail__cover :global(.rk-cover.album-detail__cover-art) {
-    width: clamp(160px, 18vw, 220px);
-    height: clamp(160px, 18vw, 220px);
+    width: clamp(140px, 16vw, 200px);
+    height: clamp(140px, 16vw, 200px);
     --cover-initials: 3rem;
   }
 
@@ -399,8 +420,9 @@
     place-items: center;
     width: 2rem;
     height: 2rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--rk-surface) 88%, transparent);
+    /* Legacy: rounded square, not a dot. */
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--rk-surface) 78%, transparent);
     border: 1px solid var(--rk-line);
     color: var(--rk-ink);
     opacity: 0;
@@ -418,17 +440,17 @@
   }
 
   .album-detail__info {
+    grid-column: 2;
+    grid-row: 3;
     display: grid;
     gap: 0.55rem;
     min-width: 0;
     align-content: start;
   }
 
-  .album-detail__info :global(.rk-eyebrow) {
-    margin: 0;
-  }
-
   .album-detail__title {
+    grid-column: 2;
+    grid-row: 2;
     margin: 0;
     font-size: clamp(1.5rem, 3vw, 2rem);
     line-height: 1.15;
@@ -470,8 +492,13 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
+    justify-content: flex-end;
     gap: 0.5rem;
-    margin-top: 0.25rem;
+  }
+
+  .album-detail__actions :global(.album-detail__exclude.is-on) {
+    color: var(--rk-accent-2);
+    border-color: color-mix(in srgb, var(--rk-accent-2) 45%, var(--rk-line));
   }
 
   .album-detail__actions :global(svg) {
@@ -548,13 +575,28 @@
     height: 18px;
   }
 
-  /* Phones: cover centred on top, then title, meta and a full-width primary action. */
+  /* Phones: back row on top, cover centred, then title, meta and a
+     full-width primary action (legacy responsive album hero). */
   @media (max-width: 719.98px) {
     .album-detail {
       grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: none;
       justify-items: center;
-      gap: 1rem;
+      gap: 0.85rem;
       padding: 1rem;
+    }
+
+    .album-detail__toprow,
+    .album-detail__title,
+    .album-detail__info,
+    .album-detail__cover {
+      grid-column: 1;
+      grid-row: auto;
+    }
+
+    .album-detail__toprow {
+      order: -1;
+      width: 100%;
     }
 
     .album-detail__cover :global(.rk-cover.album-detail__cover-art) {
@@ -562,6 +604,7 @@
       height: min(62vw, 240px);
     }
 
+    .album-detail__title,
     .album-detail__info {
       justify-items: center;
       text-align: center;
@@ -569,18 +612,18 @@
     }
 
     .album-detail__meta,
-    .album-detail__actions,
     .album-detail__genres {
       justify-content: center;
+    }
+
+    .album-detail__actions {
+      justify-content: center;
+      width: 100%;
     }
 
     .album-detail__actions :global(.album-detail__play) {
       flex: 1 1 100%;
       justify-content: center;
-    }
-
-    .album-detail__btn-label {
-      display: none;
     }
   }
 </style>

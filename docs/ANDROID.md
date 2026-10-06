@@ -217,18 +217,17 @@ there is no rotate-then-snap on startup.
 
 ### Audio focus, headphones, delivery of commands
 
-`RekordMediaService` owns the audio focus on behalf of the WebView (which does not request
-it on its own):
+Audio focus belongs to the WebView: Chromium requests it when the `<audio>` element starts
+and pauses or resumes the element itself on losses (phone calls, other music apps), which the
+player sees as ordinary `pause`/`play` events. `RekordMediaService` does **not** request focus:
+a second requester inside the same app stole focus from the WebView and its loss handler
+paused the track a moment after it started. The legacy app ignored focus changes for the same
+reason.
 
 | Event | Action |
 |-------|--------|
-| a track starts (state `playing` from the page, or Play from the notification) | `requestAudioFocus(GAIN)`, `USAGE_MEDIA` / `CONTENT_TYPE_MUSIC`, delayed gain accepted |
-| `AUDIOFOCUS_LOSS` (another music app) | `pause`, focus abandoned, no auto-resume |
-| `AUDIOFOCUS_LOSS_TRANSIENT` (call, navigator prompt) | `pause`, remembers it was playing |
-| `AUDIOFOCUS_GAIN` after a transient loss | `play` if it was playing |
-| `AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK` | nothing: from Android 8 the system ducks by itself (`setWillPauseWhenDucked(false)`) |
 | `ACTION_AUDIO_BECOMING_NOISY` (headphones unplugged, BT off) | `pause` (receiver registered only while playing) |
-| service destroyed / stop | focus abandoned, receiver removed |
+| service destroyed / stop | receiver removed |
 
 All of these reach the player through the same `rekord:media-action` event as the
 notification buttons. `RekordMediaBridge` delivers each command with a 5 s partial wake lock
@@ -280,8 +279,8 @@ hidden in the app. The shell carries a native sender instead, ported from the le
   keeps mirroring the player, which now follows the receiver, so it shows the cast track,
   its play state and "On <device>". Its buttons, the headphone button and the lock screen
   control the Chromecast through the usual `rekord:media-action`.
-  `RekordMediaService` drops audio focus and the "becoming noisy" receiver: a phone call or
-  unplugged headphones must not pause the living-room speaker. It also switches the
+  `RekordMediaService` drops the "becoming noisy" receiver: unplugged headphones must not
+  pause the living-room speaker. It also switches the
   MediaSession to remote volume, so the volume keys move the Chromecast's volume with the
   screen off. With the app open, `MainActivity.dispatchKeyEvent` does the same. The WebView
   stays awake in the background for as long as a session is connected, because the page is

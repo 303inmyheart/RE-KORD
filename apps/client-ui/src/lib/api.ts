@@ -1005,7 +1005,7 @@ export const api = {
   },
 
   artworkApply: (albumPath: string, imageUrl: string) =>
-    request<{ saved: boolean; coverRelPath?: string }>("/api/v1/artwork/apply", {
+    request<{ saved: boolean; coverRelPath?: string; coverVersion?: string | number }>("/api/v1/artwork/apply", {
       method: "POST",
       body: JSON.stringify({ albumPath, imageUrl }),
       timeoutMs: LONG_TIMEOUT_MS,
@@ -1216,7 +1216,7 @@ export const api = {
     const fd = new FormData();
     fd.append("albumPath", albumPath);
     fd.append("file", file);
-    return request<{ saved?: boolean; coverRelPath?: string }>("/api/v1/artwork/upload", {
+    return request<{ saved?: boolean; coverRelPath?: string; coverVersion?: string | number }>("/api/v1/artwork/upload", {
       method: "POST",
       body: fd,
       timeoutMs: UPLOAD_TIMEOUT_MS,

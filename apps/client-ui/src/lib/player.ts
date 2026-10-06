@@ -89,6 +89,14 @@ const CURSOR_SYNC_MIN_MS = 60_000;
 const GAPLESS_PREFETCH_SEC = 12;
 /** The OS extrapolates position between updates; this only corrects drift. */
 const MEDIA_POSITION_REFRESH_MS = 5000;
+/**
+ * How long the analyser graph outlives its last lease. A visualizer drops its
+ * lease on every pause and takes it again on play: tearing the graph down in
+ * between meant a new <audio> element and a new MediaElementSource on every
+ * play/pause, which on WebKitGTK re-plumbs the GStreamer pipeline on the main
+ * thread (the freezes on play/pause). Within this window the graph just stays.
+ */
+const GRAPH_IDLE_GRACE_MS = 45_000;
 
 type PersistedSessionQueue = {
   version: 1;
@@ -340,6 +348,10 @@ class PlayerController {
     () => this.engageGraph(),
     () => this.onAnalyserIdle(),
   );
+  /** Pending teardown of an idle graph (see GRAPH_IDLE_GRACE_MS); 0 = none. */
+  private graphIdleTimer = 0;
+  /** Deferred hub cursor sync after a pause (kept off the pause handler). */
+  private pauseSyncTimer = 0;
   /** Crossfade level of each deck: 1 = heard, 0 = silent. */
   private deckLevels: [LevelRamp, LevelRamp] = [constantLevel(1), constantLevel(0)];
   /** Whole-output level (sleep-timer fade). */
@@ -570,7 +582,10 @@ class PlayerController {
       if (!this.playing) return;
       this.playing = false;
       this.syncMediaPlaybackState();
-      this.persistPosition(true);
+      // Position saved now; the hub cursor sync (JSON of the whole synced
+      // settings, queue included, into localStorage + a push) waits until
+      // the paused state has been painted.
+      this.persistPosition(true, true);
       this.emitPlayState();
     });
     on("ended", () => {
@@ -935,8 +950,12 @@ class PlayerController {
     for (const fn of this.playStateListeners) fn();
   }
 
-  /** Throttled save of the playback position (forced on pause / pagehide). */
-  private persistPosition(force = false) {
+  /**
+   * Throttled save of the playback position (forced on pause / pagehide).
+   * `deferSync`: run the forced hub cursor sync a moment later, off the
+   * current event (pause), instead of synchronously.
+   */
+  private persistPosition(force = false, deferSync = false) {
     if (this.restoringSession || this.restorePosition || this.persistSuspended) return;
     const track = this.current;
     if (!track) return;
@@ -949,7 +968,19 @@ class PlayerController {
       updatedAt: now,
     });
     // A forced save marks a moment worth syncing (pause, leaving, switching).
-    if (force) this.emitQueueSync(false, true);
+    if (!force) return;
+    if (this.pauseSyncTimer) {
+      window.clearTimeout(this.pauseSyncTimer);
+      this.pauseSyncTimer = 0;
+    }
+    if (deferSync && typeof window !== "undefined") {
+      this.pauseSyncTimer = window.setTimeout(() => {
+        this.pauseSyncTimer = 0;
+        this.emitQueueSync(false, true, true);
+      }, 400);
+      return;
+    }
+    this.emitQueueSync(false, true);
   }
 
   /** Seek the restored track to where the last session stopped (once). */
@@ -1569,6 +1600,8 @@ class PlayerController {
 
   /** First lease: build the graph (nodes only), wire the decks once the context runs. */
   private engageGraph() {
+    // Taken again within the grace window: the graph never went away.
+    this.cancelGraphIdleDrop();
     if (!this.ctx) {
       const Ctor =
         typeof window !== "undefined"
@@ -1640,9 +1673,32 @@ class PlayerController {
     if (changed) this.applyLevels(now);
   }
 
-  /** Last lease released: the graph goes once its decks can be swapped out. */
+  /**
+   * Last lease released: the graph goes once its decks can be swapped out,
+   * but only after GRAPH_IDLE_GRACE_MS without a new lease (pause → play
+   * must not rebuild it).
+   */
   private onAnalyserIdle() {
     if (!this.ctx) return;
+    if (typeof window === "undefined") {
+      this.dropIdleGraph();
+      return;
+    }
+    this.cancelGraphIdleDrop();
+    this.graphIdleTimer = window.setTimeout(() => {
+      this.graphIdleTimer = 0;
+      this.dropIdleGraph();
+    }, GRAPH_IDLE_GRACE_MS);
+  }
+
+  private cancelGraphIdleDrop() {
+    if (!this.graphIdleTimer) return;
+    window.clearTimeout(this.graphIdleTimer);
+    this.graphIdleTimer = 0;
+  }
+
+  private dropIdleGraph() {
+    if (!this.ctx || this.analyserLeases.count > 0) return;
     if (!this.graphWired()) {
       this.closeGraph();
       return;
@@ -1658,6 +1714,8 @@ class PlayerController {
    */
   private maybeDropGraph() {
     if (!this.ctx || this.analyserLeases.count > 0) return;
+    // Still inside the grace window: the timer retries when it ends.
+    if (this.graphIdleTimer) return;
     if (!this.graphWired()) {
       this.closeGraph();
       return;
@@ -2182,6 +2240,37 @@ class PlayerController {
   removeFromQueueById(trackId: number) {
     const i = this.queue.findIndex((t) => t.id === trackId);
     if (i >= 0) this.removeFromQueue(i);
+  }
+
+  /**
+   * Library metadata changed (title, genre, lyrics, cover version…): swap the
+   * edited fields into every queue entry `patchFor` returns a patch for, so
+   * the player bar, Listen view, queue and OS media controls show the new
+   * values at once. Playback is untouched (same paths, same index).
+   */
+  patchTracks(patchFor: (track: Track) => Partial<Track> | null | undefined): boolean {
+    const patchList = (list: Track[]) => {
+      let changed = false;
+      const next = list.map((t) => {
+        const patch = patchFor(t);
+        if (!patch) return t;
+        const keys = Object.keys(patch) as (keyof Track)[];
+        if (!keys.some((k) => t[k] !== patch[k])) return t;
+        changed = true;
+        return { ...t, ...patch };
+      });
+      return changed ? next : null;
+    };
+    const queue = patchList(this.queue);
+    if (!queue) return false;
+    const before = this.current;
+    this.queue = queue;
+    this.privateQueue = patchList(this.privateQueue) ?? this.privateQueue;
+    const after = this.current;
+    if (after && after !== before) this.updateMediaSession(after);
+    savePersistedSessionQueue(this.boundAccount, this.queue, this.index, this.queueUpdatedAt);
+    this.emit();
+    return true;
   }
 
   /** For files gone from disk: the same path can sit in the queue more than once. */
