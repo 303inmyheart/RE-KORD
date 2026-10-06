@@ -17,9 +17,8 @@ import {
   createSceneStyleWeights,
   frameHues,
   mathPixelHue,
-  pixelMathPhase,
   prepareConstellationTaps,
-  samplePlectrFieldGrid,
+  samplePlectrFieldGridInto,
   seededNoise,
   writeSceneStyleWeights,
   type ChartNote,
@@ -30,6 +29,17 @@ const MAX_CELLS_PANEL = 1800;
 const MAX_CELLS_EXPANDED = 4000;
 const MIN_CELL = 9;
 const MAX_CELL = 18;
+const TAU = Math.PI * 2;
+
+/** ImageData bytes are RGBA in memory: the packed 32-bit word depends on endianness. */
+const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([0x0a0b0c0d]).buffer)[0] === 0x0d;
+
+/** Opaque RGB → the 32-bit word that writes those bytes into ImageData. */
+export function packRgb(r: number, g: number, b: number): number {
+  return LITTLE_ENDIAN
+    ? (0xff000000 | (b << 16) | (g << 8) | r) >>> 0
+    : ((r << 24) | (g << 16) | (b << 8) | 0xff) >>> 0;
+}
 
 function clamp(v: number, lo = 0, hi = 1) {
   return Math.max(lo, Math.min(hi, v));
@@ -62,7 +72,8 @@ export function lastNoteIndexAt(notes: readonly ChartNote[], time: number, slack
   return ans;
 }
 
-function hslToRgb(h: number, sPct: number, lPct: number): [number, number, number] {
+/** HSL → RGB bytes, written into `out` (per-cell hot path: no allocation). */
+export function hslToRgbInto(h: number, sPct: number, lPct: number, out: number[]): number[] {
   const hue = ((h % 360) + 360) % 360;
   const s = clamp(sPct / 100);
   const l = clamp(lPct / 100);
@@ -91,37 +102,36 @@ function hslToRgb(h: number, sPct: number, lPct: number): [number, number, numbe
     rp = c;
     bp = x;
   }
-  return [((rp + m) * 255 + 0.5) | 0, ((gp + m) * 255 + 0.5) | 0, ((bp + m) * 255 + 0.5) | 0];
+  out[0] = ((rp + m) * 255 + 0.5) | 0;
+  out[1] = ((gp + m) * 255 + 0.5) | 0;
+  out[2] = ((bp + m) * 255 + 0.5) | 0;
+  return out;
 }
 
-function fillCellRgb(
-  data: Uint8ClampedArray,
+/**
+ * Fills a `size`² square of the 32-bit pixel view with one colour, clipped to
+ * the buffer. Cells never overlap and sit on a uniform background, so the
+ * legacy per-pixel alpha blend collapses to one pre-blended colour per cell.
+ */
+function fillCell32(
+  px32: Uint32Array,
   bufW: number,
   bufH: number,
   x0: number,
   y0: number,
   size: number,
-  r: number,
-  g: number,
-  b: number,
-  a: number,
+  color: number,
 ) {
   const x1 = Math.min(bufW, x0 + size);
   const y1 = Math.min(bufH, y0 + size);
   const xStart = Math.max(0, x0);
   const yStart = Math.max(0, y0);
-  const inv = 1 - a;
-  const ra = r * a + 0.5;
-  const ga = g * a + 0.5;
-  const ba = b * a + 0.5;
+  if (x1 <= xStart) return;
+  // Spans are short (a cell is ~8–30 px wide): a plain loop beats one
+  // TypedArray.fill call per row.
   for (let py = yStart; py < y1; py += 1) {
-    let idx = (py * bufW + xStart) * 4;
-    for (let px = xStart; px < x1; px += 1) {
-      data[idx] = (ra + data[idx]! * inv) | 0;
-      data[idx + 1] = (ga + data[idx + 1]! * inv) | 0;
-      data[idx + 2] = (ba + data[idx + 2]! * inv) | 0;
-      idx += 4;
-    }
+    const end = py * bufW + x1;
+    for (let idx = py * bufW + xStart; idx < end; idx += 1) px32[idx] = color;
   }
 }
 
@@ -271,7 +281,13 @@ export class DiscoWallRenderer {
   private bassEnergy = 0;
   private frameIx = 0;
   private image: ImageData | null = null;
+  /** 32-bit view of `image` (one write per pixel instead of four). */
+  private px32: Uint32Array | null = null;
   private noise: Float32Array | null = null;
+  /** `noise[i] * TAU * 2.4`: the static part of `pixelMathPhase`, per cell. */
+  private basePhase: Float64Array | null = null;
+  private sample = { field: 0, accent: 0, colorW: [0, 0, 0] as [number, number, number] };
+  private rgb = [0, 0, 0];
   private grain: Float32Array | null = null;
   private xn: Float32Array | null = null;
   private yn: Float32Array | null = null;
@@ -322,9 +338,12 @@ export class DiscoWallRenderer {
     this.pad = Math.max(1, cell * 0.11);
     const n = cols * rows;
     this.noise = new Float32Array(n);
+    this.basePhase = new Float64Array(n);
     this.grain = new Float32Array(n);
     for (let i = 0; i < n; i += 1) {
-      this.noise[i] = seededNoise(this.seed, i);
+      const nz = seededNoise(this.seed, i);
+      this.noise[i] = nz;
+      this.basePhase[i] = nz * TAU * 2.4;
       this.grain[i] = seededNoise(this.seed + 31, i);
     }
     this.xn = new Float32Array(cols);
@@ -418,23 +437,32 @@ export class DiscoWallRenderer {
 
     if (!this.image || this.image.width !== bufW || this.image.height !== bufH) {
       this.image = ctx.createImageData(bufW, bufH);
+      this.px32 = new Uint32Array(this.image.data.buffer);
     }
-    const pixels = this.image.data;
-    const [bgR, bgG, bgB] = hslToRgb(228 + (this.seed % 20), 22, 4 + pulse * 1.1);
-    for (let i = 0; i < pixels.length; i += 4) {
-      pixels[i] = bgR;
-      pixels[i + 1] = bgG;
-      pixels[i + 2] = bgB;
-      pixels[i + 3] = 255;
-    }
+    const px32 = this.px32!;
+    // Legacy painted a black scrim over the wall after putImageData (one more
+    // full-canvas composite per frame). Folded into the pixel colours instead:
+    // source-over black at alpha `scrim` is a plain multiply by `keep`.
+    const scrim = f.expanded ? 0.28 - Math.min(0.08, flash * 0.06) : 0.38 - Math.min(0.1, flash * 0.08);
+    const keep = 1 - scrim;
+    const rgb = hslToRgbInto(228 + (this.seed % 20), 22, 4 + pulse * 1.1, this.rgb);
+    const bgR = rgb[0]!;
+    const bgG = rgb[1]!;
+    const bgB = rgb[2]!;
+    px32.fill(packRgb((bgR * keep + 0.5) | 0, (bgG * keep + 0.5) | 0, (bgB * keep + 0.5) | 0));
 
     const { cols, rows, cell, pad } = this;
-    const noise = this.noise!;
     const grain = this.grain!;
+    const noise = this.noise!;
+    const basePhase = this.basePhase!;
     const xnRow = this.xn!;
     const ynCol = this.yn!;
     const burst = this.burst;
-    const colorW: [number, number, number] = [0.2, 0.2, 0.2];
+    const sample = this.sample;
+    const colorW = sample.colorW;
+    const bass = this.bassEnergy;
+    const flashBurst = hasChart && flash > 0.08;
+    const beatPhase = beatIndex * 0.58;
 
     for (let y = 0; y < rows; y += 1) {
       const yn = ynCol[y]!;
@@ -443,28 +471,28 @@ export class DiscoWallRenderer {
         const i = y * cols + x;
         let field: number;
         let accent = 0;
-        colorW[0] = 0.2;
-        colorW[1] = 0.2;
-        colorW[2] = 0.2;
         if (grid) {
-          const s = samplePlectrFieldGrid(grid, xn, yn);
-          field = s.field;
-          accent = s.accent;
-          colorW[0] = s.colorW[0];
-          colorW[1] = s.colorW[1];
-          colorW[2] = s.colorW[2];
+          samplePlectrFieldGridInto(grid, xn, yn, sample);
+          field = sample.field;
+          accent = sample.accent;
         } else {
           // Dark wall (silence / no onsets yet): a few pixels, audio energy only.
-          field = 0.05 + pulse * 0.14 + this.bassEnergy * 0.06;
+          field = 0.05 + pulse * 0.14 + bass * 0.06;
+          colorW[0] = 0.2;
+          colorW[1] = 0.2;
+          colorW[2] = 0.2;
         }
 
-        const bdx = xn - burst.x;
-        const bdy = yn - burst.y;
-        const burstDist = Math.sqrt(bdx * bdx + bdy * bdy);
-        const burstHit =
-          hasChart && flash > 0.08 ? Math.max(0, 1 - burstDist * (3 - flash * 0.7)) ** 1.7 : 0;
+        let burstHit = 0;
+        if (flashBurst) {
+          const bdx = xn - burst.x;
+          const bdy = yn - burst.y;
+          const burstDist = Math.sqrt(bdx * bdx + bdy * bdy);
+          burstHit = Math.max(0, 1 - burstDist * (3 - flash * 0.7)) ** 1.7;
+        }
 
-        const phase = pixelMathPhase(this.seed, i, beatIndex, field, accent);
+        // = pixelMathPhase(seed, i, beatIndex, field, accent), static part cached.
+        const phase = basePhase[i]! + beatPhase + field * 4.8 + accent * 2.6;
         field += hasChart
           ? 0.08 * (0.5 + 0.5 * Math.sin(phase * 1.25))
           : 0.03 * (0.5 + 0.5 * Math.sin(phase * 1.1));
@@ -476,7 +504,7 @@ export class DiscoWallRenderer {
         const core = clamp(
           field * (hasChart ? 1.08 : 0.92) +
             pulse * (hasChart ? 0.16 : 0.1) +
-            this.bassEnergy * 0.08 +
+            bass * 0.08 +
             burstHit * (0.48 + flash * 0.45) -
             (pixelGate ? 0.1 : 0),
         );
@@ -493,17 +521,17 @@ export class DiscoWallRenderer {
         const px = (x * cell + pad * 0.5 + (cell - s) * 0.5) * dpr;
         const py = (y * cell + pad * 0.5 + (cell - s) * 0.5) * dpr;
         const sD = Math.max(1, Math.round(s * dpr));
-        const [r, g, b] = hslToRgb(hue, sat, light);
-        fillCellRgb(pixels, bufW, bufH, px | 0, py | 0, sD, r, g, b, clamp(0.11 + core * 0.76, 0.1, 0.88));
+        hslToRgbInto(hue, sat, light, rgb);
+        const a = clamp(0.11 + core * 0.76, 0.1, 0.88);
+        const inv = 1 - a;
+        // Legacy blend over the background, then the scrim.
+        const r = ((rgb[0]! * a + 0.5 + bgR * inv) | 0) * keep + 0.5;
+        const g = ((rgb[1]! * a + 0.5 + bgG * inv) | 0) * keep + 0.5;
+        const b = ((rgb[2]! * a + 0.5 + bgB * inv) | 0) * keep + 0.5;
+        fillCell32(px32, bufW, bufH, px | 0, py | 0, sD, packRgb(r | 0, g | 0, b | 0));
       }
     }
 
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.putImageData(this.image, 0, 0);
-    ctx.restore();
-    const scrim = f.expanded ? 0.28 - Math.min(0.08, flash * 0.06) : 0.38 - Math.min(0.1, flash * 0.08);
-    ctx.fillStyle = `rgba(0, 0, 0, ${scrim})`;
-    ctx.fillRect(0, 0, width, height);
   }
 }

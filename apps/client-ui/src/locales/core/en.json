@@ -102,7 +102,7 @@
   "core.account.renameCancel": "Cancel",
   "core.account.renamed": "Account renamed to “{{name}}”.",
   "core.account.renameFailed": "Account not renamed: {{error}}",
-  "core.settings.glassOffHint": "Turn glass surfaces on to adjust their opacity.",
+  "core.settings.glassOffHint": "Turn glass surfaces on to adjust their transparency.",
   "core.settings.libraryHint": "Path and scans are managed from the hub panel. Last scan: {{at}}.",
   "core.settings.neverScanned": "never",
   "core.settings.hubAddress": "Hub address",

@@ -11,7 +11,9 @@
 #
 # The GStreamer plugins installed here end up in the AppImage (bundleMediaFramework):
 # without them, WebKit finds no decoders or audio output and the web process exits on
-# the first track. base/good: ogg, opus, vorbis, flac, mp3, wav, webm, audio output; libav: AAC/M4A.
+# the first track. base/good: ogg, opus, vorbis, flac, mp3, wav, webm, audio output; libav: AAC/M4A;
+# bad: `inter`, which WebKit's shared audio mixer needs (one output stream for the
+# whole app, see apps/client-shell/src-tauri/src/linux_audio.rs).
 #
 # On first use cargo-xwin downloads Microsoft's CRT and Windows SDK, accepting
 # their license: that is the price of producing the .exe installer from Linux.
@@ -30,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential pkg-config curl wget ca-certificates git file xz-utils unzip zip \
       libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
       libdbus-1-dev libxdo-dev patchelf xdg-utils \
-      gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav \
+      gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav \
       gstreamer1.0-pulseaudio gstreamer1.0-alsa \
       nsis clang lld llvm \
  && rm -rf /var/lib/apt/lists/* \

@@ -39,7 +39,11 @@ duration and resume all work.
 
 On Linux the desktop apps decode audio through GStreamer. The AppImage bundles the needed
 plugins; the `.deb` packages depend on `gstreamer1.0-plugins-base`,
-`gstreamer1.0-plugins-good` and `gstreamer1.0-libav` (the last one is needed for AAC/M4A).
+`gstreamer1.0-plugins-good`, `gstreamer1.0-plugins-bad` and `gstreamer1.0-libav` (the last
+one is needed for AAC/M4A). From `plugins-bad` the app uses the `inter` plugin: with it all
+playback goes through one shared output stream (like a browser) instead of one stream per
+track, so pausing and changing track don't make the sound server and the desktop shell
+react. Without it playback still works, one stream per track.
 
 ### Cast
 

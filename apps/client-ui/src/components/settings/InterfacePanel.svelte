@@ -15,6 +15,7 @@
     applyTheme,
     loadUserPrefs,
     normalizeGlassOpacity,
+    DEFAULT_GLASS_OPACITY,
     normalizeLocale,
     normalizeTheme,
     patchUserPrefs,
@@ -69,6 +70,8 @@
   let customThemeValue = $state(loadUserPrefs().customTheme);
   let glassSurfaces = $state(loadUserPrefs().glassSurfaces);
   let glassOpacityDraft = $state(loadUserPrefs().glassOpacity);
+  /** The slider shows transparency (0% = most opaque); prefs keep the opacity. */
+  const glassTransparency = $derived(100 - glassOpacityDraft);
   let glassOpacityTimer: ReturnType<typeof setTimeout> | null = null;
   let customThemeDialogOpen = $state(false);
   let vizValue = $state(loadUserPrefs().visualizerMode);
@@ -165,7 +168,13 @@
 
   function onGlassSurfacesChange(checked: boolean) {
     glassSurfaces = checked;
-    patchUserPrefs({ glassSurfaces: checked });
+    // Switching glass on starts again from the default transparency (1%).
+    if (checked) {
+      if (glassOpacityTimer) clearTimeout(glassOpacityTimer);
+      glassOpacityTimer = null;
+      glassOpacityDraft = DEFAULT_GLASS_OPACITY;
+    }
+    patchUserPrefs({ glassSurfaces: checked, glassOpacity: glassOpacityDraft });
     syncGlassSurfaceDom(undefined, {
       glassSurfaces: checked,
       glassOpacity: glassOpacityDraft,
@@ -330,9 +339,9 @@
             max={100}
             step={1}
             disabled={!glassSurfaces}
-            value={glassOpacityDraft}
+            value={glassTransparency}
             oninput={(e) =>
-              onGlassOpacityChange(Number((e.currentTarget as HTMLInputElement).value))}
+              onGlassOpacityChange(100 - Number((e.currentTarget as HTMLInputElement).value))}
             aria-label={t("settings.glassOpacity")}
           />
           <input
@@ -342,11 +351,11 @@
             max={100}
             inputmode="numeric"
             disabled={!glassSurfaces}
-            value={glassOpacityDraft}
+            value={glassTransparency}
             oninput={(e) => {
               const el = e.currentTarget as HTMLInputElement;
               if (el.value === "") return;
-              onGlassOpacityChange(Number(el.value));
+              onGlassOpacityChange(100 - Number(el.value));
             }}
             aria-label={t("settings.glassOpacity")}
           />

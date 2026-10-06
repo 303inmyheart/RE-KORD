@@ -55,9 +55,9 @@
   "settings.themeExportAria": "Export theme",
   "settings.themeExportTitle": "Export theme",
   "settings.themeExportSuccess": "Download started: {{name}}",
-  "settings.glass": "Glass / opacity",
+  "settings.glass": "Glass / transparency",
   "settings.glassSurfaces": "Glass style (semi-transparent cards with reflections)",
-  "settings.glassOpacity": "Glass opacity",
+  "settings.glassOpacity": "Glass transparency",
   "settings.glassOff": "Off",
   "settings.glassSoftSoon": "Soft (coming soon)",
 

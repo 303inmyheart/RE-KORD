@@ -10,8 +10,13 @@
   } from "../../lib/userPrefs";
   import { currentLrcLineIndex, parseLrcLyrics } from "../../lib/visualizer/lrc";
   import {
+    AdaptiveQuality,
+    scaledDpr,
+  } from "../../lib/visualizer/adaptiveQuality";
+  import {
     canvasDprCap,
     discowallLoopCadence,
+    vizEngineDprCap,
     vizLoopCadence,
   } from "../../lib/visualizer/renderQuality";
   import {
@@ -38,6 +43,14 @@
   let prefsMode = $state<VisualizerMode>(loadUserPrefs().visualizerMode);
 
   const engine = new VizCanvasEngine();
+  /**
+   * DiscoWall is a per-pixel wall: if its frames run over budget the expanded
+   * wall drops resolution a step, then the frame rate (level 2).
+   */
+  const DISCO_BUDGET_MS = 12;
+  const DISCO_DPR_STEPS = [1, 0.84, 0.84];
+  const DISCO_INTERVAL_STEPS = [1, 1, 1.4];
+  const discoQuality = new AdaptiveQuality({ levels: 3, budgetMs: DISCO_BUDGET_MS });
   /**
    * The player routes audio through Web Audio only while someone holds its
    * analyser (costly on some engines): held while a spectrum is drawn on
@@ -194,7 +207,9 @@
           });
     const settling = !playingRef && modeRef === "discowall" && engine.discoActive;
     // Timer wakes a little early, rAF aligns to the frame (see NebulaCanvas).
-    const interval = cadence.minFrameIntervalMs;
+    const interval =
+      cadence.minFrameIntervalMs *
+      (modeRef === "discowall" ? (DISCO_INTERVAL_STEPS[discoQuality.level] ?? 1) : 1);
     const early = Math.min(10, interval * 0.15);
     const now = performance.now();
     // Playing but no analyser yet (graph not up / no audio): the idle frame is
@@ -208,6 +223,7 @@
       const w = c.width / backingScale;
       const h = c.height / backingScale;
       const liveTime = playingRef ? timeRef + Math.max(0, (t - timeStamp) / 1000) : timeRef;
+      const t0 = performance.now();
       engine.drawFrame(ctx, {
         width: w,
         height: h,
@@ -218,6 +234,15 @@
         currentTime: liveTime,
         trackKey: player.current?.rel_path ?? null,
       });
+      if (modeRef === "discowall" && playingRef) {
+        const prevLevel = discoQuality.level;
+        discoQuality.push(performance.now() - t0);
+        // Resolution step: resize the backing store once this frame has
+        // scheduled the next one (resize() re-arms the loop when it is idle).
+        if ((DISCO_DPR_STEPS[discoQuality.level] ?? 1) !== (DISCO_DPR_STEPS[prevLevel] ?? 1)) {
+          queueMicrotask(() => resize?.());
+        }
+      }
     }
     if (!playingRef && !settling) return;
     if (playingRef && engine.lastFrameStatic && !player.getAnalyser()) {
@@ -279,6 +304,7 @@
 
   $effect(() => {
     modeRef = activeMode;
+    discoQuality.reset();
     engine.resetForMode(activeMode);
     resize?.();
     syncLoop();
@@ -338,8 +364,11 @@
       const lh = p ? Math.max(100, p.clientHeight || 200) : 200;
       let s = dpr();
       if (modeRef === "discowall") {
-        // Per-pixel wall: legacy draws the panel at 1x, expanded at the lite cap.
-        s = expandedRef ? canvasDprCap({ lite: true }) : 1;
+        // Per-pixel wall: legacy draws the panel at 1x, expanded at the lite
+        // cap (≤1.5 on WebKitGTK, lower if the adaptive quality steps down).
+        s = expandedRef
+          ? scaledDpr(canvasDprCap({ lite: true }), vizEngineDprCap(), DISCO_DPR_STEPS[discoQuality.level] ?? 1)
+          : 1;
       } else if (expandedRef) {
         s = Math.min(s, modeRef === "signals" ? 1.38 : 1.52);
       } else {

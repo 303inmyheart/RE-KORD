@@ -102,7 +102,7 @@
   "core.account.renameCancel": "Abbrechen",
   "core.account.renamed": "Konto in „{{name}}“ umbenannt.",
   "core.account.renameFailed": "Konto nicht umbenannt: {{error}}",
-  "core.settings.glassOffHint": "Aktiviere die Glasflächen, um ihre Deckkraft anzupassen.",
+  "core.settings.glassOffHint": "Aktiviere die Glasflächen, um ihre Transparenz anzupassen.",
   "core.settings.libraryHint": "Pfad und Scans werden im Hub-Panel verwaltet. Letzter Scan: {{at}}.",
   "core.settings.neverScanned": "nie",
   "core.settings.hubAddress": "Hub-Adresse",

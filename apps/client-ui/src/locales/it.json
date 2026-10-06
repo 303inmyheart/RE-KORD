@@ -55,9 +55,9 @@
   "settings.themeExportAria": "Esporta tema",
   "settings.themeExportTitle": "Esporta tema",
   "settings.themeExportSuccess": "Download avviato: {{name}}",
-  "settings.glass": "Glass / opacità",
+  "settings.glass": "Glass / trasparenza",
   "settings.glassSurfaces": "Stile vetro (schede semitrasparenti con riflessi)",
-  "settings.glassOpacity": "Opacità vetro",
+  "settings.glassOpacity": "Trasparenza vetro",
   "settings.glassOff": "Off",
   "settings.glassSoftSoon": "Soft (in arrivo)",
 

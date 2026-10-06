@@ -7,11 +7,12 @@
  *  - small "simple" stars are batched into one path per colour (one fill per
  *    colour instead of one per star);
  *  - glow uses pre-rendered sprites per colour (drawImage, no per-star gradients);
- *  - the backdrop (background, drifting haze, guides, genre fog) is rendered
- *    into an offscreen layer and blitted: it is repainted only when the camera
- *    or size changes, or every BACKDROP_REFRESH_MS while it slowly drifts. On
- *    software-composited engines (WebKitGTK) this removes most per-frame
- *    gradient fills.
+ *  - the backdrop (background, drifting haze, guides, genre fog) is painted
+ *    on its own canvas under a transparent star canvas (`NebulaCanvas`): it
+ *    is repainted only when the camera or size changes, or a few times per
+ *    second while it slowly drifts, so a star frame never re-blits or
+ *    re-fills the full-screen gradients. On software-composited engines
+ *    (WebKitGTK) this removes most of the per-frame pixel work.
  */
 
 import {
@@ -222,32 +223,55 @@ function drawAlbumThreads(ctx: CanvasRenderingContext2D, stars: readonly Star[],
 }
 
 /** Backdrop drift is slow (fog breath ~14 s period): 5 repaints/s are plenty. */
-const BACKDROP_REFRESH_MS = 200;
+export const NEBULA_BACKDROP_REFRESH_MS = 200;
 
-type BackdropLayer = {
-  canvas: HTMLCanvasElement;
-  ctx: CanvasRenderingContext2D;
-  key: string;
-  fogs: readonly NebulaFog[] | null;
-  at: number;
-};
+/** Screen-space background: radial gradient centred on the view (stops shared with the CSS fallback). */
+export const NEBULA_BG_STOPS = [
+  [0, "#0c1024"],
+  [0.45, "#070a16"],
+  [1, "#03040a"],
+] as const;
 
-const backdropLayers = new WeakMap<CanvasRenderingContext2D, BackdropLayer>();
+/** Radius of the background gradient for a w×h view. */
+export function nebulaBgRadius(w: number, h: number): number {
+  return Math.max(w, h) * 0.72;
+}
 
-function drawBackdrop(
+/** The same background as a CSS `background` value (static layer under the canvases). */
+export function nebulaBgCss(w: number, h: number): string {
+  const r = nebulaBgRadius(w, h);
+  const stops = NEBULA_BG_STOPS.map(([at, c]) => `${c} ${(at * r).toFixed(1)}px`).join(", ");
+  return `radial-gradient(circle ${r.toFixed(1)}px at 50% 50%, ${stops})`;
+}
+
+/**
+ * Backdrop: background, drifting haze, galaxy guides and genre fog, in
+ * CSS-pixel space (the caller sets the backing-store scale on `ctx`).
+ * `background: false` leaves the screen-space gradient out (transparent
+ * world-space layer over a CSS background, see `nebulaBgCss`).
+ */
+export function paintNebulaBackdrop(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
-  t: number,
+  now: number,
   p: NebulaPaintProps,
+  background = true,
 ) {
+  const t = p.reducedMotion ? 0 : now;
   const zoom = p.camera.zoom;
-  const bg = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * 0.72);
-  bg.addColorStop(0, "#0c1024");
-  bg.addColorStop(0.45, "#070a16");
-  bg.addColorStop(1, "#03040a");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, w, h);
+  if (background) {
+    const r = nebulaBgRadius(w, h);
+    const bg = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, r);
+    for (const [at, c] of NEBULA_BG_STOPS) bg.addColorStop(at, c);
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+  } else {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.restore();
+  }
 
   ctx.save();
   ctx.translate(w / 2, h / 2);
@@ -276,57 +300,10 @@ function drawBackdrop(
   ctx.restore();
 }
 
-/** Paints the cached backdrop (re-rendering it when stale) in CSS-pixel space. */
-function paintBackdrop(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-  t: number,
-  p: NebulaPaintProps,
-) {
-  const pw = ctx.canvas.width;
-  const ph = ctx.canvas.height;
-  if (typeof document === "undefined" || pw <= 0 || ph <= 0) {
-    drawBackdrop(ctx, w, h, t, p);
-    return;
-  }
-  let layer = backdropLayers.get(ctx);
-  if (!layer) {
-    const canvas = document.createElement("canvas");
-    const lctx = canvas.getContext("2d", { alpha: false });
-    if (!lctx) {
-      drawBackdrop(ctx, w, h, t, p);
-      return;
-    }
-    layer = { canvas, ctx: lctx, key: "", fogs: null, at: -Infinity };
-    backdropLayers.set(ctx, layer);
-  }
-  const cam = p.camera;
-  const key = `${pw}x${ph}|${w}x${h}|${cam.x.toFixed(2)},${cam.y.toFixed(2)},${cam.zoom.toFixed(4)}|${p.preview ? 1 : 0}|${p.sortedStars.length > 900 ? 1 : 0}`;
-  const stale =
-    key !== layer.key ||
-    layer.fogs !== p.fogs ||
-    (!p.reducedMotion && Math.abs(t - layer.at) >= BACKDROP_REFRESH_MS);
-  if (stale) {
-    if (layer.canvas.width !== pw || layer.canvas.height !== ph) {
-      layer.canvas.width = pw;
-      layer.canvas.height = ph;
-    }
-    layer.ctx.setTransform(pw / w, 0, 0, ph / h, 0, 0);
-    drawBackdrop(layer.ctx, w, h, t, p);
-    layer.key = key;
-    layer.fogs = p.fogs;
-    layer.at = t;
-  }
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.drawImage(layer.canvas, 0, 0);
-  ctx.restore();
-}
-
 // Scratch reused across frames: colour → flat [x, y, r, …] for batched simple stars.
 const simpleBatches = new Map<string, number[]>();
 
+/** One full frame on a single canvas: backdrop, then stars. */
 export function paintNebulaFrame(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -334,10 +311,32 @@ export function paintNebulaFrame(
   now: number,
   p: NebulaPaintProps,
 ): void {
+  paintNebulaBackdrop(ctx, w, h, now, p);
+  paintNebulaStars(ctx, w, h, now, p, false);
+}
+
+/**
+ * Stars (album threads, selection vignette, batched small stars, glowing
+ * ones) in CSS-pixel space. `clear`: wipe the canvas first (star layer over a
+ * separate backdrop canvas).
+ */
+export function paintNebulaStars(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  now: number,
+  p: NebulaPaintProps,
+  clear = true,
+): void {
   const zoom = p.camera.zoom;
   const t = p.reducedMotion ? 0 : now;
 
-  paintBackdrop(ctx, w, h, t, p);
+  if (clear) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.restore();
+  }
 
   ctx.save();
   ctx.translate(w / 2, h / 2);

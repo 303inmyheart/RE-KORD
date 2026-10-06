@@ -619,6 +619,7 @@
   class="plectr-page"
   class:is-immersive={immersive}
   class:is-records={section === "records"}
+  class:is-light={light}
   data-layout={layout}
   data-phase={phase}
   style:--plectr-glow={artState.art.tint ?? "var(--rk-accent-2)"}

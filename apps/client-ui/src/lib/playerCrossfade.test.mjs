@@ -151,6 +151,16 @@ class FakeAudio extends EventTarget {
 globalThis.Audio = FakeAudio;
 globalThis.HTMLAudioElement = FakeAudio;
 globalThis.Image = class { decoding = ""; src = ""; };
+// Linux shell with the shared WebKit audio mixer: the player keeps one idle
+// AudioContext warm (see audioKeepAlive.ts). Only the keep-alive uses it here.
+class FakeAudioContext {
+  static all = [];
+  constructor() { this.state = "running"; this.calls = []; FakeAudioContext.all.push(this); }
+  async resume() { this.calls.push("resume"); this.state = "running"; }
+  async suspend() { this.calls.push("suspend"); this.state = "suspended"; }
+}
+globalThis.AudioContext = FakeAudioContext;
+globalThis.__REKORD_SHARED_AUDIO_OUTPUT__ = true;
 
 // Levels are planned on `performance.now()`: it follows the mocked clock.
 mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"], now: 1_000_000 });
@@ -345,4 +355,33 @@ test("a late volume echo from the engine does not leave the new track quiet", as
   b.fire("volumechange");
   await tick(400);
   assert.equal(b.volume, 1);
+});
+
+test("shared output: pause/resume and track changes never suspend the keep-alive; a long pause does", async () => {
+  const a = await start();
+  assert.equal(FakeAudioContext.all.length, 1, "one keep-alive context for the session");
+  const ka = FakeAudioContext.all[0];
+  ka.calls.length = 0;
+  for (let i = 0; i < 10; i++) {
+    await player.toggle();
+    await tick(1500);
+    await player.toggle();
+    await tick(1500);
+  }
+  for (let i = 0; i < 3; i++) {
+    await player.next();
+    await tick(500);
+  }
+  assert.deepEqual(ka.calls.filter((c) => c === "suspend"), [], "never cooled down while in use");
+  assert.equal(ka.state, "running");
+  await player.toggle();
+  await flush();
+  assert.equal(player.playing, false);
+  await tick(16_000);
+  assert.equal(ka.state, "suspended", "released after a long pause");
+  await player.toggle();
+  await flush();
+  assert.equal(ka.state, "running", "warm again on play");
+  assert.equal(FakeAudioContext.all.length, 1);
+  void a;
 });

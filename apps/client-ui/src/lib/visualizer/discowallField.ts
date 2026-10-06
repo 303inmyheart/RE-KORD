@@ -253,8 +253,10 @@ export function mathPixelHue(
   const seg = u * 3;
   const slot = Math.floor(seg) % 3;
   const frac = seg - slot;
-  const slotHues = [h0, h1, h2];
-  const mathHue = lerp(slotHues[slot]!, slotHues[(slot + 1) % 3]!, smootherstep(frac));
+  // Per-pixel hot path: pick the two hues without allocating an array.
+  const ha = slot === 0 ? h0 : slot === 1 ? h1 : h2;
+  const hb = slot === 0 ? h1 : slot === 1 ? h2 : h0;
+  const mathHue = lerp(ha, hb, smootherstep(frac));
 
   const animSum = colorW[0] + colorW[1] + colorW[2];
   if (animSum > 0.07) {
@@ -525,6 +527,19 @@ export function samplePlectrFieldGrid(
   xn: number,
   yn: number,
 ): PlectrSample {
+  return samplePlectrFieldGridInto(grid, xn, yn, { field: 0, accent: 0, colorW: [0, 0, 0] });
+}
+
+/**
+ * Same as `samplePlectrFieldGrid`, written into `out` (the wall samples it
+ * once per cell per frame: thousands of calls, no garbage).
+ */
+export function samplePlectrFieldGridInto(
+  grid: PlectrFieldGrid,
+  xn: number,
+  yn: number,
+  out: PlectrSample,
+): PlectrSample {
   const fx = clamp(xn, 0, 1) * (PLECTR_FIELD_COLS - 1);
   const fy = clamp(yn, 0, 1) * (PLECTR_FIELD_ROWS - 1);
   const x0 = Math.floor(fx);
@@ -550,5 +565,10 @@ export function samplePlectrFieldGrid(
   const w2 =
     lerpGrid(lerpGrid(grid.colorW2[i00]!, grid.colorW2[i10]!, tx), lerpGrid(grid.colorW2[i01]!, grid.colorW2[i11]!, tx), ty);
 
-  return { field, accent, colorW: [w0, w1, w2] };
+  out.field = field;
+  out.accent = accent;
+  out.colorW[0] = w0;
+  out.colorW[1] = w1;
+  out.colorW[2] = w2;
+  return out;
 }

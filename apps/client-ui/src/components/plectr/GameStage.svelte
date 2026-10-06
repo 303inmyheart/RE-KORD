@@ -210,6 +210,9 @@
   let runFromStart = false;
   let raf = 0;
   let mounted = false;
+  let lastDrawAt = 0;
+  /** Below one 60 Hz interval with margin for rAF jitter (no skipped frame at 60 Hz). */
+  const LIGHT_FRAME_MS = 12;
   let ctx2d: CanvasRenderingContext2D | null = null;
   let lastAudioTime = 0;
   /** performance.now() of `lastAudioTime` (seek detection vs a slow frame). */
@@ -495,7 +498,7 @@
       const p = d > 0 ? Math.min(1, Math.max(0, s.songTime / d)) : 0;
       if (progressEl) progressEl.style.transform = `scaleX(${p.toFixed(4)})`;
     }
-    if (onstats && run && (force || now - statsAt > 300)) {
+    if (onstats && run && (force || now - statsAt > 1000)) {
       statsAt = now;
       onstats(liveStats(run));
     }
@@ -600,6 +603,13 @@
     raf = 0;
     if (!canvasEl || !mounted) return;
     now = performance.now();
+    // Light stage (WebKitGTK, weak devices): at most ~60 fps, a 120 / 144 Hz
+    // screen would otherwise run the whole frame two or three times as often.
+    if (light && now - lastDrawAt < LIGHT_FRAME_MS) {
+      schedule();
+      return;
+    }
+    lastDrawAt = now;
     const s = run;
     const b = bridge;
     if (!s || !b) {
@@ -1101,7 +1111,6 @@
     <div class="plectr-pads" aria-hidden="true">
       {#each LANES as lane, i (lane.name)}
         <div class="plectr-pad" data-lane={i} style="--lane-color: {lane.color}; --lane-shadow: {lane.shadow}">
-          <span class="plectr-pad__pip"></span>
           {#if keyLetters}<span class="plectr-pad__key">{keyLabels[i]}</span>{/if}
         </div>
       {/each}

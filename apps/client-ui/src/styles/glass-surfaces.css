@@ -87,7 +87,7 @@
   /* Midnight defaults — per-theme overrides below. */
   --glass-1: rgba(18, 30, 46, 0.9);
   --glass-2: rgba(12, 21, 33, 0.94);
-  --glass-user-opacity: 0.62;
+  --glass-user-opacity: 0.99;
   --glass-panel: color-mix(
     in srgb,
     var(--glass-1) clamp(0%, calc(var(--glass-user-opacity) * 100%), 100%),

@@ -102,7 +102,7 @@
   "core.account.renameCancel": "Annulla",
   "core.account.renamed": "Account rinominato in «{{name}}».",
   "core.account.renameFailed": "Account non rinominato: {{error}}",
-  "core.settings.glassOffHint": "Attiva le superfici vetro per regolarne l'opacità.",
+  "core.settings.glassOffHint": "Attiva le superfici vetro per regolarne la trasparenza.",
   "core.settings.libraryHint": "Percorso e scansioni si gestiscono dal pannello dell'hub. Ultima scansione: {{at}}.",
   "core.settings.neverScanned": "mai",
   "core.settings.hubAddress": "Indirizzo dell'hub",

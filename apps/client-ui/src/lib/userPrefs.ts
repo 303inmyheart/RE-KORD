@@ -145,6 +145,9 @@ function migrateGlobalPrefsIfNeeded(accountId: string) {
 
 const THEME_SET = new Set<string>(UI_THEMES);
 
+/** Default glass opacity: 99% opaque, i.e. 1% transparency on the settings slider. */
+export const DEFAULT_GLASS_OPACITY = 99;
+
 const DEFAULTS: UserPrefs = {
   crossfadeSec: 3,
   excludedRelPaths: [],
@@ -158,7 +161,7 @@ const DEFAULTS: UserPrefs = {
   theme: "midnight",
   customTheme: { ...DEFAULT_CUSTOM_THEME },
   glassSurfaces: false,
-  glassOpacity: 62,
+  glassOpacity: DEFAULT_GLASS_OPACITY,
   locale: "it",
   visualizerMode: "bars",
 };
@@ -166,7 +169,7 @@ const DEFAULTS: UserPrefs = {
 /** Clamp glass opacity percent (legacy normalizeGlassOpacity). */
 export function normalizeGlassOpacity(raw: unknown): number {
   const n = Number(raw);
-  if (!Number.isFinite(n)) return 62;
+  if (!Number.isFinite(n)) return DEFAULT_GLASS_OPACITY;
   return Math.min(100, Math.max(0, Math.round(n)));
 }
 

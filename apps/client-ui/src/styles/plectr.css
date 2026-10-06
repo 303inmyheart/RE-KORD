@@ -247,14 +247,26 @@ html[data-plectr-immersive] main.content {
 }
 
 /* Desktop / tablet: the dock steps back while notes are falling. */
-html[data-plectr-playing] footer.player-dock {
-  opacity: 0.4;
-  transition: opacity 0.25s ease;
+/*
+ * While notes fall the rest of the page must cost nothing. No opacity on
+ * the dock (a translucent group is re-composited on every repaint in
+ * software) and no live blur anywhere on the Plectr page: the shell bars
+ * keep their glass tint, the blur under them is dropped for the run.
+ */
+html[data-plectr-playing] .player-bar::before,
+html[data-plectr-playing] .rekord-context-header::before,
+html[data-plectr-playing] .rekord-icon-rail::before,
+html[data-plectr-playing] .mobile-bottom-nav::before,
+.plectr-page .rk-surface-card,
+.plectr-page .rk-surface-card::before {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
 }
 
-html[data-plectr-playing] footer.player-dock:hover,
-html[data-plectr-playing] footer.player-dock:focus-within {
-  opacity: 1;
+/* The sidebar / mobile-nav "now playing" equalizer holds still during a run. */
+html[data-plectr-playing] .rekord-icon-rail .bar,
+html[data-plectr-playing] .mobile-bottom-nav .bar {
+  animation-play-state: paused !important;
 }
 
 /* ── Shared bits ── */
@@ -1139,57 +1151,35 @@ html[data-plectr-playing] footer.player-dock:focus-within {
   color: var(--rk-accent, #f97316);
 }
 
+/*
+ * Pad row: the legacy dock's `.touch-pads` / `.lane-pad` (rhythm-dock.css):
+ * clamp(58px, 9.5vh, 76px) tall, 0.28rem apart, 4 px corners, a 3 px
+ * lane-coloured top edge over a lane-tinted gradient; pressed / holding
+ * brighten it and glow upward, a miss turns the edge red. Each pad keeps
+ * half the gap on both sides, so it stays centred under its lane.
+ */
 .plectr-pads {
   position: relative;
-  flex: 0 0 clamp(58px, 9.5cqh, 76px);
+  flex: 0 0 clamp(58px, 9.5vh, 76px);
+  min-height: 58px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  background: #070a12;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  background: transparent;
   z-index: 1;
 }
 
-/* One pad per lane, edge to edge (exactly under the lanes and receptors). */
 .plectr-pad {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
+  display: grid;
+  place-items: center;
   min-width: 0;
+  margin: 0 0.14rem;
+  border-radius: 4px;
   border-top: 3px solid var(--lane-color);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--lane-color) 26%, #0d1220) 0%, #070a12 82%);
-  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.05);
-  transition: background-color 80ms linear;
-}
-
-.plectr-pad:first-child {
-  box-shadow: none;
-}
-
-/* Upward glow over the highway while pressed / on a hit. */
-.plectr-pad::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(100% + 3px);
-  height: 34px;
-  background: linear-gradient(0deg, color-mix(in srgb, var(--lane-color) 38%, transparent), transparent);
-  opacity: 0;
-  transition: opacity 120ms ease-out;
-  pointer-events: none;
-}
-
-.plectr-pad__pip {
-  display: block;
-  width: min(40px, 40%);
-  height: 7px;
-  border-radius: 999px;
-  background: var(--lane-color);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--lane-color) 55%, transparent);
-  transition: transform 80ms ease-out;
-  pointer-events: none;
+  /* Legacy `saturate(0.92) brightness(0.9)` baked into the colours: a CSS
+     filter is an extra pass on every repaint in software compositing. */
+  background: linear-gradient(180deg, color-mix(in srgb, var(--lane-color) 24%, #0d111b) 0%, #05070d 100%);
+  border-top-color: color-mix(in srgb, var(--lane-color) 88%, #000);
 }
 
 .plectr-pad__key {
@@ -1202,16 +1192,9 @@ html[data-plectr-playing] footer.player-dock:focus-within {
 }
 
 .plectr-pad.is-pressed {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--lane-color) 55%, #121a2c) 0%, color-mix(in srgb, var(--lane-color) 14%, #070a12) 90%);
-}
-
-.plectr-pad.is-pressed::after,
-.plectr-pad.is-hit::after {
-  opacity: 1;
-}
-
-.plectr-pad.is-pressed .plectr-pad__pip {
-  transform: scale(1.18, 1.35);
+  border-top-color: var(--lane-color);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--lane-color) 48%, #12182a), #05070d);
+  box-shadow: 0 -5px 16px color-mix(in srgb, var(--lane-shadow) 60%, transparent);
 }
 
 .plectr-pad.is-pressed .plectr-pad__key {
@@ -1219,21 +1202,21 @@ html[data-plectr-playing] footer.player-dock:focus-within {
 }
 
 .plectr-pad.is-holding {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--lane-color) 68%, #1a2438) 0%, color-mix(in srgb, var(--lane-color) 22%, #070a12) 90%);
+  border-top-color: var(--lane-color);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--lane-color) 62%, #1a2438), #070a12);
+  box-shadow:
+    0 -6px 20px color-mix(in srgb, var(--lane-shadow) 70%, transparent),
+    inset 0 0 12px color-mix(in srgb, var(--lane-color) 35%, transparent);
+}
+
+.plectr-pad.is-hit {
+  border-top-color: var(--lane-color);
+  box-shadow: 0 -4px 14px color-mix(in srgb, var(--lane-shadow) 45%, transparent);
 }
 
 .plectr-pad.is-miss {
   border-top-color: var(--plectr-miss);
-}
-
-.plectr-pad.is-miss .plectr-pad__pip {
-  background: var(--plectr-miss);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--plectr-miss) 60%, transparent);
-}
-
-.plectr-pad.is-miss::after {
-  background: linear-gradient(0deg, color-mix(in srgb, var(--plectr-miss) 30%, transparent), transparent);
-  opacity: 1;
+  box-shadow: 0 -4px 14px color-mix(in srgb, var(--plectr-miss) 35%, transparent);
 }
 
 /* Judgement in the centre: one word, colour by tone, pop then fade. */
@@ -1873,6 +1856,18 @@ html[data-plectr-playing] footer.player-dock:focus-within {
   animation: plectr-eq 0.9s ease-in-out infinite;
 }
 
+.plectr-page.is-light .plectr-eq b {
+  animation: none;
+}
+
+.plectr-page.is-light .plectr-eq b:nth-child(1) {
+  transform: scaleY(0.55);
+}
+
+.plectr-page.is-light .plectr-eq b:nth-child(3) {
+  transform: scaleY(0.75);
+}
+
 .plectr-eq b:nth-child(2) {
   animation-delay: -0.3s;
 }
@@ -2075,13 +2070,6 @@ html[data-plectr-playing] footer.player-dock:focus-within {
 .plectr-live-dot.is-on {
   background: #4ade80;
   box-shadow: 0 0 0 3px color-mix(in srgb, #4ade80 25%, transparent);
-  animation: plectr-live-dot 1.6s ease-in-out infinite;
-}
-
-@keyframes plectr-live-dot {
-  50% {
-    opacity: 0.45;
-  }
 }
 
 .plectr-live__hero {
@@ -2106,6 +2094,7 @@ html[data-plectr-playing] footer.player-dock:focus-within {
 .plectr-live__ring .plectr-ring__track,
 .plectr-live__ring .plectr-ring__value {
   stroke-width: 7;
+  transition: none;
 }
 
 .plectr-live__ring > span {
@@ -2200,7 +2189,6 @@ html[data-plectr-playing] footer.player-dock:focus-within {
   background: var(--c);
   transform-origin: left center;
   transform: scaleX(0);
-  transition: transform 0.25s ease;
 }
 
 .plectr-live__rows strong {
@@ -2242,7 +2230,6 @@ html[data-plectr-playing] footer.player-dock:focus-within {
   height: 100%;
   background: linear-gradient(90deg, var(--rk-accent-2), var(--plectr-perfect));
   transform-origin: left center;
-  transition: transform 0.2s ease;
 }
 
 .plectr-live__chart {
@@ -2585,11 +2572,18 @@ html[data-plectr-playing] footer.player-dock:focus-within {
 
 /* ── Light stage / reduced motion ── */
 
+.plectr-stage.is-light .plectr-hud__stat {
+  background: rgb(16, 21, 34);
+}
+
 .plectr-stage.is-light .plectr-pad {
   transition: none;
 }
 
-.plectr-stage.is-light .plectr-judge {
+.plectr-stage.is-light .plectr-judge,
+.plectr-stage.is-light .plectr-judge__combo,
+.plectr-stage.is-light .plectr-milestone,
+.plectr-stage.is-light .plectr-diffflash {
   text-shadow: 0 2px 0 rgba(0, 0, 0, 0.6);
 }
 
