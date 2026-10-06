@@ -101,8 +101,8 @@
   "plectr.settings.open": "Settings",
   "plectr.settings.title": "Game settings",
   "plectr.settings.speed": "Note speed",
-  "plectr.settings.speedValue": "{{x}}× · {{s}} s lead time",
-  "plectr.settings.speedHint": "How long a note takes to reach the line, the same on every screen.",
+  "plectr.settings.speedValue": "{{x}}× · {{px}} px/s",
+  "plectr.settings.speedHint": "1.00× is the classic Plectr speed. Notes fall at the same pace on every screen; a taller screen shows more of them.",
   "plectr.settings.latency": "Latency calibration",
   "plectr.settings.latencyValue": "{{ms}} ms",
   "plectr.settings.light": "Light stage",
@@ -321,5 +321,7 @@
   "plectr.paused.reason.idle": "The song is paused: press Play and the notes start from where it is.",
   "plectr.continue": "Keep playing",
   "plectr.loading.keepPlaying": "The music keeps playing while the chart is prepared.",
-  "plectr.backToGame": "Back to the game"
+  "plectr.backToGame": "Back to the game",
+  "plectr.panel.notPlayed": "Not played",
+  "plectr.panel.grade": "Grade"
 }

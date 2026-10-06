@@ -18,7 +18,7 @@
   } from "../../lib/plectr/config";
   import type { PlectrSettings } from "../../lib/plectr/records";
   import { autoLightStage } from "../../lib/plectr/stageQuality";
-  import { leadTimeFor } from "../../lib/plectr/timing";
+  import { noteSpeedFor } from "../../lib/plectr/timing";
 
   let {
     open,
@@ -81,7 +81,7 @@
     <section class="plectr-set">
       <label class="plectr-set__label" for="plectr-speed">
         <strong>{t("plectr.settings.speed")}</strong>
-        <span>{t("plectr.settings.speedValue", { x: settings.speed.toFixed(2), s: leadTimeFor(settings.speed).toFixed(2) })}</span>
+        <span>{t("plectr.settings.speedValue", { x: settings.speed.toFixed(2), px: Math.round(noteSpeedFor(settings.speed)) })}</span>
       </label>
       <input
         id="plectr-speed"

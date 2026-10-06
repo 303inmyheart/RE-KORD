@@ -3,7 +3,7 @@
    * Library › album page (legacy album hero): back to the artist first, then a
    * cover + title block (stacked and centred on phones), one primary
    * "Riproduci album" with its icon, secondary actions, genre chips with a
-   * labelled "Aggiungi genere", and a numbered tracklist.
+   * labelled "Aggiungi genere", and the tracklist (covers, as in legacy).
    */
   import { onMount } from "svelte";
   import { Button, CoverArt } from "@rekord/ui";
@@ -336,7 +336,7 @@
     </div>
     <TrackList
       {tracks}
-      numbered
+      inAlbum
       favoriteIds={session.favoriteIds}
       playlistOptions={session.playlistOptions}
       activeTrackId={session.current?.id ?? null}

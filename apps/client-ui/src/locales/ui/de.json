@@ -39,7 +39,6 @@
   "ui.splash.tip10": "Favoriten, Playlists und Wiedergaben folgen deinem Konto auf jedes Gerät.",
   "ui.trackRow.plays.one": "{{n}} Wiedergabe",
   "ui.trackRow.plays.other": "{{n}} Wiedergaben",
-  "ui.trackRow.trackNo": "Titel {{n}}",
   "ui.editDialogs.moodCount": "{{n}} von {{max}}",
   "ui.editDialogs.coverDrop": "Bild hier ablegen",
   "ui.editDialogs.coverChoose": "Datei wählen",

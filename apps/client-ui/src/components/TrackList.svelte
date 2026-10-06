@@ -19,7 +19,7 @@
     activeTrackId = null as number | null,
     emptyMessage,
     empty,
-    numbered = false,
+    inAlbum = false,
     coverFor,
     showQueueActions = true,
     showPlaylistAction = true,
@@ -38,8 +38,8 @@
     emptyMessage?: string;
     /** Rich empty state (icon, title, CTA); wins over `emptyMessage`. */
     empty?: import("svelte").Snippet;
-    /** Album context: rows show the track number instead of the cover. */
-    numbered?: boolean;
+    /** Album context: rows leave out the album name (the page is the album). */
+    inAlbum?: boolean;
     /** Cover URL per track; return null when the hub has none (no request). */
     coverFor?: (track: Track) => string | null;
     showQueueActions?: boolean;
@@ -66,9 +66,6 @@
   let dragging = $state(false);
 
   const virtualized = $derived(tracks.length >= VIRTUAL_FROM);
-  /** Album context with more than one disc: rows show "disc·track". */
-  const multiDisc = $derived(numbered && tracks.some((t) => (t.disc_number ?? 1) > 1));
-
   /*
    * Per-row numbers come from one snapshot shared by the whole list, re-read
    * only when play counts / moods / exclusions change (prefsRevision) — not on
@@ -125,8 +122,7 @@
         inQueue={stats.inQueue}
         excluded={stats.excluded}
         albumLocked={stats.albumLocked}
-        number={numbered ? track.track_number : null}
-        disc={multiDisc ? (track.disc_number ?? 1) : null}
+        {inAlbum}
         coverSrc={coverFor ? coverFor(track) : undefined}
         reorderIndex={onreorder ? i : null}
         onreorderStep={

@@ -1,10 +1,10 @@
 /**
- * Plectr timing rules, pure (no DOM): note speed as a lead time, latency
+ * Plectr timing rules, pure (no DOM): note speed (legacy fixed px/s), latency
  * offset, record eligibility, tap-test calibration and the daily track seed.
  */
 import {
-  BASE_LEAD_TIME,
   LATENCY_LIMIT_MS,
+  NOTE_SPEED,
   NOTE_SPEED_MAX,
   NOTE_SPEED_MIN,
   RECORD_MIN_JUDGED_RATIO,
@@ -18,15 +18,14 @@ export function clampSpeedMultiplier(multiplier: number): number {
   return clamp(Math.round(multiplier * 20) / 20, NOTE_SPEED_MIN, NOTE_SPEED_MAX);
 }
 
-/** Seconds from the top of the highway to the hit line. */
-export function leadTimeFor(multiplier: number): number {
-  return BASE_LEAD_TIME / clampSpeedMultiplier(multiplier);
+/** Note speed in px/s for the setting's multiplier (1.0x = legacy 280 px/s). */
+export function noteSpeedFor(multiplier: number): number {
+  return NOTE_SPEED * clampSpeedMultiplier(multiplier);
 }
 
-/** Pixels per second so a note crosses `hitY - spawnY` px in `leadTime` s. */
-export function pxPerSecond(hitY: number, leadTime: number, spawnY = 0): number {
-  const travel = Math.max(1, hitY - spawnY);
-  return travel / Math.max(0.2, leadTime);
+/** Seconds a note is visible above the hit line at `speed` px/s. */
+export function leadTimeOn(hitY: number, speed: number): number {
+  return Math.max(0, hitY) / Math.max(1, speed);
 }
 
 /** Y of a note at `songTime` (hit line when the note is due). */

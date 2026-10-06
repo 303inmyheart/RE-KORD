@@ -77,6 +77,7 @@
     GRACE_SECONDS,
     HIT_WINDOWS,
     LANES,
+    NOTE_SPEED,
     STAGE_BG,
   } from "../../lib/plectr/config";
   import {
@@ -102,7 +103,7 @@
   import { NoteSprites, StageLayer, drawLanes, drawNotes, hitLineY, type DrawContext, type StageArt } from "../../lib/plectr/renderer";
   import { resetSongClock, resolveSmoothSongTime } from "../../lib/plectr/smoothSongClock";
   import { FpsWatch } from "../../lib/plectr/stageQuality";
-  import { gameTimeFromAudio, pxPerSecond } from "../../lib/plectr/timing";
+  import { gameTimeFromAudio } from "../../lib/plectr/timing";
   import type { Chart } from "../../lib/plectr/types";
   import { canvasDprCap, prefersReducedMotion } from "../../lib/visualizer/renderQuality";
   import type { VizMode } from "../../lib/visualizer/vizCanvasEngine";
@@ -113,7 +114,8 @@
     title = "",
     /** Bump to start a new run on the same chart (replay). */
     startToken = 0,
-    leadTime = 1.6,
+    /** Note speed, px/s (legacy 280 at 1.0x, same on every screen). */
+    noteSpeed = NOTE_SPEED,
     latencyMs = 0,
     keys = ["d", "f", "j", "k"],
     keyLetters = true,
@@ -146,7 +148,7 @@
     relPath: string;
     title?: string;
     startToken?: number;
-    leadTime?: number;
+    noteSpeed?: number;
     latencyMs?: number;
     keys?: string[];
     keyLetters?: boolean;
@@ -459,7 +461,8 @@
       maxCombo: s.maxCombo,
       judged,
       totalNotes: totalNotes(),
-      accuracy: judged ? s.hits / judged : 0,
+      // Same formula as the results card (`buildGameResult`): hits / (hits + misses).
+      accuracy: s.hits + s.misses ? s.hits / (s.hits + s.misses) : 0,
       score: s.score,
     };
   }
@@ -530,7 +533,7 @@
     const width = Math.max(1, Math.round(rect.width));
     const height = Math.max(1, Math.round(rect.height));
     const hitY = hitLineY(height);
-    const speed = pxPerSecond(hitY, leadTime);
+    const speed = noteSpeed;
     layout = { width, height, dpr, hitY, speed };
     const bw = Math.max(1, Math.round(width * dpr));
     const bh = Math.max(1, Math.round(height * dpr));
@@ -887,7 +890,7 @@
   /* Settings that change the geometry or the look: re-measure, redraw. */
   $effect(() => {
     void light;
-    void leadTime;
+    void noteSpeed;
     void backdrop;
     void art;
     void vizMode;

@@ -669,7 +669,7 @@ describe("achievement badges", () => {
 });
 
 const timing = await import("./plectr/timing.ts");
-const { GRACE_SECONDS, BASE_LEAD_TIME } = await import("./plectr/config.ts");
+const { GRACE_SECONDS } = await import("./plectr/config.ts");
 
 describe("grace period", () => {
   const env = { now: 0 };
@@ -748,20 +748,19 @@ describe("record eligibility", () => {
     assert.equal(timing.isRecordEligible({ ...base, judged: 0 }), false));
 });
 
-describe("note speed as lead time", () => {
-  test("1.0x = 1.6 s whatever the stage height", () => {
-    assert.equal(timing.leadTimeFor(1), BASE_LEAD_TIME);
+describe("note speed (legacy fixed px/s)", () => {
+  test("1.0x = 280 px/s whatever the stage height", () => {
+    assert.equal(timing.noteSpeedFor(1), 280);
     for (const hitY of [400, 700, 1200]) {
-      const speed = timing.pxPerSecond(hitY, timing.leadTimeFor(1));
-      // A note spawned at the top reaches the hit line after exactly the lead time.
-      assert.ok(Math.abs(timing.noteY(10 + BASE_LEAD_TIME, 10, hitY, speed)) < 1e-9);
-      assert.equal(timing.noteY(10, 10, hitY, speed), hitY);
+      assert.equal(timing.noteY(10, 10, hitY, 280), hitY, "a note is on the line when due");
+      assert.equal(timing.noteY(11, 10, hitY, 280), hitY - 280, "one second before: 280 px above");
     }
+    assert.ok(Math.abs(timing.leadTimeOn(462, 280) - 1.65) < 1e-9);
   });
 
   test("multiplier is clamped 0.8x-1.6x", () => {
-    assert.equal(timing.leadTimeFor(2), BASE_LEAD_TIME / 1.6);
-    assert.equal(timing.leadTimeFor(0.1), BASE_LEAD_TIME / 0.8);
+    assert.equal(timing.noteSpeedFor(2), 280 * 1.6);
+    assert.equal(timing.noteSpeedFor(0.1), 280 * 0.8);
     assert.equal(timing.clampSpeedMultiplier(1.234), 1.25);
   });
 });
@@ -831,5 +830,53 @@ describe("live run (legacy dock behaviour)", () => {
       assert.ok(!/mediaDevices|getUserMedia/.test(src), "no camera / microphone");
       assert.ok(!/countdown/i.test(src.replace(/\/\/.*|\/\*[\s\S]*?\*\/|no countdown/gi, "")), "no countdown");
     }
+  });
+});
+
+const config = await import("./plectr/config.ts");
+
+describe("timing parity with legacy-5.0 (game/config/gameConfig.ts)", () => {
+  test("hit windows, note speed, hit line, hold width: legacy constants", () => {
+    assert.deepEqual(config.HIT_WINDOWS, { perfect: 0.06, good: 0.105, ok: 0.15, holdSlack: 0.19 });
+    assert.equal(config.NOTE_SPEED, 280, "legacy DOCK_NOTE_SPEED");
+    assert.equal(config.HIT_LINE_Y, 0.835, "legacy DOCK_HIT_LINE_Y");
+    assert.equal(config.HIT_LINE_BOTTOM_MIN_PX, 28);
+    assert.equal(config.HIT_LINE_BOTTOM_MAX_PX, 52);
+    assert.equal(config.HOLD_WIDTH, 18);
+    assert.deepEqual(config.LANES.map((l) => l.color), ["#35d26f", "#f97316", "#eab308", "#38bdf8"]);
+  });
+
+  test("windows are the same on every difficulty; points 300/180/90", () => {
+    for (const d of DIFFICULTIES) {
+      for (const [offset, code, points] of [[0.059, "perfect", 300], [-0.059, "perfect", 300], [0.104, "good", 180], [0.149, "late", 90], [-0.149, "early", 90]]) {
+        const run = engine.initialRunState([note(0, 10, 0)]);
+        run.songTime = 10 + offset;
+        engine.pressLane(run, 0, { now: 0 });
+        assert.equal(run.feedback, code, `${d.id} ${offset}`);
+        assert.equal(run.score, points);
+      }
+      const run = engine.initialRunState([note(0, 10, 0)]);
+      run.songTime = 10.151;
+      engine.pressLane(run, 0, { now: 0 });
+      assert.equal(run.hits, 0, "outside 150 ms: no hit");
+    }
+  });
+
+  test("a hold let go before its tail is a hold miss (legacy, no slack)", () => {
+    const run = engine.initialRunState([note(0, 5, 0, { type: "hold", duration: 1, endLane: 0 })]);
+    run.songTime = 5;
+    engine.pressLane(run, 0, { now: 0 });
+    run.songTime = 5.95;
+    engine.releaseLane(run, 0, { now: 0 });
+    assert.equal(run.feedback, "holdMiss");
+  });
+
+  test("judging and drawing read the same clock with the same offset", () => {
+    // Default calibration 0 (legacy had none): game time = smoothed audio time.
+    assert.equal(timing.gameTimeFromAudio(12.345, 0), 12.345);
+    const src = readFileSync(new URL("../components/plectr/GameStage.svelte", import.meta.url), "utf8");
+    // Both the frame and a press go through clockNow (smooth clock + calibration).
+    assert.match(src, /const songTime = s\.finished \? s\.songTime : clockNow\(now\)/);
+    assert.match(src, /s\.songTime = clockNow\(now\);\s*pressLane/);
   });
 });

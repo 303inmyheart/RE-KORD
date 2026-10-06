@@ -39,7 +39,6 @@
   "ui.splash.tip10": "Favourites, playlists and plays follow your account on every device.",
   "ui.trackRow.plays.one": "{{n}} play",
   "ui.trackRow.plays.other": "{{n}} plays",
-  "ui.trackRow.trackNo": "Track {{n}}",
   "ui.editDialogs.moodCount": "{{n}} of {{max}}",
   "ui.editDialogs.coverDrop": "Drop an image here",
   "ui.editDialogs.coverChoose": "Choose file",

@@ -39,7 +39,6 @@
   "ui.splash.tip10": "Preferiti, playlist e ascolti seguono il tuo account su ogni dispositivo.",
   "ui.trackRow.plays.one": "{{n}} ascolto",
   "ui.trackRow.plays.other": "{{n}} ascolti",
-  "ui.trackRow.trackNo": "Traccia {{n}}",
   "ui.editDialogs.moodCount": "{{n}} di {{max}}",
   "ui.editDialogs.coverDrop": "Trascina qui un'immagine",
   "ui.editDialogs.coverChoose": "Scegli file",

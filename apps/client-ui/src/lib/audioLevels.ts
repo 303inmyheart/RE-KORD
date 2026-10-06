@@ -73,6 +73,21 @@ export function elementVolume(deckLevel: number, masterLevel: number): number {
   return v;
 }
 
+/**
+ * An element volume snapped to a coarse grid (`step`), ends exact. Fades on
+ * `HTMLMediaElement.volume` then change the level a few times per second
+ * instead of on every tick: on WebKitGTK each write becomes a PulseAudio /
+ * PipeWire stream-volume change that the sound server, the session's mixer
+ * applets and the desktop shell all react to.
+ */
+export function quantizeVolume(v: number, step: number): number {
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  if (v >= 1) return 1;
+  if (!(step > 0)) return v;
+  const q = Math.round(v / step) * step;
+  return Math.min(1, Math.max(0, Math.round(q * 10_000) / 10_000));
+}
+
 export type LeaseCounter = {
   /** Take a lease: the returned release is idempotent. */
   acquire(): () => void;

@@ -189,7 +189,7 @@
       <PlectrCover track={featured} size={256} class="plectr-feature__art" />
       <div class="plectr-feature__text">
         <span class="plectr-feature__eyebrow">
-          {#if featuredIsDaily && !selected}{t("plectr.pick.daily")}{:else if session.current?.rel_path === featured.rel_path}{t("plectr.nowPlaying")}{:else}{t("plectr.pick.selected")}{/if}
+          {#if featuredIsDaily && !selected}{t("plectr.pick.daily")}{:else if session.current?.rel_path === featured.rel_path}{session.playing ? t("plectr.nowPlaying") : t("plectr.paused.title")}{:else}{t("plectr.pick.selected")}{/if}
         </span>
         <strong class="plectr-feature__title">{featured.title}</strong>
         <span class="plectr-feature__meta">{featured.artist_name}</span>

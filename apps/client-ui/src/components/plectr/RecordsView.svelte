@@ -78,7 +78,7 @@
   {#if rows.length === 0}
     <p class="plectr-empty">{query.trim() ? t("plectr.picker.noResults") : t("plectr.picker.recordsEmpty")}</p>
   {:else}
-    <ul class="plectr-records__list">
+    <ul class="plectr-records__list rk-surface-card">
       {#each rows as r (r.relPath)}
         <li class="plectr-record-row">
           <PlectrCover track={r.track ?? { album_id: null, rel_path: r.relPath }} class="plectr-record-row__art" />

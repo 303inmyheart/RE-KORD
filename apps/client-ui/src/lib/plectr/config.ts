@@ -82,13 +82,12 @@ export const HIT_WINDOWS = {
   holdSlack: 0.19,
 };
 
-/** Note speed (px/s) on the live-synced highway (legacy, fixed). */
-export const NOTE_SPEED = 280;
 /**
- * Note speed is a lead time: seconds a note takes from the top of the
- * highway to the hit line, whatever the stage height (1.0x = 1.6 s).
+ * Note speed (px/s) at 1.0x: the legacy dock's fixed `DOCK_NOTE_SPEED`, the
+ * same on every screen (a taller stage shows more of the chart, it does not
+ * make notes fall faster). The "Note speed" setting multiplies it.
  */
-export const BASE_LEAD_TIME = 1.6;
+export const NOTE_SPEED = 280;
 export const NOTE_SPEED_MIN = 0.8;
 export const NOTE_SPEED_MAX = 1.6;
 /** Latency calibration range (ms, positive = audio heard late). */

@@ -53,7 +53,7 @@
   import type { StageArt } from "../lib/plectr/renderer";
   import { downloadShareCard } from "../lib/plectr/shareCard";
   import { resolveLightStage, writeMeasuredSlow } from "../lib/plectr/stageQuality";
-  import { dailyIndex, dayKey, isRecordEligible, leadTimeFor } from "../lib/plectr/timing";
+  import { dailyIndex, dayKey, isRecordEligible, noteSpeedFor } from "../lib/plectr/timing";
   import type { DifficultyId, GameResult } from "../lib/plectr/types";
   import type { VizMode } from "../lib/visualizer/vizCanvasEngine";
 
@@ -84,6 +84,8 @@
   let stagePhase = $state<StagePhase>("loading");
   let pauseReason = $state<PauseReason>("idle");
   let layout = $state<Layout>("desktop");
+  /** Touch-first device: no key letters on the pads. */
+  let coarsePointer = $state(false);
   let selected = $state<PlectrTrack | null>(initial.track);
   let startToken = $state(0);
   let results = $state<ResultsData | null>(null);
@@ -111,7 +113,7 @@
     return resolveLightStage(settings.lightStage);
   });
   const career = $derived(selectPlectrCareer(store));
-  const leadTime = $derived(leadTimeFor(settings.speed));
+  const noteSpeed = $derived(noteSpeedFor(settings.speed));
 
   /** The game runs on whatever the player holds; nothing there → pick screen. */
   const target = $derived<PlectrTrack | null>(session.current);
@@ -159,6 +161,14 @@
   });
   /** Track shown in the panels: the run's, else the pick screen's choice. */
   const panelTrack = $derived<PlectrTrack | null>(phase === "stage" ? target : (selected ?? target ?? daily));
+  const panelIsPlaying = $derived(!!panelTrack && panelTrack.rel_path === session.current?.rel_path && session.playing);
+  const panelEyebrow = $derived(
+    panelTrack && panelTrack.rel_path !== session.current?.rel_path
+      ? t("plectr.pick.selected")
+      : session.playing
+        ? t("plectr.nowPlaying")
+        : t("plectr.paused.title"),
+  );
   const immersive = $derived(layout === "phone" && phase === "stage" && section === "play");
   const framed = $derived(layout !== "phone");
   const live = $derived(phase === "stage" && stagePhase === "live");
@@ -438,12 +448,15 @@
 
     const mqPhone = window.matchMedia("(max-width: 599.98px)");
     const mqTablet = window.matchMedia("(max-width: 999.98px)");
+    const mqCoarse = window.matchMedia("(pointer: coarse)");
     const syncLayout = () => {
       layout = mqPhone.matches ? "phone" : mqTablet.matches ? "tablet" : "desktop";
+      coarsePointer = mqCoarse.matches;
     };
     syncLayout();
     mqPhone.addEventListener("change", syncLayout);
     mqTablet.addEventListener("change", syncLayout);
+    mqCoarse.addEventListener("change", syncLayout);
 
     // Height available inside the scrolling content area (header, dock, nav excluded).
     const content = rootEl?.closest("main") as HTMLElement | null;
@@ -465,6 +478,7 @@
     return () => {
       mqPhone.removeEventListener("change", syncLayout);
       mqTablet.removeEventListener("change", syncLayout);
+      mqCoarse.removeEventListener("change", syncLayout);
       ro.disconnect();
       window.removeEventListener("storage", onPrefs);
       document.documentElement.removeAttribute("data-plectr-immersive");
@@ -537,12 +551,9 @@
   {:else if stagePhase === "paused" && !showSettings}
     <PauseMenu
       reason={pauseReason}
-      difficulty={activeDifficulty}
-      playable={playableIds}
       onresume={() => stageRef?.resume()}
       onrestart={restart}
       onchange={changeSong}
-      ondifficulty={setDifficulty}
       onsettings={openSettings}
       onexit={exitPlectr}
     />
@@ -572,10 +583,10 @@
       relPath={target.rel_path}
       title={target.title}
       {startToken}
-      {leadTime}
+      {noteSpeed}
       latencyMs={settings.latencyMs}
       keys={settings.keys}
-      keyLetters={settings.keyLetters && layout !== "phone"}
+      keyLetters={settings.keyLetters && layout !== "phone" && !coarsePointer}
       vibration={settings.vibration}
       challenge={settings.challenge}
       {light}
@@ -638,10 +649,13 @@
             track={panelTrack}
             {store}
             difficulty={activeDifficulty}
-            {chart}
+            chart={phase === "stage" ? chart : null}
             lastRun={currentLastRun}
+            live={panelIsPlaying}
+            eyebrow={panelEyebrow}
+            hero={phase === "stage"}
             onchange={phase === "pick" ? undefined : changeSong}
-            onsettings={openSettings}
+            onsettings={phase === "pick" ? undefined : openSettings}
           />
         </aside>
       {/if}
@@ -673,7 +687,7 @@
           {#if phase === "pick"}
             <CareerCard {career} compact />
           {:else}
-            <SessionPanel {stats} keys={settings.keys} />
+            <SessionPanel {stats} keys={settings.keys} {live} />
           {/if}
         </aside>
       {/if}
@@ -687,14 +701,16 @@
             track={panelTrack}
             {store}
             difficulty={activeDifficulty}
-            {chart}
+            chart={phase === "stage" ? chart : null}
             lastRun={currentLastRun}
+            live={panelIsPlaying}
+            eyebrow={panelEyebrow}
             onsettings={() => {
               showInfo = false;
               showSettings = true;
             }}
           />
-          <SessionPanel {stats} keys={settings.keys} />
+          <SessionPanel {stats} keys={settings.keys} {live} />
           <button type="button" class="rk-btn rk-btn--secondary" onclick={() => (showInfo = false)}>{t("plectr.close")}</button>
         </div>
       </div>

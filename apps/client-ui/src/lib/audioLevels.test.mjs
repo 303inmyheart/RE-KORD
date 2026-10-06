@@ -138,3 +138,16 @@ test("due interruttori: il grafo resta finche' l'ultimo non lascia", () => {
   plectr.set(false);
   assert.deepEqual(events, ["engage", "idle"]);
 });
+
+test("quantizeVolume: coarse grid, exact ends, clamped", async () => {
+  const { quantizeVolume } = await import("./audioLevels.ts");
+  assert.equal(quantizeVolume(0, 0.05), 0);
+  assert.equal(quantizeVolume(1, 0.05), 1);
+  assert.equal(quantizeVolume(-0.2, 0.05), 0);
+  assert.equal(quantizeVolume(1.4, 0.05), 1);
+  assert.equal(quantizeVolume(0.512, 0.05), 0.5);
+  assert.equal(quantizeVolume(0.526, 0.05), 0.55);
+  assert.equal(quantizeVolume(0.013, 0.05), 0);
+  assert.equal(quantizeVolume(0.37, 0), 0.37);
+  assert.equal(quantizeVolume(Number.NaN, 0.05), 0);
+});

@@ -110,54 +110,6 @@
   box-shadow: inset 3px 0 0 var(--rk-accent);
 }
 
-/* Album context: the track number takes the cover's place. */
-.track-row__num {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  font-size: var(--rk-fs-3);
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-  color: var(--rk-muted);
-}
-
-.track-row__disc {
-  color: color-mix(in srgb, var(--rk-muted) 70%, transparent);
-  font-weight: 550;
-}
-
-.track-row.is-numbered {
-  grid-template-columns: 2.25rem minmax(0, 1fr) auto;
-}
-
-.track-row.is-numbered .track-row__art-wrap {
-  width: 2.25rem;
-  height: 2.75rem;
-}
-
-/* Numbered rows: no dark veil over a cover — the number simply gives way to
-   the play glyph (or the equaliser on the active row). */
-.track-row.is-numbered .track-row__art-wrap::after {
-  display: none;
-}
-
-.track-row.is-numbered .track-row__art-play,
-.track-row.is-numbered .track-row__art-studio {
-  color: var(--rk-ink);
-}
-
-.track-row.is-numbered .track-row__art-studio {
-  color: var(--rk-accent);
-}
-
-.track-row.is-numbered:hover .track-row__num,
-.track-row.is-numbered.is-active .track-row__num,
-.track-row.is-numbered:focus-within .track-row__num {
-  visibility: hidden;
-}
-
 .track-row__main {
   display: grid;
   gap: var(--rk-space-3xs);

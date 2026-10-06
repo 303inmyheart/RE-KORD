@@ -398,7 +398,9 @@ export function judgeHoldRelease(state: RunState, laneIndex: number, env: JudgeE
     }
   }
   if (best) {
-    if (songTime < bestEnd - HIT_WINDOWS.holdSlack) {
+    // Legacy: letting go before the tail is a hold miss (the slack only
+    // applies to the slide lane check in `completeHeldNotes`).
+    if (songTime < bestEnd) {
       failHoldRelease(state, best, "holdMiss", env);
       env.onMiss?.();
     } else {

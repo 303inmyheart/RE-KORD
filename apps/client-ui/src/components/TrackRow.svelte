@@ -37,8 +37,7 @@
     inQueue: inQueueProp,
     excluded: excludedProp,
     albumLocked: albumLockedProp,
-    number = null,
-    disc = null,
+    inAlbum = false,
     coverSrc,
     favorited = false,
     active = false,
@@ -70,10 +69,8 @@
     inQueue?: boolean;
     excluded?: boolean;
     albumLocked?: boolean;
-    /** Album context: show this track number instead of the cover. */
-    number?: number | null;
-    /** Multi-disc album: disc number, shown as "2·03". */
-    disc?: number | null;
+    /** Album context: the meta line leaves out the album name. */
+    inAlbum?: boolean;
     /** Cover URL, or null when the hub says there is none. Default: album cover. */
     coverSrc?: string | null;
     favorited?: boolean;
@@ -122,7 +119,6 @@
       ? coverSrc
       : coverUrlFor(track, 128),
   );
-  const numbered = $derived(number != null && number > 0);
 
   /** Playlist options: explicit prop, otherwise the session catalog (like React). */
   const resolvedPlaylistOptions = $derived(
@@ -238,18 +234,11 @@
   bind:this={rowEl}
   class="track-row"
   class:is-active={active}
-  class:is-numbered={numbered}
   class:is-menu-open={menuOpen || playlistOpen}
   data-reorder-index={reorderIndex ?? undefined}
 >
   <div class="track-row__art-wrap">
-    {#if numbered}
-      <span class="track-row__num" aria-label={t("ui.trackRow.trackNo", { n: number ?? 0 })}>
-        {#if disc != null}<span class="track-row__disc">{disc}·</span>{/if}{number}
-      </span>
-    {:else}
-      <CoverArt kind="track" title={track.title} src={coverUrl} size="md" />
-    {/if}
+    <CoverArt kind="track" title={track.title} src={coverUrl} size="md" />
     {#if showStudio}
       <button
         type="button"
@@ -289,7 +278,7 @@
     </span>
     <span class="track-row__meta">
       <span class="track-row__meta-text">
-        {numbered ? track.artist_name : `${track.artist_name} · ${track.album_name}`}
+        {inAlbum ? track.artist_name : `${track.artist_name} · ${track.album_name}`}
       </span>
       <TrackLyricsIcon kind={trackLyricsKind} class="track-row__lyrics-inline--meta" />
     </span>

@@ -101,8 +101,8 @@
   "plectr.settings.open": "Impostazioni",
   "plectr.settings.title": "Impostazioni di gioco",
   "plectr.settings.speed": "Velocità note",
-  "plectr.settings.speedValue": "{{x}}× · {{s}} s di anticipo",
-  "plectr.settings.speedHint": "Tempo che una nota impiega a scendere fino alla linea, uguale su ogni schermo.",
+  "plectr.settings.speedValue": "{{x}}× · {{px}} px/s",
+  "plectr.settings.speedHint": "1,00× è la velocità classica di Plectr. Le note scendono allo stesso ritmo su ogni schermo; uno schermo più alto ne mostra di più.",
   "plectr.settings.latency": "Calibrazione latenza",
   "plectr.settings.latencyValue": "{{ms}} ms",
   "plectr.settings.light": "Palco leggero",
@@ -321,5 +321,7 @@
   "plectr.paused.reason.idle": "Il brano è in pausa: premi Gioca e le note partono da dove si trova.",
   "plectr.continue": "Continua",
   "plectr.loading.keepPlaying": "La musica continua mentre preparo la chart.",
-  "plectr.backToGame": "Torna al gioco"
+  "plectr.backToGame": "Torna al gioco",
+  "plectr.panel.notPlayed": "Mai giocato",
+  "plectr.panel.grade": "Voto"
 }

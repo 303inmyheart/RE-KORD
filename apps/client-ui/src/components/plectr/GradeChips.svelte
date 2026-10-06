@@ -1,5 +1,5 @@
 <script lang="ts">
-  /** E / N / H grade chips of a track (one per difficulty), FC / AP marks. */
+  /** E / N / H grade chips of a track (one per difficulty), FC / AP marks; nothing until it has a record. */
   import { t } from "../../lib/i18n.svelte";
   import { DIFFICULTY_IDS } from "../../lib/plectr/config";
   import type { DifficultyBests } from "../../lib/plectr/records";
@@ -13,6 +13,7 @@
   } = $props();
 </script>
 
+{#if bests && Object.keys(bests).length}
 <span class="plectr-chips" class:is-compact={compact}>
   {#each DIFFICULTY_IDS as id (id)}
     {@const best = bests?.[id]}
@@ -28,3 +29,4 @@
     </span>
   {/each}
 </span>
+{/if}

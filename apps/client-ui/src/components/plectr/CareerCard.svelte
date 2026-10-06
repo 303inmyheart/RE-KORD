@@ -8,7 +8,7 @@
   const gradeTotal = $derived(Math.max(1, GRADES.reduce((n, g) => n + career.grades[g], 0)));
 </script>
 
-<section class="plectr-career" class:is-compact={compact} aria-label={t("plectr.career.title")}>
+<section class="plectr-career rk-surface-card" class:is-compact={compact} aria-label={t("plectr.career.title")}>
   <header class="plectr-career__head">
     <h3>{t("plectr.career.title")}</h3>
     <span class="plectr-career__xp">{t("plectr.career.xp", { n: fmtNumber(career.xp) })}</span>

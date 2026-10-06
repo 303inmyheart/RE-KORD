@@ -7,11 +7,13 @@ import {
   createLeaseSwitch,
   elementVolume,
   levelAt,
+  quantizeVolume,
   rampActive,
   retargetLevel,
   type LeaseSwitch,
   type LevelRamp,
 } from "./audioLevels";
+import { platformCaps } from "./platformCaps";
 import { touchListeningActivity } from "./achievements";
 import { t } from "./i18n.svelte";
 import {
@@ -65,8 +67,21 @@ type Listener = () => void;
 type DeckIx = 0 | 1;
 
 const SLEEP_FADE_MS = 30_000;
-/** How often element volumes are resampled while a fade runs without Web Audio. */
-const LEVEL_TICK_MS = 40;
+/**
+ * How often element volumes are resampled while a fade runs without Web
+ * Audio, and the grid they snap to. On WebKitGTK every `volume` write is a
+ * PulseAudio/PipeWire stream-volume change (and the sound server echoes it
+ * back as `volumechange`): 25 writes a second per deck during a crossfade
+ * kept the sound server, the mixer applets and the shell busy — the whole
+ * desktop stuttered at each track change. There the level moves 4 times a
+ * second in 5% steps, which is still a smooth fade to the ear.
+ */
+const LEVEL_TICK_MS = platformCaps.webkitGtk ? 250 : 50;
+const VOLUME_STEP = platformCaps.webkitGtk ? 0.05 : 0.02;
+/** Longest a context resume may hold a play (WebKitGTK can leave it pending). */
+const GRAPH_RESUME_TIMEOUT_MS = 1500;
+/** Grace beyond the fade before the watchdog settles a stuck crossfade. */
+const CROSSFADE_WATCHDOG_EXTRA_MS = 5000;
 /**
  * Always-on listening session: queue + currentIndex (not volume/view), per
  * account (`<prefix>.<accountId>`). The un-suffixed keys are what older
@@ -368,6 +383,19 @@ class PlayerController {
   private crossfadeOutIx: DeckIx | null = null;
   private crossfadeInIx: DeckIx | null = null;
   private crossfadeNextIdx: number | null = null;
+  /** Settles a crossfade that did not complete on its own (see rescueCrossfade). */
+  private crossfadeWatchdog = 0;
+  /**
+   * The transition whose incoming deck refused to play: no new crossfade is
+   * attempted for it (each attempt reloads the deck — a new GStreamer
+   * pipeline and a new hub request — on every timeupdate). The plain
+   * end-of-track advance handles it, transcode fallback included.
+   */
+  private crossfadeRefused: { from: string; to: string } | null = null;
+  /** Last volume this player wrote on each element (reads may come back quantized). */
+  private writtenVolume = new WeakMap<HTMLAudioElement, number>();
+  /** Pending echo checks per element (see onDeckVolumeEcho). */
+  private volumeEchoTimers = new WeakMap<HTMLAudioElement, number>();
   private prefetchedRelPath: string | null = null;
   /** Cancels in-flight dual-deck loads when the user skips again. */
   private loadGen = 0;
@@ -537,6 +565,7 @@ class PlayerController {
       this.persistPosition();
       this.emitProgress();
     });
+    on("volumechange", () => this.onDeckVolumeEcho(audio));
     on("loadedmetadata", () => {
       // Decks are silent while a remote output plays: their events are stale.
       if (this.remote) return;
@@ -1511,12 +1540,43 @@ class PlayerController {
     this.syncLevelTicker(now);
   }
 
+  /**
+   * WebKitGTK reports the sound server's stream volume back into the element,
+   * late: an echo of an older write can land after the last step of a fade
+   * and leave the new track playing at 15%. Once the echoes settle, put back
+   * the level this player wrote (one write; its own echo matches).
+   */
+  private onDeckVolumeEcho(el: HTMLAudioElement) {
+    const wanted = this.writtenVolume.get(el);
+    if (wanted == null || typeof window === "undefined") return;
+    window.clearTimeout(this.volumeEchoTimers.get(el));
+    this.volumeEchoTimers.set(
+      el,
+      window.setTimeout(() => {
+        this.volumeEchoTimers.delete(el);
+        const target = this.writtenVolume.get(el);
+        if (target == null || Math.abs(el.volume - target) < 0.01) return;
+        try {
+          el.volume = target;
+        } catch {
+          /* ignore */
+        }
+      }, 300),
+    );
+  }
+
   private setElementVolume(el: HTMLAudioElement, v: number) {
-    if (Math.abs(el.volume - v) < 1e-4) return;
+    const q = quantizeVolume(v, VOLUME_STEP);
+    // Compare with what we wrote, not with `el.volume`: an engine that
+    // rounds the value (the sound server's own scale) would otherwise get a
+    // fresh write on every tick, and echo it back again.
+    const last = this.writtenVolume.get(el) ?? el.volume;
+    if (Math.abs(last - q) < 1e-4) return;
+    this.writtenVolume.set(el, q);
     try {
-      el.volume = v;
+      el.volume = q;
     } catch {
-      /* out-of-range guard: elementVolume already clamps */
+      /* out-of-range guard: quantizeVolume already clamps */
     }
   }
 
@@ -1774,7 +1834,14 @@ class PlayerController {
     const ctx = this.ctx;
     if (!ctx || ctx.state === "running" || ctx.state === "closed") return null;
     const p = ctx.resume().catch(() => {});
-    return this.graphWired() ? p : null;
+    if (!this.graphWired()) return null;
+    // Never wait on it unbounded: a resume that stays pending (seen on
+    // WebKitGTK) would leave play/pause and the crossfade hanging on it.
+    if (typeof window === "undefined") return p;
+    return Promise.race([
+      p,
+      new Promise<void>((resolve) => window.setTimeout(resolve, GRAPH_RESUME_TIMEOUT_MS)),
+    ]);
   }
 
   /**
@@ -2327,9 +2394,20 @@ class PlayerController {
       if (this.outage.play) toasts.info(t("core.player.waitingHub"), { key: "player-waiting-hub" });
       return;
     }
+    if (this.crossfadeBusy) {
+      // Space / play-pause mid-fade: settle the transition first, so the
+      // button acts on what is heard (it used to pause only the outgoing
+      // deck while the incoming one played on).
+      const wasPlaying = this.playing;
+      this.finalizeCrossfade();
+      if (wasPlaying) {
+        this.pauseLocalDecks();
+        return;
+      }
+    }
     const a = this.activeAudio();
-    if (!a.paused) {
-      a.pause();
+    if (!a.paused || !this.inactiveDeck().paused) {
+      this.pauseLocalDecks();
       return;
     }
     if (a.error != null && a.getAttribute("src")) {
@@ -2368,7 +2446,27 @@ class PlayerController {
       this.remote.pause();
       return;
     }
-    this.activeAudio().pause();
+    if (this.crossfadeBusy) this.finalizeCrossfade();
+    this.pauseLocalDecks();
+  }
+
+  /**
+   * Silence both local decks. The active deck's `pause` event normally flips
+   * the state; when it was not actually running (a play still pending) no
+   * event comes, so the state is settled here.
+   */
+  private pauseLocalDecks() {
+    const a = this.activeAudio();
+    const wasSilent = a.paused;
+    const other = this.inactiveDeck();
+    if (!other.paused) other.pause();
+    a.pause();
+    if (wasSilent && this.playing) {
+      this.playing = false;
+      this.syncMediaPlaybackState();
+      this.persistPosition(true, true);
+      this.emitPlayState();
+    }
   }
 
   private pauseHard() {
@@ -2654,6 +2752,8 @@ class PlayerController {
     this.crossfadeGen += 1;
     window.clearTimeout(this.crossfadeTimer);
     this.crossfadeTimer = 0;
+    window.clearTimeout(this.crossfadeWatchdog);
+    this.crossfadeWatchdog = 0;
     const wasBusy = this.crossfadeBusy;
     this.crossfadeBusy = false;
     this.crossfadeOutIx = null;
@@ -2671,6 +2771,17 @@ class PlayerController {
     this.maybeDropGraph();
   }
 
+  /** The upcoming transition already refused a crossfade (see crossfadeRefused). */
+  private crossfadeRefusedNow(): boolean {
+    const r = this.crossfadeRefused;
+    if (!r) return false;
+    const nextIdx = this.resolveNextIndex();
+    const next = nextIdx == null ? null : this.queue[nextIdx];
+    if (r.from === this.current?.rel_path && r.to === next?.rel_path) return true;
+    this.crossfadeRefused = null;
+    return false;
+  }
+
   /** Invalidate in-flight dual-deck loads (next/prev/playTracks). */
   private cancelPendingLoad() {
     this.loadGen += 1;
@@ -2680,6 +2791,8 @@ class PlayerController {
     if (!this.crossfadeBusy) return;
     window.clearTimeout(this.crossfadeTimer);
     this.crossfadeTimer = 0;
+    window.clearTimeout(this.crossfadeWatchdog);
+    this.crossfadeWatchdog = 0;
 
     const outIx = this.crossfadeOutIx;
     const inIx = this.crossfadeInIx;
@@ -2716,11 +2829,37 @@ class PlayerController {
     }
     this.maybeDropGraph();
     this.emit();
+    // The incoming track was shorter than the fade and is over already: its
+    // `ended` went by while it was not the active deck, so advance now.
+    if (nextTr && inEl.ended && this.playing) void this.onEnded();
+  }
+
+  /**
+   * Watchdog: the crossfade did not complete on its own (incoming deck never
+   * started, events lost, a pending resume). The player must never stay
+   * mid-transition: finish it when the incoming deck really plays, otherwise
+   * drop it and let the plain advance take over.
+   */
+  private rescueCrossfade(token: number) {
+    if (token !== this.crossfadeGen || !this.crossfadeBusy) return;
+    const inIx = this.crossfadeInIx;
+    const inEl = inIx == null ? null : this.deckEl(inIx);
+    if (inEl && !inEl.paused && !inEl.error && inEl.readyState >= 2) {
+      this.finalizeCrossfade();
+      return;
+    }
+    const outEl = this.activeAudio();
+    const d = outEl.duration;
+    const outDone = outEl.ended || !Number.isFinite(d) || d - outEl.currentTime < 0.5;
+    const wasPlaying = this.playing;
+    this.abortCrossfade();
+    if (outDone && wasPlaying) void this.next();
   }
 
   private maybeStartCrossfade() {
     const fade = this.effectiveCrossfadeSec;
     if (!fade || this.repeat === "one" || this.crossfadeBusy || this.guards.held) return;
+    if (this.crossfadeRefusedNow()) return;
     const out = this.activeAudio();
     const d = out.duration;
     if (!Number.isFinite(d) || d <= 0) return;
@@ -2749,12 +2888,18 @@ class PlayerController {
     const remain = d - outEl.currentTime;
     if (remain < 0.08) return;
 
+    if (this.crossfadeRefusedNow()) return;
     // Mark busy before any await (legacy-aligned) so timeupdate won't re-enter.
     this.crossfadeBusy = true;
     this.crossfadeOutIx = outIx;
     this.crossfadeInIx = inIx;
     this.crossfadeNextIdx = nextIdx;
     const token = this.crossfadeGen;
+    window.clearTimeout(this.crossfadeWatchdog);
+    this.crossfadeWatchdog = window.setTimeout(
+      () => this.rescueCrossfade(token),
+      fadeWindow * 1000 + CROSSFADE_WATCHDOG_EXTRA_MS,
+    );
 
     // Reuse warm inactive deck when possible; otherwise bind now.
     // Never await canplay here — that ate the fade window and broke seamless.
@@ -2776,8 +2921,15 @@ class PlayerController {
         /* ignore seek errors before metadata */
       }
       await inEl.play();
-    } catch {
+    } catch (e) {
       if (token !== this.crossfadeGen) return;
+      // Never retry this transition as a crossfade (see crossfadeRefused);
+      // a format the engine refuses goes to the transcoded stream next time.
+      const from = this.current?.rel_path ?? "";
+      this.crossfadeRefused = { from, to: path };
+      if (e instanceof DOMException && e.name === "NotSupportedError") markNeedsTranscode(path);
+      window.clearTimeout(this.crossfadeWatchdog);
+      this.crossfadeWatchdog = 0;
       this.crossfadeBusy = false;
       this.crossfadeOutIx = null;
       this.crossfadeInIx = null;
@@ -2830,6 +2982,8 @@ class PlayerController {
     const track = this.current;
     if (!track) return;
     const gen = ++this.loadGen;
+    // A fresh load: its own transition out gets a fresh crossfade attempt.
+    this.crossfadeRefused = null;
     this.resetHalfListen(track);
     this.cancelPendingSeek();
     this.restorePosition = null;
