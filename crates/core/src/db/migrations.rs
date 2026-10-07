@@ -27,10 +27,15 @@ const MIGRATIONS: &[(i64, &str, Step)] = &[
     ),
     (5, "recount mp3 durations", v5_recount_mp3_durations),
     (6, "reread FLAC metadata", v6_reread_flac_metadata),
+    (
+        7,
+        "regroup nested albums and retry FLAC metadata",
+        v7_regroup_nested_albums,
+    ),
 ];
 
 /// Schema version this build writes.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 pub fn user_version(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
@@ -563,6 +568,27 @@ fn v6_reread_flac_metadata(tx: &Transaction<'_>) -> Result<()> {
     tx.execute_batch(
         r#"
         UPDATE files SET mtime = -1 WHERE lower(rel_path) LIKE '%.flac';
+        "#,
+    )?;
+    Ok(())
+}
+
+
+/// Nested CD/bonus directories used to become separate albums when deep_scan
+/// was enabled. A normal scan can re-link every unchanged track to the parent
+/// album, so make sure startup performs one scan. FLACs are marked stale as
+/// well so the new ffprobe fallback gets a chance to repair incomplete tags.
+fn v7_regroup_nested_albums(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch(
+        r#"
+        UPDATE files SET mtime = -1 WHERE lower(rel_path) LIKE '%.flac';
+
+        -- Even libraries without FLAC need one startup scan so unchanged
+        -- tracks are re-linked with the corrected album grouping.
+        UPDATE files
+           SET mtime = -1
+         WHERE rel_path = (SELECT rel_path FROM files ORDER BY rel_path LIMIT 1)
+           AND NOT EXISTS (SELECT 1 FROM files WHERE mtime = -1);
         "#,
     )?;
     Ok(())
