@@ -729,34 +729,44 @@ fn collect_audio_recursive(
 /// thumbnail pipeline is built with those codecs enabled.
 fn extract_embedded_cover(group: &AlbumGroup) -> Option<PathBuf> {
     let dir = group.cover_dir.as_deref()?;
-    for (path, _) in &group.files {
-        let Ok(tagged) = Probe::open(path).and_then(|p| p.read()) else {
-            continue;
-        };
-        for tag in tagged.tags() {
-            let pictures = tag.pictures();
-            let picture = pictures
-                .iter()
-                .find(|p| p.pic_type() == PictureType::CoverFront)
-                .or_else(|| pictures.first());
-            let Some(picture) = picture else {
+
+    for want_front in [true, false] {
+        for (path, _) in &group.files {
+            let Ok(tagged) = Probe::open(path).and_then(|p| p.read()) else {
                 continue;
             };
-            let ext = match picture.mime_type() {
-                Some(MimeType::Jpeg) => "jpg",
-                Some(MimeType::Png) => "png",
-                _ => continue,
-            };
-            let dest = dir.join(format!("cover.{ext}"));
-            let tmp = dir.join(format!(".rekord-cover.{ext}.tmp"));
-            if fs::write(&tmp, picture.data()).is_err() {
-                continue;
+            for tag in tagged.tags() {
+                for picture in tag.pictures() {
+                    if want_front && picture.pic_type() != PictureType::CoverFront {
+                        continue;
+                    }
+                    let ext = match picture.mime_type() {
+                        Some(MimeType::Jpeg) => "jpg",
+                        Some(MimeType::Png) => "png",
+                        _ => continue,
+                    };
+                    let dest = dir.join(format!(".rekord-embedded-cover.{ext}"));
+                    let tmp = dir.join(format!(".rekord-embedded-cover.{ext}.tmp"));
+                    if fs::write(&tmp, picture.data()).is_err() {
+                        continue;
+                    }
+                    if fs::rename(&tmp, &dest).is_ok() {
+                        // Remove only our stale alternate cache, never cover.jpg/folder.jpg.
+                        let stale_ext = if ext == "jpg" { "png" } else { "jpg" };
+                        let _ = fs::remove_file(
+                            dir.join(format!(".rekord-embedded-cover.{stale_ext}")),
+                        );
+                        info!(
+                            source = %path.display(),
+                            cover = %dest.display(),
+                            front = want_front,
+                            "extracted embedded album cover"
+                        );
+                        return Some(dest);
+                    }
+                    let _ = fs::remove_file(&tmp);
+                }
             }
-            if fs::rename(&tmp, &dest).is_ok() {
-                info!(source = %path.display(), cover = %dest.display(), "extracted embedded album cover");
-                return Some(dest);
-            }
-            let _ = fs::remove_file(&tmp);
         }
     }
     None
@@ -784,16 +794,11 @@ fn index_group(
     seen: &mut HashSet<String>,
     stats: &mut Stats,
 ) -> Result<()> {
-    // Prefer an explicit cover file. If an album only carries artwork inside
-    // its audio tags (FLAC PICTURE / Vorbis comments, ID3 APIC, MP4 covr, ...),
-    // materialize the front cover next to the album so the existing cover
-    // endpoint and thumbnail cache can serve it like every other cover.
-    let cover = group
-        .cover_dir
-        .as_deref()
-        .and_then(find_cover_in_dir)
-        .or_else(|| legacy_art.get(&group.folder_key).cloned())
-        .or_else(|| extract_embedded_cover(group));
+    // Embedded artwork is authoritative: prefer FLAC PICTURE / ID3 APIC /
+    // MP4 covr over a loose cover.jpg. Folder and legacy artwork are fallbacks.
+    let cover = extract_embedded_cover(group)
+        .or_else(|| group.cover_dir.as_deref().and_then(find_cover_in_dir))
+        .or_else(|| legacy_art.get(&group.folder_key).cloned());
 
     let mut work: Vec<(&Path, &str, FileWork)> = Vec::with_capacity(group.files.len());
     let mut changed_files = 0usize;
@@ -868,20 +873,22 @@ fn index_group(
                 // Unchanged on disk: keep DB row (and any Studio edits) untouched,
                 // just make sure it points at the current album/artist rows.
                 FileWork::Relink => {
-                    batch.relink_track(rel, album_id, artist_id, &group.artist, &album_name)?;
+                    batch.relink_track_album(rel, album_id, &album_name)?;
                     unchanged += 1;
                 }
                 FileWork::Index { meta, size, mtime } => {
+                    let track_artist = meta.artist.as_deref().unwrap_or(&group.artist);
+                    let track_artist_id = batch.upsert_artist(track_artist)?;
                     batch.upsert_track(&TrackRow {
                         rel_path: rel,
                         file_path: path,
                         title: &meta.title,
-                        artist_name: &group.artist,
+                        artist_name: track_artist,
                         album_name: &album_name,
                         duration_ms: meta.duration_ms,
                         track_number: meta.track_number,
                         album_id: Some(album_id),
-                        artist_id: Some(artist_id),
+                        artist_id: Some(track_artist_id),
                         size: *size,
                         mtime: *mtime,
                         genre: meta.genre.as_deref(),
@@ -919,6 +926,7 @@ fn index_group(
 
 struct AudioMeta {
     title: String,
+    artist: Option<String>,
     track_number: Option<i64>,
     disc_number: Option<i64>,
     duration_ms: i64,
@@ -957,10 +965,12 @@ fn read_bpm(tag: &lofty::tag::Tag) -> Option<f64> {
 
 fn read_tag_artist(path: &Path) -> Option<String> {
     let tagged = Probe::open(path).ok()?.read().ok()?;
-    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
-    tag.artist()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    tagged
+        .tags()
+        .iter()
+        .filter_map(|tag| tag.artist())
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty())
 }
 
 /// Most precise release date in the tags: recording / release dates are full
@@ -1032,39 +1042,84 @@ fn is_mp3(path: &Path) -> bool {
 /// from the file name, and numbers fall back to the file name too.
 fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMeta {
     let (guess_disc, guess_track) = crate::db::text::guess_track_numbers(file_stem);
-    let Ok(tagged) = Probe::open(path).and_then(|p| p.read()) else {
-        let counted = is_mp3(path)
-            .then(|| mp3_frames::count(path, true))
-            .flatten();
-        return AudioMeta {
-            title: crate::db::text::track_display_title(None, file_stem, artist_folder),
-            track_number: guess_track,
-            disc_number: guess_disc,
-            duration_ms: counted
-                .as_ref()
-                .map(|c| c.duration_ms)
-                .or_else(|| ffmpeg_duration_ms(path))
-                .unwrap_or(0),
-            genre: None,
-            release_date: None,
-            lyrics: None,
-            bpm: None,
-            album: None,
-            mp3_seek_header: counted.and_then(|c| c.seek_header).map(Box::new),
-        };
+    let tagged = match Probe::open(path).and_then(|p| p.read()) {
+        Ok(tagged) => tagged,
+        Err(error) => {
+            warn!(path = %path.display(), error = %error, "audio metadata read failed");
+            let counted = is_mp3(path)
+                .then(|| mp3_frames::count(path, true))
+                .flatten();
+            return AudioMeta {
+                title: crate::db::text::track_display_title(None, file_stem, artist_folder),
+                artist: None,
+                track_number: guess_track,
+                disc_number: guess_disc,
+                duration_ms: counted
+                    .as_ref()
+                    .map(|c| c.duration_ms)
+                    .or_else(|| ffmpeg_duration_ms(path))
+                    .unwrap_or(0),
+                genre: None,
+                release_date: None,
+                lyrics: None,
+                bpm: None,
+                album: None,
+                mp3_seek_header: counted.and_then(|c| c.seek_header).map(Box::new),
+            };
+        }
     };
-    let tag = tagged.tags().iter().max_by_key(|t| {
-        [
-            t.title().is_some(),
-            t.artist().is_some(),
-            t.album().is_some(),
-            t.track().is_some(),
-            t.genre().is_some(),
-        ]
-        .into_iter()
-        .filter(|v| *v)
-        .count()
-    });
+
+    // FLAC can legally contain Vorbis Comments plus a read-only ID3v2 tag.
+    // Do not choose only primary_tag()/first_tag(): merge every parsed tag and
+    // take the first non-empty value for each field independently.
+    let tags = tagged.tags();
+    let artist = tags
+        .iter()
+        .filter_map(|tag| tag.artist())
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty());
+    let raw_title = tags
+        .iter()
+        .filter_map(|tag| tag.title())
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty());
+    let album = tags
+        .iter()
+        .filter_map(|tag| tag.album())
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty());
+    let genre = tags
+        .iter()
+        .filter_map(|tag| tag.genre())
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty());
+    let track_number = tags
+        .iter()
+        .find_map(|tag| tag.track())
+        .filter(|number| *number > 0)
+        .map(|number| number as i64)
+        .or(guess_track);
+    let disc_number = tags
+        .iter()
+        .find_map(|tag| tag.disk())
+        .filter(|number| *number > 0)
+        .map(|number| number as i64)
+        .or(guess_disc);
+    let release_date = tags
+        .iter()
+        .filter_map(read_tag_date)
+        .max_by_key(|date| crate::db::text::date_precision(date));
+    let lyrics = tags
+        .iter()
+        .find_map(|tag| {
+            tag.get_string(&ItemKey::Lyrics)
+                .or_else(|| tag.get_string(&ItemKey::UnsyncLyrics))
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let bpm = tags.iter().find_map(|tag| read_bpm(tag));
+
     let mut duration_ms = tagged.properties().duration().as_millis() as i64;
     let mut mp3_seek_header = None;
     if tagged.file_type() == lofty::file::FileType::Mpeg {
@@ -1078,40 +1133,16 @@ fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMe
         // lofty can't time some containers (WMA/ASF, WebM): ask ffmpeg.
         duration_ms = ffmpeg_duration_ms(path).unwrap_or(0);
     }
-    let tag_artist = tag
-        .and_then(|t| t.artist().map(|s| s.trim().to_string()))
-        .filter(|s| !s.is_empty());
+
     let title = crate::db::text::track_display_title(
-        tag.and_then(|t| t.title().map(|s| s.to_string()))
-            .as_deref(),
+        raw_title.as_deref(),
         file_stem,
-        tag_artist.as_deref().unwrap_or(artist_folder),
+        artist.as_deref().unwrap_or(artist_folder),
     );
-    let track_number = tag
-        .and_then(|t| t.track())
-        .filter(|n| *n > 0)
-        .map(|n| n as i64)
-        .or(guess_track);
-    let disc_number = tag
-        .and_then(|t| t.disk())
-        .filter(|n| *n > 0)
-        .map(|n| n as i64)
-        .or(guess_disc);
-    let genre = tag
-        .and_then(|t| t.genre().map(|s| s.to_string()))
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let release_date = tag.and_then(read_tag_date);
-    let lyrics = tag
-        .and_then(|t| t.get_string(&ItemKey::Lyrics).map(|s| s.to_string()))
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let bpm = tag.and_then(read_bpm);
-    let album = tag
-        .and_then(|t| t.album().map(|s| s.trim().to_string()))
-        .filter(|s| !s.is_empty());
+
     AudioMeta {
         title,
+        artist,
         track_number,
         disc_number,
         duration_ms,
