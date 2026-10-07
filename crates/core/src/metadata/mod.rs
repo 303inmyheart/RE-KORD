@@ -107,6 +107,33 @@ fn audio_files(dir: &Path) -> Vec<String> {
     out
 }
 
+/// Number of audio tracks that belong to an album folder, including CD1/CD2
+/// and bonus-disc subdirectories. Metadata matching uses this count to reject
+/// singles/editions with the wrong track count, so counting only the top level
+/// creates a cascade of false "no metadata" errors for multi-disc albums.
+fn audio_file_count_recursive(dir: &Path) -> usize {
+    walkdir::WalkDir::new(dir)
+        .max_depth(8)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            entry.depth() == 0
+                || entry
+                    .file_name()
+                    .to_str()
+                    .is_none_or(|name| !crate::layout::is_excluded_dir(name))
+        })
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(is_audio_file)
+        })
+        .count()
+}
+
 fn album_dir(music_root: &Path, album_path: &str) -> Result<PathBuf> {
     let rel = safe_rel_path(album_path).map_err(|_| MetaError::invalid_path().err())?;
     if rel.is_empty() {
@@ -362,7 +389,7 @@ pub async fn album_info_fetch_with(
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| current_name.clone());
-    let local_tracks = audio_files(&dir).len();
+    let local_tracks = audio_file_count_recursive(&dir);
     let q = AlbumQuery {
         artist: artist_name.clone(),
         album: album_name.clone(),
@@ -596,7 +623,7 @@ async fn album_ctx(cfg: &AppConfig, music_root: &Path, db: &Db, album_rel: &str)
     let q = AlbumQuery {
         artist: ctx.artist.clone(),
         album: ctx.album.clone(),
-        local_track_count: audio_files(&dir).len(),
+        local_track_count: audio_file_count_recursive(&dir),
     };
     let (tl, errors) = resolve_album_tracklist(cfg, &q, &known).await;
     ctx.tracklist = tl;
@@ -975,7 +1002,7 @@ pub async fn discogs_apply(
         .unwrap_or_default();
     let release = discogs_fetch_release(cfg, release_id).await?;
     check_release_matches_folder(&release, &artist_name, &album_name)?;
-    let local_tracks = audio_files(&dir).len();
+    let local_tracks = audio_file_count_recursive(&dir);
     let mut meta = release.meta.clone();
     meta.genre = genres::normalize_genre_opt(meta.genre.as_deref());
     meta.expected_track_count =
@@ -1275,6 +1302,22 @@ mod tests {
         assert_eq!(leading_number("1999"), None);
         assert_eq!(leading_number("21st Century"), None);
         assert_eq!(leading_number("Song"), None);
+    }
+
+    #[test]
+    fn recursive_album_track_count_includes_disc_subfolders() {
+        let root = std::env::temp_dir().join(format!(
+            "rekord-meta-count-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(root.join("CD1")).unwrap();
+        fs::create_dir_all(root.join("CD2/Bonus")).unwrap();
+        fs::write(root.join("01.flac"), b"x").unwrap();
+        fs::write(root.join("CD1/02.flac"), b"x").unwrap();
+        fs::write(root.join("CD2/Bonus/03.mp3"), b"x").unwrap();
+        fs::write(root.join("CD2/cover.jpg"), b"x").unwrap();
+        assert_eq!(audio_file_count_recursive(&root), 3);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
