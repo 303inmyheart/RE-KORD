@@ -1055,10 +1055,7 @@ struct FfprobeMeta {
     bpm: Option<f64>,
 }
 
-fn merge_ffprobe_tags(
-    dst: &mut HashMap<String, String>,
-    value: Option<&serde_json::Value>,
-) {
+fn merge_ffprobe_tags(dst: &mut HashMap<String, String>, value: Option<&serde_json::Value>) {
     let Some(obj) = value.and_then(serde_json::Value::as_object) else {
         return;
     };
@@ -1090,21 +1087,17 @@ fn ffprobe_metadata_value(root: &serde_json::Value) -> Option<FfprobeMeta> {
         }
     }
 
-    let get = |keys: &[&str]| -> Option<String> {
-        keys.iter().find_map(|key| tags.get(*key).cloned())
-    };
+    let get =
+        |keys: &[&str]| -> Option<String> { keys.iter().find_map(|key| tags.get(*key).cloned()) };
     let duration_ms = root
         .pointer("/format/duration")
         .and_then(serde_json::Value::as_str)
         .and_then(|raw| raw.parse::<f64>().ok())
         .or_else(|| {
             streams.iter().find_map(|stream| {
-                (stream
-                    .get("codec_type")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("audio"))
-                .then(|| stream.get("duration")?.as_str()?.parse::<f64>().ok())
-                .flatten()
+                (stream.get("codec_type").and_then(serde_json::Value::as_str) == Some("audio"))
+                    .then(|| stream.get("duration")?.as_str()?.parse::<f64>().ok())
+                    .flatten()
             })
         })
         .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
@@ -1331,7 +1324,8 @@ fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMe
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("flac"));
-    if tags.is_empty() || (is_flac && (raw_title.is_none() || artist.is_none() || album.is_none())) {
+    if tags.is_empty() || (is_flac && (raw_title.is_none() || artist.is_none() || album.is_none()))
+    {
         if let Some(fallback) = ffprobe_metadata(path) {
             raw_title = raw_title.or(fallback.title);
             artist = artist.or(fallback.artist);
@@ -1816,7 +1810,6 @@ mod mp3_frames {
         })
     }
 }
-
 
 #[cfg(test)]
 mod ffprobe_metadata_tests {
