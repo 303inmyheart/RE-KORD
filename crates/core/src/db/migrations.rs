@@ -556,7 +556,6 @@ fn v5_recount_mp3_durations(tx: &Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
-
 /// FLAC metadata reading now merges every parsed tag container (Vorbis
 /// Comments plus any legacy ID3v2 tag) and preserves the tag artist. Mark
 /// existing FLAC files stale so the next normal scan refreshes them once.
