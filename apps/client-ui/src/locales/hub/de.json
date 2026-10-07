@@ -46,5 +46,10 @@
   "hub.kind.account": "Konto",
   "hub.kind.download": "Download",
   "hub.kind.settings": "Einstellungen",
-  "hub.kind.restore": "Wiederherstellung"
+  "hub.kind.restore": "Wiederherstellung",
+  "hub.kind.podcasts": "Podcasts",
+  "hub.activity.podcasts.enabled": "Modul Podcasts & Nachrichten eingeschaltet",
+  "hub.activity.podcasts.disabled": "Modul Podcasts & Nachrichten ausgeschaltet",
+  "hub.activity.podcasts.sourceAdded": "Podcast-Quelle hinzugefügt: {{name}}",
+  "hub.activity.podcasts.sourceRemoved": "Podcast-Quelle entfernt: {{name}}"
 }

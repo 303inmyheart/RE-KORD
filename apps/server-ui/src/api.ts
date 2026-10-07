@@ -178,6 +178,55 @@ async function download(path: string, fallbackName: string): Promise<void> {
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+/** Kind of a podcast source as the hub detected it. */
+export type PodcastKind = "rss" | "rtl" | "ytdlp" | "live";
+
+export type PodcastEpisodePreview = {
+  key: string;
+  title: string;
+  publishedAt?: string | null;
+  durationSecs?: number | null;
+};
+
+/** `POST /podcasts/admin/test`: what the URL is, nothing saved. */
+export type PodcastPreview = {
+  kind: PodcastKind;
+  live: boolean;
+  title: string | null;
+  hasArt: boolean;
+  episodes: PodcastEpisodePreview[];
+};
+
+export type PodcastSourceAdmin = {
+  id: number;
+  url: string;
+  name: string;
+  nameCustom: boolean;
+  kind: PodcastKind;
+  live: boolean;
+  episodeCount: number;
+  position: number;
+  hasArt: boolean;
+  fetchedAt: string | null;
+  error: string | null;
+  errorAt: string | null;
+  episodes: PodcastEpisodePreview[];
+};
+
+export type PodcastsAdmin = {
+  enabled: boolean;
+  cacheTtlMinutes: number;
+  ytdlpEnabled: boolean;
+  limits: {
+    maxSources: number;
+    maxEpisodes: number;
+    defaultEpisodes: number;
+    minTtlMinutes: number;
+    maxTtlMinutes: number;
+  };
+  sources: PodcastSourceAdmin[];
+};
+
 export type Health = {
   service?: string;
   version?: string;
@@ -600,6 +649,38 @@ export const api = {
     }),
 
   publicIp: () => request<{ ip: string | null }>("/api/v1/network/public-ip"),
+
+  podcasts: () => request<PodcastsAdmin>("/api/v1/podcasts/admin"),
+  setPodcastSettings: (patch: { enabled?: boolean; cacheTtlMinutes?: number }) =>
+    request<PodcastsAdmin>("/api/v1/podcasts/admin/settings", {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  testPodcastSource: (url: string, episodeCount: number) =>
+    request<PodcastPreview>("/api/v1/podcasts/admin/test", {
+      method: "POST",
+      body: JSON.stringify({ url, episodeCount }),
+      timeoutMs: LONG_TIMEOUT_MS,
+    }),
+  addPodcastSource: (body: { url: string; name?: string; episodeCount: number }) =>
+    request<PodcastSourceAdmin>("/api/v1/podcasts/admin/sources", {
+      method: "POST",
+      body: JSON.stringify(body),
+      timeoutMs: LONG_TIMEOUT_MS,
+    }),
+  updatePodcastSource: (id: number, patch: { name?: string; episodeCount?: number; url?: string }) =>
+    request<PodcastSourceAdmin>(`/api/v1/podcasts/admin/sources/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+      timeoutMs: LONG_TIMEOUT_MS,
+    }),
+  deletePodcastSource: (id: number) =>
+    request<{ deleted: number }>(`/api/v1/podcasts/admin/sources/${id}`, { method: "DELETE" }),
+  orderPodcastSources: (ids: number[]) =>
+    request<PodcastsAdmin>("/api/v1/podcasts/admin/order", {
+      method: "PUT",
+      body: JSON.stringify({ ids }),
+    }),
 
   machineAccess: () => request<MachineAccess>("/api/v1/system/machine-access"),
   setRemoteAdmin: (enabled: boolean) =>

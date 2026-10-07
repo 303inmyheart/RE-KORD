@@ -28,7 +28,8 @@ pub struct ArtworkHit {
 pub const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 3;
 
-fn host_name_blocked(host: &str) -> bool {
+/// Host names that always mean "this machine or its network" (SSRF guard).
+pub fn host_name_blocked(host: &str) -> bool {
     let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
     h.is_empty()
         || h == "localhost"

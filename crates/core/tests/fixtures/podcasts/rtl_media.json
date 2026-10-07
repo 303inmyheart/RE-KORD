@@ -1,0 +1,26 @@
+{
+ "success": true,
+ "data": {
+  "mediaInfo": {
+   "id": 174102,
+   "type": 201,
+   "title": "Edizione delle 15",
+   "uri": "https://dd782ed59e2a4e86aabf6fc508674b59.msvdn.net/vod/tSgn1XgXkaYG/aac_128_48000_2.m4a",
+   "airDate": "20261007 13:03:58",
+   "duration": "00:00:00",
+   "poster": "https://webtools-dd782ed59e2a4e86aabf6fc508674b59.msvdn.net/image/tSgn1XgXkaYG/1?pictureprofile=L&compression=85&format=JPEG",
+   "broadcasterName": "RTL 102.5",
+   "nielsenDCRMetadata": {
+    "type": "content",
+    "isAudio": "true",
+    "assetid": "CB1E0BEB1364BF2F03D48FC4ED420E6B",
+    "program": "Giornale Orario di RTL 102.5",
+    "title": "Edizione delle 15",
+    "length": "226",
+    "airdate": "20261007 13:03:58",
+    "isfullepisode": "y",
+    "adloadtype": "2"
+   }
+  }
+ }
+}

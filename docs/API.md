@@ -57,7 +57,9 @@ Envelope (JSON):
 | GET/POST | `/api/v1/accounts` | List / create local accounts (alias `/api/accounts`) |
 | PUT/DELETE | `/api/v1/accounts/{id}` | Rename / delete (default `default` locked) |
 | GET | `/api/v1/accounts/{id}/export` | Export profile ZIP (selection + favorites + playlists) |
-| GET | `/api/v1/modules` | Optional module registry |
+| GET | `/api/v1/modules` | Optional module registry (manifest modules plus `podcasts`, enabled from the admin panel) |
+| GET | `/api/v1/podcasts`, `/podcasts/sources/{id}`, `/podcasts/play/{id}/{key}`, `/podcasts/art/{id}/{key}` | Podcasts & news (optional module, 404 `podcasts_disabled` while off) — see [Podcasts & news](#podcasts--news-optional-module) |
+| GET/PUT/POST/DELETE | `/api/v1/podcasts/admin…` | Podcasts & news settings and sources (writes: machine operation) |
 | GET | `/api/v1/covers/album/{id}` | Album cover image (folder cover.jpg…, else the legacy `.kord/artwork` registry). `?size=128\|256` serves a cached thumbnail; `?v=<cover_version>` is ignored server-side (cache busting) and makes the response `immutable` for a year, otherwise `max-age=300`. `ETag` + `If-None-Match` → 304. Missing cover → 404 with `Cache-Control: public, max-age=3600` |
 | GET | `/api/v1/covers/artist/{id}` | Artist cover (first album with cover), same `?size=` |
 | GET | `/api/v1/backup/kord-data` | Download hub backup ZIP (`kordBackup: 3`) |
@@ -120,6 +122,35 @@ Every response carries `x-request-id` (echoed from the request when provided) to
 
 **Account ids** match `[A-Za-z0-9_-]{1,64}`. An unknown id gets 404 `account_not_found` (it no longer falls back to Default).
 
+### Podcasts & news (optional module)
+
+Off by default (`settings.json` → `podcasts.enabled`). While it is off, the client endpoints below answer **404 `podcasts_disabled`** and the hub does no work for the module; `/health` → `modules` lists `podcasts` only when it is on. There is no background polling: a source is fetched when a client asks for it, and its latest episodes (metadata only, never audio) are cached in SQLite (`podcast_sources`, schema v6) for `cacheTtlMinutes` (default 30, 5–1440).
+
+Client endpoints (any account):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/podcasts` | Every source with its latest episodes → `{ sources: [Source], cacheTtlMinutes }`. Stale sources are fetched now (at most 4 at once, conditional `If-None-Match` / `If-Modified-Since` for feeds); the answer waits at most 25 s, slower fetches land in the cache for the next call. `?refresh=1` forces a fetch unless the last one is under 30 s old. A failed fetch keeps the previous episodes and sets `error` (code); automatic retries wait 60 s |
+| GET | `/api/v1/podcasts/sources/{id}` | One source, same rules (`?refresh=1`) |
+| GET/HEAD | `/api/v1/podcasts/play/{id}/{key}` | Proxied audio of an episode (`key` from the list) or of a live source (`key` = `live`). `Range` / `If-Range` pass through (206 / 416 with the upstream `Content-Range`), the body is streamed, `Cache-Control: no-store`. Only episodes of configured sources are reachable (no URL parameter exists); an episode stays playable for 6 h after a refresh dropped it. Every redirect hop is checked against the SSRF guard. Limits: 8 streams at once (503 `podcast_proxy_busy`), 45 s without data, 4 h per response (8 h for live), pace capped at 2 MiB/s after a 4 MiB burst. yt-dlp sources resolve the audio URL on play (cached 20 min) |
+| GET | `/api/v1/podcasts/art/{id}/{key}` | Artwork as a 400 px JPEG thumbnail (`key` = `_` for the source), made once and kept in `<data>/cache/podcast-art` (300 files at most); `Cache-Control: public, max-age=86400`; 404 when there is none |
+
+`Source`: `{ id, name, kind: "rss"|"rtl"|"ytdlp"|"live", live, episodeCount, hasArt, fetchedAt, error, episodes: [{ key, title, publishedAt, durationSecs, hasArt, mime, live }] }`. Upstream URLs are never sent to clients.
+
+Admin endpoints (reads open, writes are **machine operations**):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/podcasts/admin` | `{ enabled, cacheTtlMinutes, ytdlpEnabled, limits: { maxSources: 50, maxEpisodes: 20, defaultEpisodes: 3, minTtlMinutes, maxTtlMinutes }, sources: [Source + url, nameCustom, position, errorAt, createdAt] }` (no fetch) |
+| PUT | `/api/v1/podcasts/admin/settings` | `{ enabled?, cacheTtlMinutes? }` → admin payload |
+| POST | `/api/v1/podcasts/admin/test` | `{ url, episodeCount? }` → `{ kind, live, title, hasArt, episodes }`: detection preview, nothing saved |
+| POST | `/api/v1/podcasts/admin/sources` | `{ url, name?, episodeCount? }` → the saved source (detected like `test`; the name follows the feed title unless given) |
+| PUT | `/api/v1/podcasts/admin/sources/{id}` | `{ name?, episodeCount?, url? }`; an empty `name` goes back to the feed title, a new `url` is detected again, a new `episodeCount` invalidates the cache |
+| DELETE | `/api/v1/podcasts/admin/sources/{id}` | Remove a source |
+| PUT | `/api/v1/podcasts/admin/order` | `{ ids: [...] }` → admin payload (unlisted sources keep their order after) |
+
+Detection of a URL, in order: a play.rtl.it programme archive (`/archivio/<b>/podcast/info/<slug>/`, read through RTL's public JSON API; its RSS feed is the fallback); an audio response (live stream; `icy-name` names it); an `.m3u` / `.pls` playlist (first playable stream; HLS `.m3u8` → 422 `podcast_hls_unsupported`); an RSS / Atom feed; an HTML page: its `<link rel="alternate" type="application/rss+xml|atom+xml">` feeds, then known patterns (Apple Podcasts → iTunes lookup, Spreaker, WordPress `/feed/`); finally yt-dlp `--flat-playlist -J --playlist-end N` (unless `ENABLE_YTDLP=0`). Nothing found → 422 `podcast_unsupported_url`. Requests use timeouts (20 s), size caps (feeds 8 MiB), the `RE-KORD/<version> (podcasts)` User-Agent and refuse private, loopback, link-local and CGNAT addresses (`url_not_allowed`), DNS answers included.
+
 ### Library and machine operations
 
 Two levels (parity legacy `requestAccess.mjs`, where a loopback request could run every server mutation):
@@ -134,6 +165,7 @@ Two levels (parity legacy `requestAccess.mjs`, where a loopback request could ru
 
 - library: `PUT …/library/path`, `POST …/library/scan|thumbnails|sync-legacy-meta`, `PUT …/library/layout|watch`
 - integrations: `POST/DELETE …/config/youtube-cookies`, `PUT/DELETE …/config/discogs-token`
+- podcasts: `PUT …/podcasts/admin/settings|order|sources/{id}`, `POST …/podcasts/admin/test|sources`, `DELETE …/podcasts/admin/sources/{id}`
 - tools: `POST …/tools/ytdlp/update`
 - backup: `GET …/backup/kord-data` (download) and `POST …/backup/kord-restore` (full restore; a non-admin may only restore a **theme package** up to 32 MiB)
 - jobs and diagnostics: job cancel / clear, `DELETE …/diagnostics/errors`
@@ -260,4 +292,5 @@ Studio, downloads, tools and permissions answer `{ ok: false, error: "<code>", m
 - metadata (codes of `metadata::error::classify` pass through with their status: `album_not_found`, `no_match` (404, track fetch without a close match), `no_metadata_found`, `discogs_rate_limited`, `discogs_unauthorized`, `upstream_unavailable`, …), otherwise: `album_ref_required`, `invalid_album_path`, `track_ref_required`, `track_not_found`, `invalid_patch`, `db_error`, `artwork_search_failed`, `artwork_apply_failed`, `artwork_upload_failed`, `album_info_fetch_failed`, `album_info_save_failed`, `track_info_fetch_failed`, `track_info_save_failed`, `lyrics_missing_artist`, `lyrics_not_found`, `lyrics_fetch_failed`, `prune_failed`, `sanitize_failed`, `discogs_search_failed`, `discogs_apply_failed`, `entity_info_search_failed`, `entity_info_save_failed`, `entity_info_batch_failed`, `invalid_scope`, `upstream_rate_limited`, `upstream_timeout`
 - remote access (`errorCode` of `GET /remote-access`): `cloudflared_not_found`, `tunnel_start_timeout`, `tunnel_exited_early`, `tunnel_exited`, `tunnel_failed`
 - tools: `ytdlp_update_in_progress`, `ytdlp_platform_unsupported`, `ytdlp_release_lookup_failed`, `ytdlp_asset_missing`, `ytdlp_download_failed`, `ytdlp_checksum_missing`, `ytdlp_checksum_mismatch`, `ytdlp_install_failed`, `cloudflared_not_found`
+- podcasts: `podcasts_disabled` (404), `podcast_invalid_url`, `url_not_allowed`, `invalid_episode_count` (400), `podcast_source_not_found`, `podcast_episode_not_found` (404), `podcast_unsupported_url`, `podcast_hls_unsupported`, `podcast_no_episodes` (422), `podcast_fetch_failed`, `podcast_http_error`, `podcast_too_large`, `podcast_parse_failed`, `podcast_resolve_failed` (502), `podcast_fetch_timeout` (504), `podcast_proxy_busy` (503), `podcast_limit_reached` (409), plus `ytdlp_disabled`, `ytdlp_not_found`, `ytdlp_timeout`, `ytdlp_failed`
 - accounts: `account_create_failed`, `account_update_failed`, `account_delete_failed`, `cannot_delete_default_account`, `last_account`

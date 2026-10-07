@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { CoverArt, IconButton } from "@rekord/ui";
   import { coverUrlFor, type Track } from "../lib/api";
+  import { isExternalTrack, isLiveTrack } from "../lib/externalItems";
   import { watchDown } from "../lib/breakpoints";
   import { castController } from "../lib/cast/castController.svelte";
   import CastButton from "./cast/CastButton.svelte";
@@ -59,6 +60,10 @@
     onopenArtist: () => void;
     onopenStudio?: () => void;
   } = $props();
+
+  /** Podcast episode / live stream: no favourite, exclude or radio; crumbs open Podcasts. */
+  const external = $derived(isExternalTrack(current));
+  const live = $derived(isLiveTrack(current));
 
   /**
    * While casting the player itself mirrors the receiver (play state, position)
@@ -207,15 +212,20 @@
               >
                 {current.artist_name}
               </button>
-              <span class="sep" aria-hidden="true">·</span>
-              <button
-                type="button"
-                class="crumb crumb--album"
-                title={current.album_name}
-                onclick={onopenAlbum}
-              >
-                {current.album_name}
-              </button>
+              {#if live}
+                <span class="sep" aria-hidden="true">·</span>
+                <span class="live-pill">LIVE</span>
+              {:else if !external}
+                <span class="sep" aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  class="crumb crumb--album"
+                  title={current.album_name}
+                  onclick={onopenAlbum}
+                >
+                  {current.album_name}
+                </button>
+              {/if}
               {#if casting}
                 <span class="sep">·</span>
                 <span class="cast-badge" title={t("cast.castingTo", { name: castDeviceName })}>
@@ -296,6 +306,7 @@
                     </span>
                   </button>
                 </li>
+                {#if !external}
                 <li role="presentation">
                   <button
                     type="button"
@@ -340,6 +351,7 @@
                     <span class="dock-menu__label">{t("player.radio")}</span>
                   </button>
                 </li>
+                {/if}
                 {#if castController.available}
                   <li role="presentation">
                     <button
@@ -387,6 +399,7 @@
             {favorited}
             {excluded}
             {excludeLocked}
+            libraryActions={!external}
             {ontoggle}
             {onprev}
             {onnext}
@@ -400,19 +413,26 @@
         <div class="rail-end">
           <CastButton />
           <SleepTimerControl />
-          <IconButton label={t("player.radio")} onclick={onradio}>
+          <IconButton label={t("player.radio")} disabled={external} onclick={onradio}>
             <UiIcon name="radio" />
           </IconButton>
         </div>
       {/if}
     </div>
     <div class="row seek">
-      <PlayerTimeline {currentTime} {duration} {onseek} />
+      <PlayerTimeline {currentTime} {duration} {live} {onseek} />
     </div>
   </div>
 </footer>
 
 <style>
+  .live-pill {
+    font-size: var(--rk-fs-xs, 0.72rem);
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: var(--rk-danger, #e5484d);
+  }
+
   .dock {
     position: fixed;
     left: var(--rk-rail-w);

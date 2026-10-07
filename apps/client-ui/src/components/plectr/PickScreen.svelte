@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isExternalTrack } from "../../lib/externalItems";
   /**
    * Plectr pick screen: the selected track (big card + Play), difficulty with
    * its level, suggestion carousels (track of the day, recent in Plectr, your
@@ -66,7 +67,9 @@
     return sorted[dailyIndex(dayKey(), sorted.length)] ?? null;
   });
 
-  const featured = $derived(selected ?? session.current ?? daily);
+  const featured = $derived(
+    selected ?? (isExternalTrack(session.current) ? null : session.current) ?? daily,
+  );
   const featuredBests = $derived(
     featured ? (lookupByRelPathAliases(store.byDifficulty, featured.rel_path) ?? null) : null,
   );

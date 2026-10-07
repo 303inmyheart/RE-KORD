@@ -37,6 +37,7 @@ const VIEWS: ReadonlySet<string> = new Set<ViewId>([
   "statistics",
   "achievements",
   "settings",
+  "podcasts",
 ]);
 
 function currentKey(): string {

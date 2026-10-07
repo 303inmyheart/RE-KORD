@@ -185,6 +185,21 @@ pub const API_VERSION: u32 = 1;
 /// Oldest client release this hub still talks to.
 pub const MIN_CLIENT_VERSION: &str = "5.0.0";
 
+/// Module ids clients may rely on: manifest flags plus the modules switched
+/// on from the admin panel (`podcasts`).
+fn enabled_modules(state: &AppState) -> Vec<String> {
+    let mut ids: Vec<String> = state
+        .modules
+        .enabled_ids()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    if crate::podcasts::enabled(state) {
+        ids.push("podcasts".into());
+    }
+    ids
+}
+
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({
         "ok": true,
@@ -193,7 +208,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "apiVersion": API_VERSION,
         "minClientVersion": MIN_CLIENT_VERSION,
         "transcode": crate::transcode::ffmpeg_available(),
-        "modules": state.modules.enabled_ids(),
+        "modules": enabled_modules(&state),
         "scanning": state.is_scanning(),
     }))
 }
@@ -1415,7 +1430,15 @@ async fn remove_playlist_track(
 }
 
 async fn list_modules(State(state): State<AppState>) -> impl IntoResponse {
-    ok(state.modules.as_ref().clone())
+    let mut registry = state.modules.as_ref().clone();
+    registry.modules.push(rekord_plugin_api::ModuleManifest {
+        id: "podcasts".into(),
+        name: "Podcast e notizie".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        description: "Podcasts, news bulletins and live radio (enabled in the admin panel)".into(),
+        enabled: crate::podcasts::enabled(&state),
+    });
+    ok(registry)
 }
 
 #[derive(Deserialize)]

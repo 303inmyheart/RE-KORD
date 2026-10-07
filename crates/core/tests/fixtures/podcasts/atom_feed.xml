@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <title type="text">World Briefing</title>
+  <logo>https://world.example/logo.png</logo>
+  <updated>2026-10-07T12:00:00Z</updated>
+  <entry>
+    <title>Morning briefing</title>
+    <id>urn:uuid:aaaa-1</id>
+    <published>2026-10-07T06:00:00Z</published>
+    <link rel="alternate" href="https://world.example/morning"/>
+    <link rel="enclosure" type="audio/mpeg" length="123" href="audio/morning.mp3"/>
+    <itunes:duration>1:02:05</itunes:duration>
+  </entry>
+  <entry>
+    <title>Evening briefing</title>
+    <id>urn:uuid:aaaa-2</id>
+    <published>2026-10-07T18:00:00+00:00</published>
+    <link rel="enclosure" type="audio/mpeg" href="https://world.example/audio/evening.mp3"/>
+  </entry>
+</feed>

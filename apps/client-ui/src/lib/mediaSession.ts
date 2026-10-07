@@ -32,10 +32,13 @@ export type MediaSessionTrack = {
   hasCover?: boolean | null;
   /** Cache-busting version of the artwork, when the hub sends one. */
   coverVersion?: string | number | null;
+  /** Artwork outside the album covers (podcast episodes): wins when set. */
+  artworkUrl?: string | null;
 };
 
 /** Artwork URL of a track's album, or null when there is none to ask for. */
 function trackCover(track: MediaSessionTrack | null, size: CoverSize): string | null {
+  if (track?.artworkUrl) return track.artworkUrl;
   if (!track || track.albumId == null) return null;
   return coverUrlFor(
     {
@@ -119,6 +122,7 @@ function metadataKey(track: MediaSessionTrack): string {
     track.albumId ?? "-",
     track.hasCover === false ? "0" : "1",
     track.coverVersion ?? "",
+    track.artworkUrl ?? "",
   ].join("\u0000");
 }
 
@@ -139,7 +143,9 @@ export function setMediaSessionMetadata(track: MediaSessionTrack | null): void {
   const key = metadataKey(track);
   if (key === lastMetadataKey) return;
   lastMetadataKey = key;
-  const artwork = buildMediaSessionArtwork(track.albumId, track);
+  const artwork = track.artworkUrl
+    ? [{ src: absolute(track.artworkUrl), sizes: "400x400", type: "image/jpeg" }]
+    : buildMediaSessionArtwork(track.albumId, track);
   navigator.mediaSession.metadata = new MediaMetadata({
     title: track.title,
     artist: track.artist,
@@ -147,7 +153,7 @@ export function setMediaSessionMetadata(track: MediaSessionTrack | null): void {
     artwork,
   });
   // Warm the size the shade usually shows, so the first paint is not blank.
-  const shadeArt = artwork.find((a) => a.sizes === "256x256");
+  const shadeArt = artwork.find((a) => a.sizes === "256x256" || a.sizes === "400x400");
   if (typeof Image !== "undefined" && shadeArt) {
     const warm = new Image();
     warm.decoding = "async";

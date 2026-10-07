@@ -4,6 +4,8 @@
   import { connectGate } from "../lib/connect.svelte";
   import { t } from "../lib/i18n.svelte";
   import { bindNavHistory } from "../lib/navHistory.svelte";
+  import { hubModules } from "../lib/hubModules.svelte";
+  import { isExternalTrack } from "../lib/externalItems";
   import { reloadWithFreshShell } from "../lib/platform/pwa";
   import { player } from "../lib/player";
   import { session, type ViewId } from "../lib/session.svelte";
@@ -40,7 +42,12 @@
     statistics: () => import("../views/StatisticsView.svelte"),
     achievements: () => import("../views/AchievementsView.svelte"),
     settings: () => import("../views/SettingsView.svelte"),
+    // Optional module: fetched only when the hub has it on and it is opened.
+    podcasts: () => import("../views/PodcastsView.svelte"),
   };
+
+  /** Views of optional modules: never warmed up in the background. */
+  const MODULE_VIEWS: ReadonlySet<LazyView> = new Set<LazyView>(["podcasts"]);
 
   /** Loaded view components (plain object in $state: lookups stay reactive). */
   let loadedViews = $state<Partial<Record<LazyView, Component>>>({});
@@ -101,7 +108,7 @@
       }
     };
     const timer = window.setTimeout(() => {
-      const queue = Object.keys(VIEW_LOADERS) as LazyView[];
+      const queue = (Object.keys(VIEW_LOADERS) as LazyView[]).filter((id) => !MODULE_VIEWS.has(id));
       const next = () => {
         if (cancelled) return;
         const id = queue.shift();
@@ -119,6 +126,20 @@
   function goHome() {
     session.navigate("dashboard");
   }
+
+  // An episode restored from the last session keeps its resume point and
+  // listened mark: load the (small) tracker only then.
+  $effect(() => {
+    if (!hubModules.podcasts || !isExternalTrack(session.current)) return;
+    void import("../lib/podcasts/store.svelte").then((m) => m.podcasts.bindTracker());
+  });
+
+  // The hub switched the module off (or never had it): leave its view.
+  $effect(() => {
+    if (session.view === "podcasts" && hubModules.list != null && !hubModules.podcasts) {
+      session.navigate("dashboard");
+    }
+  });
 
   onMount(trackViewportMetrics);
 
@@ -270,11 +291,13 @@
         onradio={() => void session.radioFromCurrent()}
         onopenAlbum={() => {
           const t = session.current;
-          if (t) void session.openLibraryForTrack(t);
+          if (t && isExternalTrack(t)) session.navigate(hubModules.podcasts ? "podcasts" : "dashboard");
+          else if (t) void session.openLibraryForTrack(t);
         }}
         onopenArtist={() => {
           const t = session.current;
-          if (t) void session.openLibraryArtist(t);
+          if (t && isExternalTrack(t)) session.navigate(hubModules.podcasts ? "podcasts" : "dashboard");
+          else if (t) void session.openLibraryArtist(t);
         }}
         onopenStudio={() => {
           session.studioPane = "listen";

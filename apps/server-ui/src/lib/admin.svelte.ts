@@ -39,6 +39,7 @@ export type SectionId =
   | "backup"
   | "accounts"
   | "integrations"
+  | "podcasts"
   | "network";
 
 /** Section ids in rail order; labels are `nav.<id>`, ledes `lede.<id>`. */
@@ -51,6 +52,7 @@ export const SECTIONS: SectionId[] = [
   "backup",
   "accounts",
   "integrations",
+  "podcasts",
   "network",
 ];
 

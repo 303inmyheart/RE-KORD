@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isExternalTrack } from "../lib/externalItems";
   import { CoverArt } from "@rekord/ui";
   import { onMount, untrack } from "svelte";
   import ListenSleepTimer from "../components/ListenSleepTimer.svelte";
@@ -55,6 +56,8 @@
   let autoPanelTrack: number | null = null;
   let panelPickedByUser = false;
 
+  /** Podcast episode / live stream: no library actions on the stage. */
+  const currentExternal = $derived(isExternalTrack(session.current));
   const favCurrent = $derived(
     session.current ? session.favoriteIds.has(session.current.id) : false,
   );
@@ -77,7 +80,7 @@
   });
   const currentMissingMeta = $derived.by(() => {
     const t = session.current;
-    if (!t) return false;
+    if (!t || isExternalTrack(t)) return false;
     return !trackHasFileMeta(t);
   });
   const currentAlbum = $derived.by(() => {
@@ -236,9 +239,10 @@
                         class="listen-stage__art-btn"
                         title={t("studio.listen.changeCover")}
                         aria-label={t("studio.listen.changeCover")}
+                        disabled={currentExternal}
                         onclick={() => {
                           const cur = session.current;
-                          if (cur) void session.openLibraryForTrack(cur);
+                          if (cur && !isExternalTrack(cur)) void session.openLibraryForTrack(cur);
                         }}
                       >
                         <div class="listen-stage__art">
@@ -263,7 +267,7 @@
                       <div class="listen-stage__text-lead">
                         <div class="listen-stage__eyebrow-row">
                           <p class="rk-eyebrow">{t("studio.listen.currentEyebrow")}</p>
-                          {#if session.current}
+                          {#if session.current && !currentExternal}
                             <div class="listen-stage__eyebrow-actions">
                               <button
                                 type="button"
@@ -351,6 +355,7 @@
                                 {" "}· {durationLabel}
                               {/if}
                             </span>
+                            {#if !currentExternal}
                             <span class="listen-stage__sub-sep" aria-hidden="true"> · </span>
                             <span
                               class="track-row__plays listen-stage__sub-plays"
@@ -358,6 +363,7 @@
                             >
                               ({playCount})
                             </span>
+                            {/if}
                             <MetaBadgeCluster
                               variant="inline"
                               moods={currentMoods}

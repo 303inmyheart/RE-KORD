@@ -4,6 +4,7 @@
   import GraphicEq from "./icons/GraphicEq.svelte";
   import UiIcon from "./icons/UiIcon.svelte";
   import { session } from "../lib/session.svelte";
+  import { hubModules } from "../lib/hubModules.svelte";
   import { t } from "../lib/i18n.svelte";
 
   let {
@@ -18,6 +19,9 @@
 
   const moreItems = $derived(
     [
+      ...(hubModules.podcasts
+        ? [{ id: "podcasts" as const, labelKey: "nav.podcasts", icon: "podcast" as const }]
+        : []),
       { id: "queue" as const, labelKey: "nav.queue", icon: "list" as const },
       { id: "playlists" as const, labelKey: "nav.playlists", icon: "queueMusic" as const },
       { id: "favorites" as const, labelKey: "nav.favorites", icon: "favorite" as const },

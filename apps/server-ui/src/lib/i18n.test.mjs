@@ -7,7 +7,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { hubErrorKey } from "./hubErrors.ts";
+import { PODCAST_CODES, hubErrorKey } from "./hubErrors.ts";
 import { hubActivityCode, hubActivityText, hubText } from "../../../../packages/ui/src/lib/hubText.ts";
 import { intlTag, interpolate, normalizeLocale, pickLocale } from "./locale.ts";
 
@@ -90,8 +90,9 @@ describe("locale tables", () => {
 
   test("dynamic key families are complete", () => {
     const families = {
-      nav: ["status", "library", "jobs", "diagnostics", "activity", "backup", "accounts", "integrations", "network"],
-      lede: ["status", "library", "jobs", "diagnostics", "activity", "backup", "accounts", "integrations", "network"],
+      nav: ["status", "library", "jobs", "diagnostics", "activity", "backup", "accounts", "integrations", "podcasts", "network"],
+      lede: ["status", "library", "jobs", "diagnostics", "activity", "backup", "accounts", "integrations", "podcasts", "network"],
+      "podcasts.kind": ["rss", "rtl", "ytdlp", "live"],
       lang: ["it", "en", "de"],
       layout: ["artist/album/track", "artist/track", "flat", "tags"],
       "jobs.status": ["running", "done", "failed", "canceled"],
@@ -178,6 +179,16 @@ describe("hub errors", () => {
     });
     assert.equal(hubErrorKey(500, "database is locked", true), null);
     assert.deepEqual(hubErrorKey(404, null, false), { key: "errors.notAvailable" });
+  });
+
+  test("podcast codes have their own text, in every language", () => {
+    for (const code of PODCAST_CODES) {
+      const k = hubErrorKey(code === "ytdlp_disabled" ? 403 : 422, code, true);
+      assert.deepEqual(k, { key: `errors.code.${code}` });
+      for (const [name, table] of [["it", it], ["en", en], ["de", de]]) {
+        assert.ok(k.key in table, `${name}.json: missing ${k.key}`);
+      }
+    }
   });
 
   test("known hub codes", () => {

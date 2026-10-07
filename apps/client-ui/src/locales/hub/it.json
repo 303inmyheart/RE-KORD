@@ -46,5 +46,10 @@
   "hub.kind.account": "Account",
   "hub.kind.download": "Download",
   "hub.kind.settings": "Impostazioni",
-  "hub.kind.restore": "Ripristino"
+  "hub.kind.restore": "Ripristino",
+  "hub.kind.podcasts": "Podcast",
+  "hub.activity.podcasts.enabled": "Modulo Podcast e notizie attivato",
+  "hub.activity.podcasts.disabled": "Modulo Podcast e notizie disattivato",
+  "hub.activity.podcasts.sourceAdded": "Fonte podcast aggiunta: {{name}}",
+  "hub.activity.podcasts.sourceRemoved": "Fonte podcast rimossa: {{name}}"
 }

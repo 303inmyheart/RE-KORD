@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isExternalTrack } from "../lib/externalItems";
   /**
    * Plectr — rhythm game on the song the player is playing (legacy dock
    * behaviour): opening the view starts the game at once on the current
@@ -116,7 +117,10 @@
   const noteSpeed = $derived(noteSpeedFor(settings.speed));
 
   /** The game runs on whatever the player holds; nothing there → pick screen. */
-  const target = $derived<PlectrTrack | null>(session.current);
+  /** Podcast episodes and live streams are never a game: the pick screen instead. */
+  const target = $derived<PlectrTrack | null>(
+    isExternalTrack(session.current) ? null : session.current,
+  );
   const phase = $derived<Phase>(target && !picking ? "stage" : "pick");
 
   const chartSet = $derived(
@@ -234,7 +238,7 @@
     untrack(() => {
       const idx = nextQueueIndex();
       const next = idx >= 0 ? session.queue[idx] : null;
-      if (next && next.rel_path !== target?.rel_path) {
+      if (next && !isExternalTrack(next) && next.rel_path !== target?.rel_path) {
         prefetchRhythmChart({ rel_path: next.rel_path, title: next.title });
       }
     });

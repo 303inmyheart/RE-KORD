@@ -5,10 +5,13 @@
   let {
     currentTime = 0,
     duration = 0,
+    live = false,
     onseek,
   }: {
     currentTime?: number;
     duration?: number;
+    /** Live stream: no timeline, a LIVE mark instead of the length. */
+    live?: boolean;
     onseek: (seconds: number) => void;
   } = $props();
 
@@ -126,11 +129,31 @@
   </div>
   <div class="times rk-num">
     <span>{formatTime(shownTime)}</span>
-    <span>{formatTime(duration)}</span>
+    {#if live}
+      <span class="live-mark" title={t("ui.timeline.live")}><span class="live-dot" aria-hidden="true"></span>LIVE</span>
+    {:else}
+      <span>{formatTime(duration)}</span>
+    {/if}
   </div>
 </div>
 
 <style>
+  .live-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: var(--rk-danger, #e5484d);
+  }
+
+  .live-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
   .timeline {
     width: 100%;
     display: flex;

@@ -36,6 +36,12 @@ import {
   shuffleTailFromCurrent,
 } from "./smartShuffle";
 import { PlaybackGuards } from "./playbackGuards";
+import {
+  countsTowardStats,
+  isExternalTrack,
+  isLiveTrack,
+  libraryQueueForSync,
+} from "./externalItems";
 import { toasts } from "./toasts.svelte";
 import {
   getPlayCountsMap,
@@ -916,7 +922,7 @@ class PlayerController {
     if (state.duration && state.duration > 0) this.duration = state.duration;
     // Same half-listen rule as local playback.
     const track = this.current;
-    if (track && this.duration > 0) {
+    if (track && countsTowardStats(track) && this.duration > 0) {
       if (this.halfListenPath !== track.rel_path) this.resetHalfListen(track);
       if (this.halfListenCounted && this.currentTime < this.duration * 0.1) this.halfListenCounted = false;
       if (!this.halfListenCounted && this.currentTime >= this.duration * 0.5) {
@@ -1099,12 +1105,18 @@ class PlayerController {
 
   /** Queue + cursor as the hub stores it. */
   queueSnapshot(): QueueSnapshot {
-    const cur = this.current;
+    // Podcast episodes / live streams stay on this device: the hub copy of
+    // the queue lists library tracks only (see `libraryQueueForSync`).
+    const lib = libraryQueueForSync(this.queue, this.index);
+    const cur = lib.currentIsLibrary ? this.current : (lib.tracks[lib.index] ?? null);
     return {
-      relPaths: this.queue.map((t) => t.rel_path),
-      index: Math.max(0, this.index),
+      relPaths: lib.tracks.map((t) => t.rel_path),
+      index: lib.index,
       relPath: cur?.rel_path ?? null,
-      time: cur ? Math.max(0, Math.round((this.currentTime || 0) * 10) / 10) : 0,
+      time:
+        cur && lib.currentIsLibrary
+          ? Math.max(0, Math.round((this.currentTime || 0) * 10) / 10)
+          : 0,
       updatedAt: Math.max(this.queueUpdatedAt, this.lastPositionSaveAt) || Date.now(),
     };
   }
@@ -1898,6 +1910,7 @@ class PlayerController {
   }
 
   toggleExcludeTrack(track: Track) {
+    if (isExternalTrack(track)) return;
     if (track.album_id != null && this.excludedAlbumIds.has(track.album_id)) {
       return;
     }
@@ -1925,7 +1938,8 @@ class PlayerController {
   /** Legacy PlayerContext: increment at ≥50% duration; re-arm if seeked <10%. */
   private maybeCountHalfListen() {
     const track = this.current;
-    if (!track) return;
+    // Podcasts and live streams never count as plays (stats, achievements).
+    if (!track || !countsTowardStats(track)) return;
     const path = track.rel_path;
     if (this.halfListenPath !== path) {
       this.halfListenPath = path;
@@ -1950,6 +1964,7 @@ class PlayerController {
   }
 
   private bumpPlayCount(track: Track) {
+    if (!countsTowardStats(track)) return;
     // The cached map is shared and frozen: build the next one.
     const counts = { ...getPlayCountsMap(this.boundAccount) };
     const key = track.rel_path;
@@ -1962,6 +1977,8 @@ class PlayerController {
 
   /** Recent history on start (legacy pushRecent) — deferred so click stays snappy. */
   private pushRecentDeferred(track: Track) {
+    // The library history only: podcasts keep their own (podcast state).
+    if (!countsTowardStats(track)) return;
     const path = track.rel_path;
     window.setTimeout(() => {
       if (this.current?.rel_path !== path) return;
@@ -2517,6 +2534,8 @@ class PlayerController {
     // Seek lock (Plectr run): the timeline, media keys and shortcuts are
     // refused; code that owns the lock passes `{ force: true }`.
     if (!this.guards.allowSeek(opts)) return;
+    // A live stream has no timeline.
+    if (isLiveTrack(this.current)) return;
     const target = Math.max(0, seconds);
     this.currentTime = target;
     if (this.remote) {
@@ -2729,7 +2748,8 @@ class PlayerController {
     const nextIdx = this.resolveNextIndex();
     if (nextIdx == null || nextIdx === this.index) return;
     const nextTr = this.queue[nextIdx];
-    if (!nextTr) return;
+    // A live stream is never opened ahead of time (it would start streaming).
+    if (!nextTr || isLiveTrack(nextTr)) return;
     const out = this.activeAudio();
     const d = out.duration;
     if (!Number.isFinite(d) || d <= 0) return;
@@ -2856,9 +2876,18 @@ class PlayerController {
     if (outDone && wasPlaying) void this.next();
   }
 
+  /** Episodes and live streams start and end cleanly: no crossfade around them. */
+  private crossfadeAllowedAround(): boolean {
+    if (isExternalTrack(this.current)) return false;
+    const nextIdx = this.resolveNextIndex();
+    const next = nextIdx == null ? null : this.queue[nextIdx];
+    return !isExternalTrack(next);
+  }
+
   private maybeStartCrossfade() {
     const fade = this.effectiveCrossfadeSec;
     if (!fade || this.repeat === "one" || this.crossfadeBusy || this.guards.held) return;
+    if (!this.crossfadeAllowedAround()) return;
     if (this.crossfadeRefusedNow()) return;
     const out = this.activeAudio();
     const d = out.duration;
@@ -2871,6 +2900,7 @@ class PlayerController {
   private async startCrossfade() {
     const fade = this.effectiveCrossfadeSec;
     if (!fade || this.crossfadeBusy || this.repeat === "one" || this.guards.held) return;
+    if (!this.crossfadeAllowedAround()) return;
     const nextIdx = this.resolveNextIndex();
     if (nextIdx == null || nextIdx === this.index) return;
     const nextTr = this.queue[nextIdx];
@@ -3074,11 +3104,13 @@ class PlayerController {
 
     if (gen !== this.loadGen) return;
 
-    inEl.loop = this.repeat === "one" && !this.guards.held;
-    // Only rewind a deck that moved: a needless seek restarts the request.
-    if (inEl.currentTime !== 0) {
+    inEl.loop = this.repeat === "one" && !this.guards.held && !isLiveTrack(track);
+    // Resume point of an episode, else the top. Only seek a deck that is
+    // elsewhere: a needless seek restarts the request.
+    const startAt = this.takeStartAt(path);
+    if (inEl.currentTime !== startAt) {
       try {
-        inEl.currentTime = 0;
+        inEl.currentTime = startAt;
       } catch {
         /* ignore */
       }
@@ -3118,6 +3150,64 @@ class PlayerController {
     this.prefetchedRelPath = path;
     this.emit();
     this.emitProgress();
+  }
+
+  /** Where the next load of `relPath` starts (an episode's resume point). */
+  private startAtNext: { relPath: string; time: number } | null = null;
+
+  private takeStartAt(relPath: string): number {
+    const s = this.startAtNext;
+    this.startAtNext = null;
+    return s && s.relPath === relPath && s.time > 0 ? s.time : 0;
+  }
+
+  /**
+   * Play a podcast episode / live stream (an external item). It goes right
+   * after the current item and starts now, so the rest of the queue carries
+   * on after it; `queue: true` only adds it (after the manual "add to
+   * queue" items). `startAt` resumes an episode where it was left.
+   */
+  playExternal(track: Track, opts: { startAt?: number; queue?: boolean } = {}) {
+    if (!isExternalTrack(track)) return;
+    if (opts.queue) {
+      this.addToQueue(track);
+      return;
+    }
+    const startAt =
+      !isLiveTrack(track) && opts.startAt && opts.startAt > 0 ? opts.startAt : 0;
+    const existing = this.queue.findIndex((t) => t.rel_path === track.rel_path);
+    if (existing >= 0) {
+      if (existing === this.index && this.current) {
+        if (startAt > 0) this.seek(startAt, { force: true });
+        if (!this.playing) void this.toggle();
+        return;
+      }
+      this.startAtNext = startAt > 0 ? { relPath: track.rel_path, time: startAt } : null;
+      this.playQueueIndex(existing);
+      return;
+    }
+    this.startAtNext = startAt > 0 ? { relPath: track.rel_path, time: startAt } : null;
+    if (!this.queue.length || this.index < 0) {
+      this.playSequence([track], 0);
+      return;
+    }
+    this.cancelPendingLoad();
+    this.abortCrossfade();
+    const at = Math.min(this.index + 1, this.queue.length);
+    this.queue = [...this.queue.slice(0, at), track, ...this.queue.slice(at)];
+    const privAt = this.privateQueue.findIndex((t) => t.rel_path === this.current?.rel_path);
+    this.privateQueue =
+      privAt >= 0
+        ? [...this.privateQueue.slice(0, privAt + 1), track, ...this.privateQueue.slice(privAt + 1)]
+        : [...this.privateQueue, track];
+    this.queueDirty = true;
+    this.index = at;
+    void this.loadCurrent(true);
+  }
+
+  /** True while a live stream is the current item (no seek, no duration). */
+  get currentIsLive(): boolean {
+    return isLiveTrack(this.current);
   }
 
   private async onEnded() {
@@ -3163,13 +3253,15 @@ class PlayerController {
       clearMediaSessionPosition();
       return;
     }
+    const external = isExternalTrack(track);
     setMediaSessionMetadata({
       title: track.title,
       artist: track.artist_name,
-      album: track.album_name,
+      album: external ? (track.external?.sourceName ?? track.album_name) : track.album_name,
       albumId: track.album_id,
       hasCover: coverUrlFor(track) != null,
       coverVersion: track.cover_version ?? null,
+      artworkUrl: external ? coverUrlFor(track, 256) : null,
     });
     setMediaSessionPlaybackState(this.playing ? "playing" : "paused");
     this.syncMediaPosition(true);

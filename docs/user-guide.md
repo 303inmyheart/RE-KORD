@@ -17,6 +17,7 @@ English interface.
 - [Plectr](#plectr)
 - [Statistics](#statistics)
 - [Achievements](#achievements)
+- [Podcasts & news](#podcasts--news)
 - [Settings](#settings)
 - [Accounts and profiles](#accounts-and-profiles)
 - [Remote access](#remote-access)
@@ -338,6 +339,8 @@ Your hearted tracks, most played first, with **"Play favorites"**.
 ### Recent
 
 Your listening history, newest first, with **"Play recent"** and **"Clear history"**.
+Podcast episodes appear here only when [Podcasts & news](#podcasts--news) has **"Show in
+Recent"** on.
 
 ## Studio › Listen: lyrics, visualizers and the sleep timer
 
@@ -569,6 +572,56 @@ The badge board has 65 badges in families: plays, favorites, playlists, artists,
 distinct tracks, albums, shuffle exclusions, devotion to one artist or one track, library
 coverage, daily streaks and Plectr.
 
+## Podcasts & news
+
+An optional module, **off by default**: news bulletins, podcasts and live radio stations,
+played in the normal player. While it is off nothing of it exists in the app (no menu
+entry, no card) and the hub does no work for it.
+
+**Turning it on and adding sources** happens in the admin panel, section **"Podcasts &
+news"** (Default account on the hub computer, or remote administration on):
+
+1. **"Turn on Podcasts & news"**. Clients show it at their next refresh.
+2. Paste an address in **"Add a source"**, choose how many episodes to show (1–20,
+   default 3) and press **"Test"**: the panel says what it found and lists the latest
+   episodes. **"Add"** saves it. The name comes from the feed unless you type one.
+3. In **"Sources"** rename a source (empty name: back to the feed's title), change its
+   number of episodes, move it up or down, or remove it.
+
+What an address can be:
+
+| Address | Example | Shown as |
+|---|---|---|
+| A podcast's RSS / Atom feed | `https://feeds.npr.org/500005/podcast.xml` | latest episodes |
+| A web page that points to its feed, an Apple Podcasts page, a WordPress site | `https://podcasts.apple.com/…/id1200361736` | latest episodes |
+| A play.rtl.it programme archive | `https://play.rtl.it/archivio/1/podcast/info/giornale-orario/` | latest editions |
+| A page yt-dlp can read (YouTube channel or playlist, many broadcaster sites) | `https://www.youtube.com/@BBCNews/videos` | latest entries |
+| A live radio stream, or an `.m3u` / `.pls` playlist pointing to one | `https://somafm.com/groovesalad.pls` | a single **LIVE** item |
+
+HLS radio streams (`.m3u8`) are not supported: look for an MP3 or AAC address of the same
+station. An address on your local network is refused.
+
+**Listening.** With the module on, Home has a **"Podcasts & news"** card and the
+navigation a **"Podcasts & news"** section (on the phone under **"More"**). Each episode
+shows when it was published ("2 hours ago"), its length and how much is left. Tap it to
+play: it starts right after the current track, and the rest of your queue carries on
+after it. **"+"** adds it to the queue instead; **"✓"** marks it as listened (or not).
+A started episode resumes where you left it, and an episode heard to the end is marked
+listened, on every device of your account (the last 200 episodes are remembered).
+
+Live radio shows **LIVE** instead of a length and cannot be seeked. Episodes and radio
+never count as plays: they stay out of statistics, achievements, the library history,
+Smart Radio and Plectr, and crossfade is off around them. Favourites, exclusions and
+the album / artist links of the dock do not apply to them. Visualizers work as usual.
+
+**Refreshing.** The hub fetches a source only when someone opens the card or the
+section, and reuses what it fetched for 30 minutes (**"Cache lifetime"** in the admin
+panel). **"Refresh"** asks again now. Nothing is checked in the background.
+
+**In Recent.** The switch **"Show in Recent"** in the Podcasts & news section adds a
+"Podcasts and news you listened to" list to *Recent* for your account. It is off by
+default.
+
 ## Settings
 
 Settings has five tabs: **"Account"**, **"Interface"**, **"Library"**, **"Network"** and
@@ -719,6 +772,7 @@ panel"*). From another device the panel is read-only, unless remote administrati
 | **Backup** | **"Download backup"**, **"Restore from ZIP file…"**, and **"Restore from the previous version"** (import from a legacy `.kord` folder). |
 | **Accounts** | Create, rename, export and delete accounts. |
 | **Integrations** | YouTube cookies for yt-dlp and the Discogs token. |
+| **Podcasts & news** | Turn the optional module on or off, the cache lifetime, and the sources (add with a **"Test"** preview, rename, episodes per source, order, remove). See [Podcasts & news](#podcasts--news). |
 | **Network** | **"Local network access"** (addresses and QR codes), **"Access from outside"** (Cloudflare tunnel, public IP) and **"Machine operations"**. |
 
 **Updating the library safely.** "Update (changes only)" re-reads only what changed and

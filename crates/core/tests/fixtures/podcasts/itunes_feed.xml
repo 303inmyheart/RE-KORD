@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:media="http://search.yahoo.com/mrss/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title><![CDATA[Notizie & Approfondimenti]]></title>
+    <link>https://news.example/</link>
+    <atom:link href="https://news.example/feed.xml" rel="self" type="application/rss+xml"/>
+    <description>Il notiziario &#8211; ogni ora</description>
+    <itunes:image href="https://cdn.news.example/show-3000.png"/>
+    <image><url>https://cdn.news.example/show-small.jpg</url><title>ignored</title></image>
+    <item>
+      <title>Edizione delle 13</title>
+      <guid isPermaLink="false">ep-13</guid>
+      <pubDate>Wed, 07 Oct 2026 13:00:00 +0200</pubDate>
+      <enclosure url="https://cdn.news.example/ep13.mp3" length="3612345" type="audio/mpeg"/>
+      <itunes:duration>00:04:12</itunes:duration>
+      <content:encoded><![CDATA[<p>Text with <b>html</b> & stray ampersand</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Edizione delle 15 &amp; meteo</title>
+      <guid>https://news.example/ep-15</guid>
+      <pubDate>Wed, 07 Oct 2026 15:00:00 CEST</pubDate>
+      <enclosure url="/media/ep15.m4a?token=a&amp;b=2" length="0" type="audio/x-m4a"/>
+      <itunes:duration>312</itunes:duration>
+      <itunes:image href="https://cdn.news.example/ep15.jpg"/>
+    </item>
+    <item>
+      <title>Edizione delle 14</title>
+      <pubDate>Wed, 07 Oct 2026 12:00:00 GMT</pubDate>
+      <enclosure url="ep14.mp3" type="audio/mpeg"/>
+    </item>
+    <item>
+      <title>Video only, no audio type</title>
+      <guid>vid-1</guid>
+      <pubDate>Tue, 06 Oct 2026 10:00:00 GMT</pubDate>
+      <media:content url="https://cdn.news.example/v1.mp4" type="video/mp4" duration="61"/>
+      <media:content url="https://cdn.news.example/v1.jpg" medium="image"/>
+    </item>
+    <item>
+      <title>Blog post without enclosure</title>
+      <guid>post-1</guid>
+      <pubDate>Tue, 06 Oct 2026 09:00:00 GMT</pubDate>
+      <link>https://news.example/post-1</link>
+    </item>
+    <item>
+      <title>Edizione delle 13</title>
+      <guid isPermaLink="false">ep-13</guid>
+      <pubDate>Wed, 07 Oct 2026 11:00:00 GMT</pubDate>
+      <enclosure url="https://cdn.news.example/ep13-dup.mp3" type="audio/mpeg"/>
+    </item>
+  </channel>
+</rss>

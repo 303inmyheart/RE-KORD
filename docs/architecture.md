@@ -69,6 +69,7 @@ desktop app runs it on its own thread and runtime, so the window never waits for
 | Backup | `backup/` | Backup ZIP v3 export/restore, legacy v2 restore, one-time legacy import, legacy config import. |
 | Operations | `jobs.rs`, `diagnostics.rs`, `errors.rs`, `tools.rs` | Job registry, activity log, recent-errors buffer, discovery and update of external tools. |
 | Remote access | `remote_access.rs` | LAN URL detection and the Cloudflare quick tunnel. |
+| Podcasts (optional) | `podcasts/` | "Podcast e notizie": feed / page / play.rtl.it / yt-dlp / live-stream sources fetched on demand with a TTL, and a Range-capable audio proxy limited to configured episodes. Off by default. See [MODULES.md](MODULES.md). |
 
 ### Data on disk
 
@@ -81,6 +82,7 @@ desktop app runs it on its own thread and runtime, so the window never waits for
   accounts/<id>_info/          per-account user state, theme background
   thumbs/<size>/               cover thumbnails
   cache/transcode/             FLAC copies of WMA / AIFF / ALAC (LRU, 2 GiB)
+  cache/podcast-art/           podcast artwork thumbnails (optional module)
   tools/yt-dlp                 yt-dlp installed by "update yt-dlp"
   legacy-import.json           outcome of the one-time legacy import
 

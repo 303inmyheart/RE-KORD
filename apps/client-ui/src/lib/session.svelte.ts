@@ -24,6 +24,8 @@ import {
 } from "./api";
 import { getServerBaseUrl, setServerBaseUrl } from "./config";
 import { connectGate } from "./connect.svelte";
+import { hubModules } from "./hubModules.svelte";
+import { isExternalTrack } from "./externalItems";
 import { i18n, t } from "./i18n.svelte";
 import { player, type QueueSnapshot, type QueueSyncChange } from "./player";
 import { parseHubQueue } from "./queueSync";
@@ -73,7 +75,8 @@ export type ViewId =
   | "recent"
   | "statistics"
   | "achievements"
-  | "settings";
+  | "settings"
+  | "podcasts";
 export type LibraryLevel = "artists" | "artist" | "album" | "search";
 export type LibraryBrowse = "artists" | "genres" | "moods" | "nebula";
 /** Legacy `libOverviewSort`: artists / genres overview order. */
@@ -1169,7 +1172,7 @@ class ClientSession {
     try {
       if (!opts?.skipHealth) {
         try {
-          await api.health();
+          hubModules.apply(await api.health());
         } catch (e) {
           // A hub that answers, even with an error, is not "offline".
           if (isOfflineError(e) || !(e instanceof ApiError)) {
@@ -2106,6 +2109,8 @@ class ClientSession {
    * only this track goes back (other toggles made meanwhile stay).
    */
   async toggleFavorite(track: Track) {
+    // Podcast episodes / live streams are not library tracks.
+    if (isExternalTrack(track)) return;
     if (this.favoriteBusy.has(track.id)) return;
     const wasFavorite = this.favoriteIds.has(track.id);
     this.favoriteBusy.add(track.id);
@@ -2149,7 +2154,7 @@ class ClientSession {
 
   toggleExcludeCurrent() {
     const track = this.current;
-    if (!track) return;
+    if (!track || isExternalTrack(track)) return;
     player.toggleExcludeTrack(track);
   }
 
@@ -2465,7 +2470,7 @@ class ClientSession {
 
   async radioFromCurrent() {
     const cur = this.current;
-    if (!cur) return;
+    if (!cur || isExternalTrack(cur)) return;
     const library = await this.ensureCatalogTracks();
     player.playRadioFromCurrent(library, true);
   }

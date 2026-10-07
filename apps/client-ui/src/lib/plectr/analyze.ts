@@ -4,6 +4,7 @@
  * fallback) → cache. In-flight requests are shared; prefetch is best effort.
  */
 import { mediaUrl } from "../config";
+import { isExternalPath } from "../externalItems";
 import { analyzeLibraryBuffer } from "./audioAnalysis";
 import { chartCacheKey } from "./cacheKey";
 import {
@@ -175,6 +176,8 @@ const analyzeInFlight = new Map<string, Promise<ChartSet>>();
 /** Warms the cache (e.g. next track in the queue). */
 export function prefetchRhythmChart(track: AnalyzableTrack): void {
   const relPath = track.rel_path;
+  // Podcasts / live streams are not library tracks: never analysed.
+  if (isExternalPath(relPath)) return;
   if (peekCachedChart(relPath) || prefetchInFlight.has(relPath) || analyzeInFlight.has(relPath)) {
     return;
   }
@@ -195,6 +198,7 @@ export async function analyzeLibraryTrack(
   signal?: AbortSignal,
 ): Promise<ChartSet> {
   const relPath = track.rel_path;
+  if (isExternalPath(relPath)) throw new Error("not a library track");
   const key = chartCacheKey(relPath);
   const cached = getCachedChart(key);
   if (cached) {

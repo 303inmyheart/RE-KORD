@@ -29,6 +29,10 @@
   import { describeError, toasts } from "../lib/toasts.svelte";
   import { albumHasAlbumMeta, trackHasFileMeta, trackYear } from "../lib/trackMoods";
   import { loadUserPrefs } from "../lib/userPrefs";
+  import { hubModules } from "../lib/hubModules.svelte";
+
+  /** Optional module card: its code is fetched only when the hub has it on. */
+  const loadPodcastsCard = () => import("../components/podcasts/DashboardPodcastsCard.svelte");
 
   /** Catalog / album index load failure (the cards below need them). */
   let loadError = $state<string | null>(null);
@@ -188,6 +192,14 @@
   }
 </script>
 
+{#snippet podcastsCard()}
+  {#if hubModules.podcasts}
+    {#await loadPodcastsCard() then mod}
+      <mod.default />
+    {/await}
+  {/if}
+{/snippet}
+
 <div class="view-page dashboard-page">
   <HeroCard title={t("page.dashboard.title")} eyebrow="RE-KORD">
     <Button class="dashboard-hero-listen-btn" disabled={emptyLibrary && !session.current} onclick={heroListen}>
@@ -254,10 +266,12 @@
         {/snippet}
       </EmptyState>
     </Panel>
+    {@render podcastsCard()}
   {:else}
     <div class="dashboard-page__main">
       <DashboardRadioCard {loading} />
       <DashboardMixCard {loading} />
+      {@render podcastsCard()}
       <DashboardNebulaCard tracks={session.catalogTracks} />
 
       <Panel class="session-card dashboard-session-card dashboard-page__full dashboard-page__tile">

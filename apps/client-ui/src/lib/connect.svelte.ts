@@ -7,6 +7,7 @@
  * the person installing it knows.
  */
 
+import { hubModules } from "./hubModules.svelte";
 import { getSelectedAccountId, type Account, type AccountsResponse } from "./account";
 import { getServerBaseUrl, setServerBaseUrl } from "./config";
 import { i18n } from "./i18n.svelte";
@@ -101,6 +102,7 @@ export async function probeHub(
   // The version notice is decided right here: a client that is too old must
   // know before getting in, not ten screens later.
   compat.apply(info);
+  hubModules.apply(info);
 
   let accounts: { status: number; body: unknown };
   try {

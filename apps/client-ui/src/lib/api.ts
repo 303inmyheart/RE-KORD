@@ -14,6 +14,7 @@ import {
   type RequestOptions,
 } from "./api/http";
 import { apiUrl } from "./config";
+import { externalArtPath, isExternalPath, type ExternalMeta } from "./externalItems";
 import { customThemeBgImageUrl } from "./customThemeBgUrl";
 import { t } from "./i18n.svelte";
 
@@ -84,7 +85,7 @@ export function noteAlbumCovers(albums: readonly Pick<Album, "id" | "has_cover" 
 
 /** Anything that may have a cover: a track, an album or an artist. */
 export type CoverEntity =
-  | Pick<Track, "album_id" | "rel_path" | "has_cover" | "cover_version" | "album_has_cover">
+  | Pick<Track, "album_id" | "rel_path" | "has_cover" | "cover_version" | "album_has_cover" | "external">
   | Pick<Album, "id" | "folder_key" | "has_cover" | "cover_version">
   | Pick<Artist, "id" | "has_cover" | "album_count">;
 
@@ -101,6 +102,11 @@ export function coverUrlFor(
 ): string | null {
   if (!entity) return null;
   if ("rel_path" in entity) {
+    if (isExternalPath(entity.rel_path)) {
+      // Podcast episode / live stream: the hub's artwork thumbnail, if any.
+      const art = externalArtPath(entity as { rel_path: string; external?: ExternalMeta });
+      return art ? apiUrl(art) : null;
+    }
     const albumId = entity.album_id;
     if (albumId == null) return null;
     const known = albumCoverInfo.get(albumId);
@@ -151,6 +157,8 @@ export type Track = {
   /** A person edited these values: fetches / imports do not replace them. */
   user_edited?: boolean;
   curated_fields?: string[] | null;
+  /** Podcast episode / live stream played through the hub (see `externalItems`). */
+  external?: ExternalMeta;
 };
 
 /** Discogs extras from `discogs_extra_json` / sidecar (camelCase, legacy parity). */

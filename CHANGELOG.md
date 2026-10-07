@@ -3,6 +3,28 @@
 All notable changes to RE-KORD. Versions follow [semantic versioning](https://semver.org);
 one version number covers the hub, the clients and the packages.
 
+## Unreleased
+
+### New
+
+- **Podcast e notizie** (optional module, off by default): news bulletins, podcasts and
+  live radio in the normal player. Sources are set in the admin panel (*Podcasts &
+  news*) with a **Test** preview: RSS / Atom feeds, pages that point to a feed (Apple
+  Podcasts, WordPress, Spreaker), play.rtl.it programme archives such as RTL 102.5's
+  *Giornale Orario*, pages yt-dlp can read, and MP3 / AAC streams (also from `.m3u` /
+  `.pls`). HLS streams are not supported.
+- Home card and a *Podcasts & news* section with the latest episodes per source
+  (relative date, length, time left), resume where you stopped, "listened" marks synced
+  per account (last 200 episodes), and an opt-in to show podcast listens in *Recent*.
+- Episodes and radio play through a hub proxy (Range and seeking, visualizers keep
+  working) restricted to the configured episodes, with the SSRF guard on every redirect.
+  They never count as plays (statistics, achievements, history, Plectr), crossfade is off
+  around them, live streams show **LIVE** and cannot be seeked.
+- Lightweight by design: fetched only when a card or the section opens, cached (30 min by
+  default, conditional requests), never polled; with the module off the hub does nothing
+  and clients load none of its code.
+- Database schema v6 (`podcast_sources`).
+
 ## 5.0.0 — RE-KORD 5
 
 RE-KORD 5 is a ground-up rewrite. The legacy React / Node / Electron / Capacitor app is

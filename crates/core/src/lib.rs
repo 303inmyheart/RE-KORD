@@ -18,6 +18,7 @@ pub mod modules;
 pub mod origin;
 pub mod path_util;
 pub mod perm;
+pub mod podcasts;
 pub mod remote_access;
 pub mod scan;
 pub mod selection;
@@ -236,7 +237,8 @@ pub fn build_router(state: AppState, ui: UiDirs) -> Router {
         .merge(user_state::routes())
         .merge(diagnostics::routes())
         .merge(jobs::routes())
-        .merge(remote_access::routes());
+        .merge(remote_access::routes())
+        .merge(podcasts::api::routes());
 
     if let Some(dir) = ui.admin.filter(|d| d.is_dir()) {
         info!(path = %dir.display(), "serving admin panel at /admin");

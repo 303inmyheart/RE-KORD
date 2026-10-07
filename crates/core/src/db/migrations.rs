@@ -26,10 +26,11 @@ const MIGRATIONS: &[(i64, &str, Step)] = &[
         v4_display_model,
     ),
     (5, "recount mp3 durations", v5_recount_mp3_durations),
+    (6, "podcast sources", v6_podcast_sources),
 ];
 
 /// Schema version this build writes.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 pub fn user_version(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
@@ -550,6 +551,35 @@ fn v5_recount_mp3_durations(tx: &Transaction<'_>) -> Result<()> {
           frame BLOB NOT NULL
         );
         UPDATE files SET mtime = -1 WHERE lower(rel_path) LIKE '%.mp3';
+        "#,
+    )?;
+    Ok(())
+}
+
+/// Optional "Podcast e notizie" module: the sources configured in the admin
+/// panel and, per source, the metadata of its latest episodes (never audio).
+/// Empty and untouched while the module is off.
+fn v6_podcast_sources(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS podcast_sources (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          url TEXT NOT NULL,
+          name TEXT NOT NULL DEFAULT '',
+          name_custom INTEGER NOT NULL DEFAULT 0,
+          kind TEXT NOT NULL,
+          feed_url TEXT,
+          episode_count INTEGER NOT NULL DEFAULT 3,
+          position INTEGER NOT NULL DEFAULT 0,
+          artwork_url TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          fetched_at INTEGER,
+          etag TEXT,
+          last_modified TEXT,
+          last_error TEXT,
+          error_at INTEGER,
+          episodes_json TEXT NOT NULL DEFAULT '[]'
+        );
         "#,
     )?;
     Ok(())

@@ -23,6 +23,8 @@ pub struct AppState {
     pub watcher: crate::watcher::SharedWatcher,
     /// Background job registry (scan, thumbnails, restore, legacy sync).
     pub jobs: crate::jobs::SharedJobs,
+    /// Podcasts module runtime (idle unless a client asks for a source).
+    pub podcasts: Arc<crate::podcasts::Runtime>,
     /// Scan counters used to coalesce "rescan, the library changed" requests.
     scan_generations: Arc<ScanGenerations>,
 }
@@ -57,6 +59,7 @@ impl AppState {
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             watcher: Arc::new(crate::watcher::WatcherRuntime::new()),
             jobs: Arc::new(crate::jobs::JobRegistry::new()),
+            podcasts: Arc::new(crate::podcasts::Runtime::new()),
             scan_generations: Arc::new(ScanGenerations::default()),
         })
     }

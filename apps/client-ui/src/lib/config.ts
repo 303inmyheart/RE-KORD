@@ -1,3 +1,5 @@
+import { externalMediaPath, isExternalPath } from "./externalItems";
+
 const STORAGE_KEY = "rekord.serverBaseUrl";
 
 /**
@@ -87,6 +89,12 @@ export function directMediaUrl(relPath: string): string {
 
 /** What the player should load: the file, or a lossless FLAC copy the hub converts once and serves with Range (seekable). */
 export function mediaUrl(relPath: string): string {
+  if (isExternalPath(relPath)) {
+    // Podcast episode / live stream: through the hub proxy (same origin as
+    // /media, so Web Audio visualizers hear it).
+    const path = externalMediaPath(relPath);
+    return path ? apiUrl(path) : "";
+  }
   if (transcodeRelPaths.has(relPath) || engineCannotPlay(relPath)) {
     return apiUrl(`/api/v1/transcode/${encodeRelPath(relPath)}?format=flac`);
   }
@@ -98,6 +106,7 @@ export function mediaUrl(relPath: string): string {
  * Returns false when it already was (then the failure is real).
  */
 export function markNeedsTranscode(relPath: string): boolean {
+  if (isExternalPath(relPath)) return false;
   if (transcodeRelPaths.has(relPath) || engineCannotPlay(relPath)) return false;
   transcodeRelPaths.add(relPath);
   return true;

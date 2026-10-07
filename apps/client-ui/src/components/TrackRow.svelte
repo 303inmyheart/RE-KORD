@@ -17,6 +17,7 @@
 <script lang="ts">
   import { CoverArt, type SelectOption } from "@rekord/ui";
   import { coverUrlFor, type Track } from "../lib/api";
+  import { isExternalTrack, isLiveTrack } from "../lib/externalItems";
   import { floating } from "../lib/floatingPopover";
   import { formatTime, player } from "../lib/player";
   import { t, tp } from "../lib/i18n.svelte";
@@ -110,6 +111,9 @@
   const albumLocked = $derived(albumLockedProp ?? trackRowStats.albumLocked(track));
   const plays = $derived(playsProp ?? trackRowStats.plays(track));
   const moods = $derived(moodsProp ?? trackRowStats.moods(track));
+  /** Podcast episode / live stream: no library actions (favourite, playlist, edit, exclude). */
+  const external = $derived(isExternalTrack(track));
+  const live = $derived(isLiveTrack(track));
   /** Active row: EQ in static pose (never animated in rows: WebKitGTK cost). */
   const showStudio = $derived(active);
   const trackLyricsKind = $derived(lyricsKind(track.lyrics));
@@ -266,14 +270,22 @@
     <span class="track-row__title-row">
       <span class="track-row__title">{track.title}</span>
       <span class="track-row__stats">
-        <span class="track-row__duration">{formatTime(track.duration_ms / 1000)}</span>
-        <span
-          class="track-row__plays"
-          title={tp("ui.trackRow.plays", plays)}
-          aria-label={tp("ui.trackRow.plays", plays)}
-        >({plays})</span>
-        <MetaBadgeCluster {missingMeta} {moods} variant="inline" />
-        <TrackLyricsIcon kind={trackLyricsKind} class="track-row__lyrics-inline--stats" />
+        {#if external}
+          {#if live}
+            <span class="track-row__duration">LIVE</span>
+          {:else if track.duration_ms > 0}
+            <span class="track-row__duration">{formatTime(track.duration_ms / 1000)}</span>
+          {/if}
+        {:else}
+          <span class="track-row__duration">{formatTime(track.duration_ms / 1000)}</span>
+          <span
+            class="track-row__plays"
+            title={tp("ui.trackRow.plays", plays)}
+            aria-label={tp("ui.trackRow.plays", plays)}
+          >({plays})</span>
+          <MetaBadgeCluster {missingMeta} {moods} variant="inline" />
+          <TrackLyricsIcon kind={trackLyricsKind} class="track-row__lyrics-inline--stats" />
+        {/if}
       </span>
     </span>
     <span class="track-row__meta">
@@ -313,6 +325,7 @@
         {/if}
       {/if}
 
+      {#if !external}
       <button
         type="button"
         class="track-row__ic track-row__ic--fav"
@@ -327,7 +340,7 @@
         </span>
       </button>
 
-      {#if showPlaylistAction}
+      {#if showPlaylistAction && !external}
         <div class="track-row__playlist-anchor" bind:this={playlistAnchorEl}>
           <button
             type="button"
@@ -388,8 +401,9 @@
           <UiIcon name="edit" />
         </span>
       </button>
+      {/if}
 
-      {#if ontoggleExclude}
+      {#if ontoggleExclude && !external}
         <button
           type="button"
           class="track-row__ic track-row__ic--exclude"
@@ -451,6 +465,7 @@
             role="menu"
             use:floating={{ anchor: overflowEl, placement: "bottom-end" }}
           >
+            {#if !external}
             <li role="presentation">
               <button
                 type="button"
@@ -467,6 +482,7 @@
                 <span class="track-row__overflow-item-label">{t("player.favorite")}</span>
               </button>
             </li>
+            {/if}
             {#if showQueueActions}
               <li role="presentation">
                 <button
@@ -486,7 +502,7 @@
                 </button>
               </li>
             {/if}
-            {#if showPlaylistAction}
+            {#if showPlaylistAction && !external}
               <li role="presentation">
                 <button
                   type="button"
@@ -506,6 +522,7 @@
                 </button>
               </li>
             {/if}
+            {#if !external}
             <li role="presentation">
               <button
                 type="button"
@@ -520,7 +537,8 @@
                 <span class="track-row__overflow-item-label">{t("trackRow.overflowEdit")}</span>
               </button>
             </li>
-            {#if ontoggleExclude}
+            {/if}
+            {#if ontoggleExclude && !external}
               <li role="presentation">
                 <button
                   type="button"
@@ -562,7 +580,7 @@
             {/if}
           </ul>
         {/if}
-        {#if playlistOpen && showPlaylistAction}
+        {#if playlistOpen && showPlaylistAction && !external}
           <div
             class="track-row__playlist-popover rk-scroll"
             role="dialog"

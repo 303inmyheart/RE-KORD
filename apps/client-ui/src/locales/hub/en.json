@@ -46,5 +46,10 @@
   "hub.kind.account": "Account",
   "hub.kind.download": "Download",
   "hub.kind.settings": "Settings",
-  "hub.kind.restore": "Restore"
+  "hub.kind.restore": "Restore",
+  "hub.kind.podcasts": "Podcasts",
+  "hub.activity.podcasts.enabled": "Podcasts & news module turned on",
+  "hub.activity.podcasts.disabled": "Podcasts & news module turned off",
+  "hub.activity.podcasts.sourceAdded": "Podcast source added: {{name}}",
+  "hub.activity.podcasts.sourceRemoved": "Podcast source removed: {{name}}"
 }

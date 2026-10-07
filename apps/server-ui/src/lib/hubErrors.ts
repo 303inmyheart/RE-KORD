@@ -7,6 +7,31 @@
 
 export type HubErrorKey = { key: string; vars?: Record<string, string | number> };
 
+/** Hub codes of the podcasts module the panel explains in its own words. */
+export const PODCAST_CODES: ReadonlySet<string> = new Set([
+  "podcasts_disabled",
+  "podcast_invalid_url",
+  "url_not_allowed",
+  "podcast_fetch_timeout",
+  "podcast_fetch_failed",
+  "podcast_http_error",
+  "podcast_too_large",
+  "podcast_parse_failed",
+  "podcast_unsupported_url",
+  "podcast_hls_unsupported",
+  "podcast_no_episodes",
+  "podcast_source_not_found",
+  "podcast_episode_not_found",
+  "podcast_resolve_failed",
+  "podcast_proxy_busy",
+  "podcast_limit_reached",
+  "invalid_episode_count",
+  "ytdlp_disabled",
+  "ytdlp_not_found",
+  "ytdlp_timeout",
+  "ytdlp_failed",
+]);
+
 /** Statuses a reverse proxy (Vite dev, Cloudflare) answers for a hub that is down. */
 export function isGatewayStatus(status: number): boolean {
   return status === 500 || status === 502 || status === 503 || status === 504;
@@ -28,6 +53,9 @@ export function hubErrorKey(
   hasBody: boolean,
 ): HubErrorKey | null {
   const text = (code ?? "").toLowerCase();
+
+  // Podcasts module codes (and the yt-dlp / SSRF ones its URLs can hit).
+  if (code && PODCAST_CODES.has(code)) return { key: `errors.code.${code}` };
 
   if (status === 403) {
     if (text.includes("default")) return { key: "errors.forbiddenDefault" };

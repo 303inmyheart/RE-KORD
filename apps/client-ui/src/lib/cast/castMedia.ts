@@ -6,6 +6,7 @@
 
 import type { Track } from "../api";
 import type { CastMediaMetadata } from "./types";
+import { externalArtPath, externalMediaPath, isExternalPath } from "../externalItems";
 
 /** Extensions served by /media with the MIME type a Cast receiver expects. */
 export const CAST_MIME_BY_EXT: Record<string, string> = {
@@ -104,6 +105,10 @@ export function castStreamUrl(relPath: string, baseOrigin: string, opts: CastStr
   transcoded: boolean;
 } {
   const base = baseOrigin.replace(/\/+$/, "");
+  if (isExternalPath(relPath)) {
+    // Podcast episode / live stream: the receiver fetches the hub proxy too.
+    return { url: `${base}${externalMediaPath(relPath) ?? ""}`, contentType: "audio/mpeg", transcoded: false };
+  }
   const enc = encodeRelPath(relPath);
   if (opts.transcodeAvailable && needsCastTranscode(relPath)) {
     const format = opts.format ?? "mp3";
@@ -122,6 +127,15 @@ export function castCoverUrl(albumId: number | null | undefined, baseOrigin: str
 }
 
 export function castMetadataForTrack(track: Track, baseOrigin: string): CastMediaMetadata {
+  if (isExternalPath(track.rel_path)) {
+    const art = externalArtPath(track);
+    return {
+      title: track.title,
+      artist: track.artist_name,
+      album: track.external?.sourceName ?? track.album_name,
+      coverUrl: art ? `${baseOrigin.replace(/\/+$/, "")}${art}` : null,
+    };
+  }
   return {
     title: track.title,
     artist: track.artist_name,

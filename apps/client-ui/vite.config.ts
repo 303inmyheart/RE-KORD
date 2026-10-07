@@ -20,6 +20,9 @@ function hubProxy(target: string): ProxyOptions {
   };
 }
 
+/** Sources of optional modules, whose chunks are never precached. */
+const OPTIONAL_MODULE_RE = /[\\/](podcasts)[\\/]|PodcastsView\.svelte|podcastModel\.ts/;
+
 /** Above this size a file does not go into the service worker's initial cache. */
 const SW_PRECACHE_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -34,8 +37,23 @@ function rekordServiceWorker(): Plugin {
     name: "rekord-service-worker",
     apply: "build",
     generateBundle(_options, bundle) {
+      // Optional modules (Podcast e notizie) stay out of the install-time
+      // cache: a hub with the module off never downloads its code.
+      const moduleChunkNames = new Set(
+        Object.values(bundle)
+          .filter(
+            (item) =>
+              item.type === "chunk" &&
+              Object.keys(item.modules).length > 0 &&
+              Object.keys(item.modules).every((id) => OPTIONAL_MODULE_RE.test(id)),
+          )
+          .map((item) => item.fileName.replace(/-[\w-]+\.js$/, "")),
+      );
+      const isModuleFile = (fileName: string) =>
+        [...moduleChunkNames].some((base) => fileName.startsWith(`${base}-`));
       const files = Object.values(bundle)
         .filter((item) => !item.fileName.endsWith(".map"))
+        .filter((item) => !isModuleFile(item.fileName))
         .filter((item) => {
           const size =
             item.type === "chunk"

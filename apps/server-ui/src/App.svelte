@@ -12,6 +12,7 @@
   import JobsPanel from "./views/JobsPanel.svelte";
   import LibraryPanel from "./views/LibraryPanel.svelte";
   import NetworkPanel from "./views/NetworkPanel.svelte";
+  import PodcastsPanel from "./views/PodcastsPanel.svelte";
   import StatusPanel from "./views/StatusPanel.svelte";
 
   // The logo is a few KB now: cheap enough for the rail (served under /admin/).
@@ -105,6 +106,8 @@
       <AccountsPanel />
     {:else if admin.section === "integrations"}
       <IntegrationsPanel />
+    {:else if admin.section === "podcasts"}
+      <PodcastsPanel />
     {:else if admin.section === "network"}
       <NetworkPanel />
     {/if}

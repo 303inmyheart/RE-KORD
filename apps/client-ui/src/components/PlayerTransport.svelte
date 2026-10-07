@@ -11,6 +11,8 @@
     favorited = false,
     excluded = false,
     excludeLocked = false,
+    /** False for podcast episodes / live streams: favourite and exclude stay off. */
+    libraryActions = true,
     ontoggle,
     onprev,
     onnext,
@@ -25,6 +27,7 @@
     favorited?: boolean;
     excluded?: boolean;
     excludeLocked?: boolean;
+    libraryActions?: boolean;
     ontoggle: () => void;
     onprev: () => void;
     onnext: () => void;
@@ -40,7 +43,8 @@
     bare
     tone="danger"
     label={t("player.favorite")}
-    active={favorited}
+    active={favorited && libraryActions}
+    disabled={!libraryActions}
     onclick={ontoggleFavorite}
   >
     <UiIcon name="favorite" />
@@ -75,8 +79,8 @@
         : excluded
           ? t("player.excludeOn")
           : t("player.excludeOff")}
-      active={excluded || excludeLocked}
-      disabled={excludeLocked}
+      active={(excluded || excludeLocked) && libraryActions}
+      disabled={excludeLocked || !libraryActions}
       onclick={ontoggleExclude}
     >
       <UiIcon name="exclude" />

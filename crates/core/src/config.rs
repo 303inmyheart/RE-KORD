@@ -19,6 +19,39 @@ pub struct PersistedSettings {
     /// Allow host-level operations (library path, scan, credentials, tunnel) from
     /// non-loopback clients. Off by default: LAN/tunnel clients stay read-only there.
     pub allow_remote_admin: Option<bool>,
+    /// Optional "Podcast e notizie" module (off unless enabled in the admin panel).
+    pub podcasts: Option<PodcastSettings>,
+}
+
+/// Hub settings of the podcasts module (`settings.json` → `podcasts`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PodcastSettings {
+    pub enabled: bool,
+    /// How long a fetched source stays fresh before the next on-demand fetch.
+    pub cache_ttl_minutes: u32,
+}
+
+impl Default for PodcastSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cache_ttl_minutes: PodcastSettings::DEFAULT_TTL_MINUTES,
+        }
+    }
+}
+
+impl PodcastSettings {
+    pub const DEFAULT_TTL_MINUTES: u32 = 30;
+    pub const MIN_TTL_MINUTES: u32 = 5;
+    pub const MAX_TTL_MINUTES: u32 = 24 * 60;
+
+    pub fn clamped(mut self) -> Self {
+        self.cache_ttl_minutes = self
+            .cache_ttl_minutes
+            .clamp(Self::MIN_TTL_MINUTES, Self::MAX_TTL_MINUTES);
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +76,9 @@ pub struct AppConfig {
     /// Host-level operations allowed from remote clients (persisted).
     #[serde(default)]
     pub allow_remote_admin: bool,
+    /// Podcasts module settings (persisted).
+    #[serde(default)]
+    pub podcasts: PodcastSettings,
 }
 
 fn default_watch_library() -> bool {
@@ -71,6 +107,7 @@ impl AppConfig {
             ytdlp_path: None,
             watch_library: true,
             allow_remote_admin: false,
+            podcasts: PodcastSettings::default(),
         }
     }
 
@@ -207,6 +244,7 @@ impl AppConfig {
             Some(v) => matches!(v.as_str(), "1" | "true" | "on"),
             None => file.allow_remote_admin.unwrap_or(false),
         };
+        self.podcasts = file.podcasts.unwrap_or_default().clamped();
 
         Ok(())
     }
@@ -222,6 +260,14 @@ impl AppConfig {
         self.allow_remote_admin = enabled;
         let mut s = self.read_persisted();
         s.allow_remote_admin = Some(enabled);
+        self.write_persisted(&s)
+    }
+
+    pub fn save_podcast_settings(&mut self, settings: PodcastSettings) -> Result<()> {
+        let settings = settings.clamped();
+        self.podcasts = settings;
+        let mut s = self.read_persisted();
+        s.podcasts = Some(settings);
         self.write_persisted(&s)
     }
 

@@ -1,0 +1,110 @@
+{
+ "success": true,
+ "data": [
+  {
+   "items": [
+    {
+     "id": 174102,
+     "title": "Edizione delle 15",
+     "subTitle": "07/10 - Giornale Orario di RTL 102.5",
+     "abstract": "",
+     "date": "2026-10-07T13:03:58.573",
+     "backgroundColor": "#000000",
+     "showBottomLabelBox": true,
+     "template": 0,
+     "showPlayIcon": false,
+     "@type": "SectionItem",
+     "detailUri": "https://cloud.rtl.it/api-play.rtl.it/web-app/1.0/podcast/1/giornale-orario/edizione-delle-15/174102/",
+     "order": 0,
+     "thumbFormat": 10,
+     "thumbs": {
+      "300": "https://webtools-dd782ed59e2a4e86aabf6fc508674b59.msvdn.net/image/tSgn1XgXkaYG/2?pictureprofile=300&compression=85&format=JPEG",
+      "600": "https://webtools-dd782ed59e2a4e86aabf6fc508674b59.msvdn.net/image/tSgn1XgXkaYG/2?pictureprofile=600&compression=85&format=JPEG"
+     },
+     "isPremium": false,
+     "broadcasterLogo": {
+      "300": "https://cloud.rtl.it/channel/300x300/rtl-1025-jjffs.png"
+     },
+     "broadcasterLogoSVG": "https://cloud.rtl.it/assets/play.rtl.it/2.1.6/img/broadcaster/1.svg",
+     "gaTrackingInfos": [
+      {
+       "hitType": "pageview",
+       "title": "Giornale Orario di RTL 102.5 - Edizione delle 15",
+       "page": "https://cloud.rtl.it/api-play.rtl.it/web-app/1.0/podcast/1/giornale-orario/edizione-delle-15/174102/"
+      }
+     ]
+    },
+    {
+     "id": 174100,
+     "title": "Edizione delle 14",
+     "subTitle": "07/10 - Giornale Orario di RTL 102.5",
+     "abstract": "",
+     "date": "2026-10-07T12:04:43.353",
+     "backgroundColor": "#000000",
+     "showBottomLabelBox": true,
+     "template": 0,
+     "showPlayIcon": false,
+     "@type": "SectionItem",
+     "detailUri": "https://cloud.rtl.it/api-play.rtl.it/web-app/1.0/podcast/1/giornale-orario/edizione-delle-14/174100/",
+     "order": 1,
+     "thumbFormat": 10,
+     "thumbs": {
+      "300": "https://webtools-dd782ed59e2a4e86aabf6fc508674b59.msvdn.net/image/nYhx4EnbBDHY/2?pictureprofile=300&compression=85&format=JPEG",
+      "600": "https://webtools-dd782ed59e2a4e86aabf6fc508674b59.msvdn.net/image/nYhx4EnbBDHY/2?pictureprofile=600&compression=85&format=JPEG"
+     },
+     "isPremium": false,
+     "broadcasterLogo": {
+      "300": "https://cloud.rtl.it/channel/300x300/rtl-1025-jjffs.png"
+     },
+     "broadcasterLogoSVG": "https://cloud.rtl.it/assets/play.rtl.it/2.1.6/img/broadcaster/1.svg",
+     "gaTrackingInfos": [
+      {
+       "hitType": "pageview",
+       "title": "Giornale Orario di RTL 102.5 - Edizione delle 14",
+       "page": "https://cloud.rtl.it/api-play.rtl.it/web-app/1.0/podcast/1/giornale-orario/edizione-delle-14/174100/"
+      }
+     ]
+    },
+    {
+     "id": 174096,
+     "title": "Edizione delle 13",
+     "subTitle": "07/10 - Giornale Orario di RTL 102.5",
+     "abstract": "",
+     "date": "2026-10-07T11:06:46.963",
+     "backgroundColor": "#000000",
+     "showBottomLabelBox": true,
+     "template": 0,
+     "showPlayIcon": false,
+     "@type": "SectionItem",
+     "detailUri": "https://cloud.rtl.it/api-play.rtl.it/web-app/1.0/podcast/1/giornale-orario/edizione-delle-13/174096/",
+     "order": 2,
+     "thumbFormat": 10,
+     "thumbs": {
+      "300": "https://webtools-dd782ed59e2a4e86aabf6fc508674b59.msvdn.net/image/4hHY01YRWgFB/2?pictureprofile=300&compression=85&format=JPEG",
+      "600": "https://webtools-dd782ed59e2a4e86aabf6fc508674b59.msvdn.net/image/4hHY01YRWgFB/2?pictureprofile=600&compression=85&format=JPEG"
+     },
+     "isPremium": false,
+     "broadcasterLogo": {
+      "300": "https://cloud.rtl.it/channel/300x300/rtl-1025-jjffs.png"
+     },
+     "broadcasterLogoSVG": "https://cloud.rtl.it/assets/play.rtl.it/2.1.6/img/broadcaster/1.svg",
+     "gaTrackingInfos": [
+      {
+       "hitType": "pageview",
+       "title": "Giornale Orario di RTL 102.5 - Edizione delle 13",
+       "page": "https://cloud.rtl.it/api-play.rtl.it/web-app/1.0/podcast/1/giornale-orario/edizione-delle-13/174096/"
+      }
+     ]
+    }
+   ],
+   "thumbFormat": 10,
+   "hasMoreResults": true,
+   "id": 27,
+   "title": "Giornale Orario di RTL 102.5",
+   "abstract": "Il giornale orario di RTL 102.5 a cura della redazione giornalistica",
+   "@type": "SectionItemWall",
+   "detailUri": "https://cloud.rtl.it/api-play.rtl.it/web-app/1.0/archivio/1/podcast/info/giornale-orario/3/3/",
+   "isPremium": false
+  }
+ ]
+}
