@@ -12,10 +12,8 @@ struct TempLibrary {
 
 impl TempLibrary {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "rekord-album-grouping-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("rekord-album-grouping-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         Self { root }
     }
