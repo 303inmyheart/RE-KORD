@@ -256,3 +256,46 @@ export function episodesFor(source: PodcastSource, limit?: number): PodcastEpiso
   const n = limit ?? source.episodeCount;
   return source.episodes.slice(0, Math.max(1, n));
 }
+
+/** Episodes published less than this long ago get the "Nuovo" badge. */
+export const NEW_EPISODE_MS = 2 * 3600 * 1000;
+
+export function isNewEpisode(ep: Pick<PodcastEpisode, "publishedAt" | "live">, now = Date.now()): boolean {
+  if (ep.live || !ep.publishedAt) return false;
+  const t = Date.parse(ep.publishedAt);
+  return Number.isFinite(t) && now - t >= -5 * 60_000 && now - t < NEW_EPISODE_MS;
+}
+
+export type SourceEpisode = { source: PodcastSource; ep: PodcastEpisode };
+
+/**
+ * "Ultimi": the newest episodes across sources, newest first, at most
+ * `perSource` from one source (a busy hourly bulletin must not fill the list).
+ * Live sources are left out (they are shown as radio tiles).
+ */
+export function latestAcross(
+  sources: readonly PodcastSource[],
+  perSource = 3,
+  limit = 12,
+): SourceEpisode[] {
+  const all: SourceEpisode[] = [];
+  for (const source of sources) {
+    if (source.live) continue;
+    for (const ep of episodesFor(source).slice(0, perSource)) all.push({ source, ep });
+  }
+  const time = (x: SourceEpisode) => {
+    const t = x.ep.publishedAt ? Date.parse(x.ep.publishedAt) : NaN;
+    return Number.isFinite(t) ? t : -Infinity;
+  };
+  return all.sort((a, b) => time(b) - time(a)).slice(0, limit);
+}
+
+/** The tab to show: a remembered source when it still exists, else "latest" (or the only source). */
+export function resolveTab(stored: string | null | undefined, sources: readonly PodcastSource[]): string {
+  if (sources.length === 1) return String(sources[0]!.id);
+  if (stored && stored !== "latest" && sources.some((s) => String(s.id) === stored)) return stored;
+  return "latest";
+}
+
+/** Key of the single item of a live source (hub `LIVE_KEY`). */
+export const LIVE_EPISODE_KEY = "live";

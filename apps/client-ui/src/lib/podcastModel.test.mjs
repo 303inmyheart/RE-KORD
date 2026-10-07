@@ -165,3 +165,25 @@ test("fuori da statistiche, conteggi e coda dell'hub", () => {
   assert.deepEqual(s.tracks, []);
   assert.equal(s.index, 0);
 });
+
+test("Nuovo, Ultimi e scheda ricordata", async () => {
+  const { isNewEpisode, latestAcross, resolveTab } = await import("./podcastModel.ts");
+  const now = Date.parse("2026-10-07T15:00:00Z");
+  assert.equal(isNewEpisode({ publishedAt: "2026-10-07T14:10:00Z" }, now), true);
+  assert.equal(isNewEpisode({ publishedAt: "2026-10-07T12:00:00Z" }, now), false);
+  assert.equal(isNewEpisode({ publishedAt: null }, now), false);
+  assert.equal(isNewEpisode({ publishedAt: "2026-10-07T14:59:00Z", live: true }, now), false);
+  const mk = (id, live, dates) => ({
+    id, name: `S${id}`, kind: live ? "live" : "rss", live, episodeCount: 5, hasArt: false, fetchedAt: null, error: null,
+    episodes: dates.map((d, i) => ({ key: `${id}e${i}`, title: `${id}-${i}`, publishedAt: d })),
+  });
+  const a = mk(1, false, ["2026-10-07T14:00:00Z", "2026-10-07T13:00:00Z", "2026-10-07T12:00:00Z", "2026-10-07T11:00:00Z"]);
+  const b = mk(2, false, ["2026-10-07T13:30:00Z", null]);
+  const live = mk(3, true, [null]);
+  const list = latestAcross([a, b, live], 3, 10);
+  assert.deepEqual(list.map((x) => x.ep.key), ["1e0", "2e0", "1e1", "1e2", "2e1"]);
+  assert.equal(resolveTab("2", [a, b]), "2");
+  assert.equal(resolveTab("99", [a, b]), "latest");
+  assert.equal(resolveTab(null, [a, b]), "latest");
+  assert.equal(resolveTab("latest", [a]), "1");
+});

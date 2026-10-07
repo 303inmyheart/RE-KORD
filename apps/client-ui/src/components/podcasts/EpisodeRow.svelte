@@ -1,7 +1,9 @@
 <script lang="ts">
   /**
-   * One episode (or the LIVE item of a radio): the library track-row look,
-   * with the date, the length and the listening state instead of plays.
+   * One episode, in the library track-row look (cover with play on hover,
+   * active highlight while it plays): date, length, time left and a thin
+   * progress bar instead of plays. Queue and "listened" are always-visible
+   * square actions, dimmed while off.
    */
   import { CoverArt } from "@rekord/ui";
   import { apiUrl } from "../../lib/config";
@@ -9,6 +11,7 @@
   import { player } from "../../lib/player";
   import {
     formatDuration,
+    isNewEpisode,
     minutesLeft,
     type PodcastEpisode,
     type PodcastSource,
@@ -22,14 +25,16 @@
     source,
     ep,
     showSource = false,
+    newest = false,
   }: {
     source: PodcastSource;
     ep: PodcastEpisode;
-    /** Mixed lists (history): say which source it comes from. */
+    /** Mixed lists ("Ultimi", history): say which source it comes from. */
     showSource?: boolean;
+    /** Newest episode of its source: a "Nuovo" badge when it is fresh. */
+    newest?: boolean;
   } = $props();
 
-  const live = $derived(source.live || !!ep.live);
   const current = $derived.by(() => {
     void session.tick;
     return podcasts.isCurrent(source, ep);
@@ -44,6 +49,7 @@
   );
   const when = $derived(ep.publishedAt ? fmtRelative(ep.publishedAt) : "");
   const length = $derived(formatDuration(ep.durationSecs));
+  const fresh = $derived(newest && isNewEpisode(ep) && !prog.listened);
 
   function play() {
     if (playingNow) {
@@ -63,7 +69,7 @@
     <CoverArt kind="track" title={ep.title} src={art} size="md" />
     <button
       type="button"
-      class={playingNow ? "track-row__art-studio" : "track-row__art-play"}
+      class={current ? "track-row__art-studio" : "track-row__art-play"}
       title={playingNow ? t("player.playPause") : t("podcasts.play")}
       aria-label={playingNow ? t("player.playPause") : t("podcasts.play")}
       onclick={play}
@@ -76,75 +82,92 @@
     </button>
   </div>
 
-  <button type="button" class="track-row__main" onclick={play}>
-    <span class="track-row__title-row">
+  <button type="button" class="track-row__main podcast-row__main" onclick={play}>
+    <span class="podcast-row__title-line">
       <span class="track-row__title">{ep.title}</span>
-      {#if live}
-        <span class="podcast-row__live">LIVE</span>
-      {:else if prog.listened}
-        <span class="podcast-row__done" title={t("podcasts.listened")}>
-          <UiIcon name="check" />
-        </span>
-      {/if}
+      {#if fresh}<span class="podcast-row__new">{t("podcasts.new")}</span>{/if}
     </span>
     <span class="podcast-row__meta">
-      {#if showSource}
-        <span class="podcast-row__src">{source.name}</span>
-      {/if}
-      {#if live}
-        <span>{t("podcasts.liveHint")}</span>
-      {:else}
-        {#if when}<span>{when}</span>{/if}
-        {#if length}<span class="rk-num">{length}</span>{/if}
-        {#if left != null}
-          <span class="podcast-row__left">{t("podcasts.minutesLeft", { n: left })}</span>
-        {/if}
+      {#if showSource}<span class="podcast-row__src">{source.name}</span>{/if}
+      {#if when}<span>{when}</span>{/if}
+      {#if length}<span class="rk-num">{length}</span>{/if}
+      {#if left != null}
+        <span class="podcast-row__left">{t("podcasts.minutesLeft", { n: left })}</span>
       {/if}
     </span>
-    {#if !live && prog.ratio > 0 && !prog.listened}
+    {#if prog.ratio > 0 && !prog.listened}
       <span class="podcast-row__bar" aria-hidden="true">
         <span class="podcast-row__fill" style:transform={`scaleX(${prog.ratio})`}></span>
       </span>
     {/if}
   </button>
 
-  <div class="track-row__actions">
-    {#if !live}
-      <button
-        type="button"
-        class="track-row__ic"
-        title={t("podcasts.addQueue")}
-        aria-label={t("podcasts.addQueue")}
-        onclick={() => podcasts.play(source, ep, { queue: true })}
-      >
-        <span class="track-row__ic-glyph track-row__ic-glyph--svg" aria-hidden="true">
-          <UiIcon name="add" />
-        </span>
-      </button>
-      <button
-        type="button"
-        class="track-row__ic podcast-row__mark"
-        class:is-on={prog.listened}
-        aria-pressed={prog.listened}
-        title={prog.listened ? t("podcasts.markUnlistened") : t("podcasts.markListened")}
-        aria-label={prog.listened ? t("podcasts.markUnlistened") : t("podcasts.markListened")}
-        onclick={() => podcasts.setListened(source, ep, !prog.listened)}
-      >
-        <span class="track-row__ic-glyph track-row__ic-glyph--svg" aria-hidden="true">
-          <UiIcon name="check" />
-        </span>
-      </button>
-    {/if}
+  <div class="podcast-row__actions">
+    <button
+      type="button"
+      class="podcast-act"
+      title={t("podcasts.addQueue")}
+      aria-label={t("podcasts.addQueue")}
+      onclick={() => podcasts.play(source, ep, { queue: true })}
+    >
+      <UiIcon name="add" />
+    </button>
+    <button
+      type="button"
+      class="podcast-act podcast-act--done"
+      class:is-on={prog.listened}
+      aria-pressed={prog.listened}
+      title={prog.listened ? t("podcasts.markUnlistened") : t("podcasts.markListened")}
+      aria-label={prog.listened ? t("podcasts.markUnlistened") : t("podcasts.markListened")}
+      onclick={() => podcasts.setListened(source, ep, !prog.listened)}
+    >
+      <UiIcon name="check" />
+    </button>
   </div>
 </li>
 
 <style>
+  .podcast-row {
+    min-height: 3.6rem;
+  }
+
+  .podcast-row__main {
+    gap: 0.18rem;
+  }
+
+  .podcast-row__title-line {
+    display: flex;
+    align-items: center;
+    gap: var(--rk-space-sm);
+    min-width: 0;
+    width: 100%;
+  }
+
+  .podcast-row__title-line .track-row__title {
+    min-width: 0;
+    flex: 0 1 auto;
+  }
+
   .podcast-row.is-listened .track-row__title {
     color: var(--rk-muted);
     font-weight: 600;
   }
 
+  .podcast-row__new {
+    flex: 0 0 auto;
+    padding: 0.08rem 0.42rem;
+    border-radius: var(--rk-radius-sm, 6px);
+    font-size: var(--rk-fs-1, 0.68rem);
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--rk-accent);
+    background: color-mix(in srgb, var(--rk-accent) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--rk-accent) 40%, transparent);
+  }
+
   .podcast-row__meta {
+    width: 100%;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -163,34 +186,16 @@
 
   .podcast-row__src {
     font-weight: 650;
-    color: color-mix(in srgb, var(--rk-ink) 55%, var(--rk-muted));
+    color: color-mix(in srgb, var(--rk-ink) 60%, var(--rk-muted));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 14rem;
+    max-width: 16rem;
   }
 
   .podcast-row__left {
     color: var(--rk-accent);
     font-weight: 650;
-  }
-
-  .podcast-row__live {
-    flex: 0 0 auto;
-    font-size: var(--rk-fs-1);
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    color: var(--rk-danger, #e5484d);
-  }
-
-  .podcast-row__done {
-    display: inline-flex;
-    color: var(--rk-success, #2fa66a);
-  }
-
-  .podcast-row__done :global(.ui-ic) {
-    width: 1rem;
-    height: 1rem;
   }
 
   .podcast-row__bar {
@@ -199,8 +204,8 @@
     border-radius: 2px;
     background: color-mix(in srgb, var(--rk-ink) 12%, transparent);
     overflow: hidden;
-    margin-top: 0.15rem;
-    max-width: 18rem;
+    margin-top: 0.12rem;
+    width: min(100%, 16rem);
   }
 
   .podcast-row__fill {
@@ -210,7 +215,80 @@
     transform-origin: left center;
   }
 
-  .podcast-row__mark.is-on {
+  .podcast-row__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--rk-space-xs, 0.35rem);
+  }
+
+  /* Square actions (legacy chips): always visible, dimmed while off. */
+  .podcast-act {
+    display: inline-grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border-radius: var(--rk-radius, 8px);
+    border: 1px solid var(--rk-line);
+    background: color-mix(in srgb, var(--rk-surface-3) 55%, transparent);
+    color: var(--rk-muted);
+    cursor: pointer;
+    transition:
+      color 0.12s ease,
+      border-color 0.12s ease,
+      background 0.12s ease;
+  }
+
+  .podcast-act :global(.ui-ic) {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .podcast-act:hover {
+    color: var(--rk-ink);
+    border-color: color-mix(in srgb, var(--rk-accent) 40%, var(--rk-line));
+  }
+
+  .podcast-act--done.is-on {
     color: var(--rk-success, #2fa66a);
+    border-color: color-mix(in srgb, var(--rk-success, #2fa66a) 45%, var(--rk-line));
+    background: color-mix(in srgb, var(--rk-success, #2fa66a) 12%, transparent);
+  }
+
+  /* Narrow lists: the source on its own line, so no "·" starts a line. */
+  @container track-list (max-width: 650.98px) {
+    .podcast-row__src {
+      flex-basis: 100%;
+      max-width: 100%;
+    }
+
+    .podcast-row__src + span::before {
+      display: none;
+    }
+
+    .podcast-row__title-line {
+      align-items: flex-start;
+    }
+
+    .podcast-row__title-line .track-row__title {
+      white-space: normal;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow-wrap: anywhere;
+      line-height: 1.25;
+    }
+
+    .podcast-row__new {
+      margin-top: 0.1rem;
+    }
+  }
+
+  @media (pointer: coarse) {
+    .podcast-act {
+      width: 2.5rem;
+      height: 2.5rem;
+    }
   }
 </style>
