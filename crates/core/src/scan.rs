@@ -4,6 +4,7 @@ use crate::layout::{self, is_audio_name, is_excluded_dir, LibraryLayout, LOOSE_A
 use anyhow::{bail, Context, Result};
 use lofty::file::AudioFile;
 use lofty::prelude::*;
+use lofty::picture::{MimeType, PictureType};
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use std::collections::{HashMap, HashSet};
@@ -720,6 +721,47 @@ fn collect_audio_recursive(
     }
 }
 
+/// Extract the best embedded cover from the album's audio files.
+///
+/// The scanner historically only looked for cover.jpg/folder.jpg. Lofty exposes
+/// embedded FLAC PICTURE blocks, ID3 APIC and MP4 covr through the generic Tag,
+/// so use those as a fallback. We intentionally only write JPEG/PNG because the
+/// thumbnail pipeline is built with those codecs enabled.
+fn extract_embedded_cover(group: &AlbumGroup) -> Option<PathBuf> {
+    let dir = group.cover_dir.as_deref()?;
+    for (path, _) in &group.files {
+        let Ok(tagged) = Probe::open(path).and_then(|p| p.read()) else {
+            continue;
+        };
+        for tag in tagged.tags() {
+            let pictures = tag.pictures();
+            let picture = pictures
+                .iter()
+                .find(|p| p.pic_type() == PictureType::CoverFront)
+                .or_else(|| pictures.first());
+            let Some(picture) = picture else {
+                continue;
+            };
+            let ext = match picture.mime_type() {
+                Some(MimeType::Jpeg) => "jpg",
+                Some(MimeType::Png) => "png",
+                _ => continue,
+            };
+            let dest = dir.join(format!("cover.{ext}"));
+            let tmp = dir.join(format!(".rekord-cover.{ext}.tmp"));
+            if fs::write(&tmp, picture.data()).is_err() {
+                continue;
+            }
+            if fs::rename(&tmp, &dest).is_ok() {
+                info!(source = %path.display(), cover = %dest.display(), "extracted embedded album cover");
+                return Some(dest);
+            }
+            let _ = fs::remove_file(&tmp);
+        }
+    }
+    None
+}
+
 /// What to write for one file of an album, decided before taking the DB lock.
 enum FileWork {
     /// size+mtime unchanged: only re-point at the current album/artist rows.
@@ -742,11 +784,16 @@ fn index_group(
     seen: &mut HashSet<String>,
     stats: &mut Stats,
 ) -> Result<()> {
+    // Prefer an explicit cover file. If an album only carries artwork inside
+    // its audio tags (FLAC PICTURE / Vorbis comments, ID3 APIC, MP4 covr, ...),
+    // materialize the front cover next to the album so the existing cover
+    // endpoint and thumbnail cache can serve it like every other cover.
     let cover = group
         .cover_dir
         .as_deref()
         .and_then(find_cover_in_dir)
-        .or_else(|| legacy_art.get(&group.folder_key).cloned());
+        .or_else(|| legacy_art.get(&group.folder_key).cloned())
+        .or_else(|| extract_embedded_cover(group));
 
     let mut work: Vec<(&Path, &str, FileWork)> = Vec::with_capacity(group.files.len());
     let mut changed_files = 0usize;
@@ -1006,7 +1053,18 @@ fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMe
             mp3_seek_header: counted.and_then(|c| c.seek_header).map(Box::new),
         };
     };
-    let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
+    let tag = tagged.tags().iter().max_by_key(|t| {
+        [
+            t.title().is_some(),
+            t.artist().is_some(),
+            t.album().is_some(),
+            t.track().is_some(),
+            t.genre().is_some(),
+        ]
+        .into_iter()
+        .filter(|v| *v)
+        .count()
+    });
     let mut duration_ms = tagged.properties().duration().as_millis() as i64;
     let mut mp3_seek_header = None;
     if tagged.file_type() == lofty::file::FileType::Mpeg {
