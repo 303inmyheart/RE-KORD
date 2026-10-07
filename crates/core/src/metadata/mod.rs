@@ -125,12 +125,7 @@ fn audio_file_count_recursive(dir: &Path) -> usize {
         })
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(is_audio_file)
-        })
+        .filter(|entry| entry.file_name().to_str().is_some_and(is_audio_file))
         .count()
 }
 
@@ -1306,10 +1301,7 @@ mod tests {
 
     #[test]
     fn recursive_album_track_count_includes_disc_subfolders() {
-        let root = std::env::temp_dir().join(format!(
-            "rekord-meta-count-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("rekord-meta-count-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(root.join("CD1")).unwrap();
         fs::create_dir_all(root.join("CD2/Bonus")).unwrap();
         fs::write(root.join("01.flac"), b"x").unwrap();
