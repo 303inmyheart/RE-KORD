@@ -939,6 +939,15 @@ struct AudioMeta {
     mp3_seek_header: Option<Box<Mp3SeekHeader>>,
 }
 
+/// Numeric Vorbis/ID3 index, accepting the common `2/3` form.
+fn parse_tag_index(raw: &str) -> Option<i64> {
+    raw.trim()
+        .split('/')
+        .next()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| *value > 0)
+}
+
 /// `"128"`, `"127.5"`, `"127,5"`, `"120 BPM"` → tempo; nonsense → None.
 pub fn parse_bpm(raw: &str) -> Option<f64> {
     let t = raw.trim().replace(',', ".");
@@ -1095,15 +1104,30 @@ fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMe
         .find(|value| !value.is_empty());
     let track_number = tags
         .iter()
-        .find_map(|tag| tag.track())
-        .filter(|number| *number > 0)
-        .map(|number| number as i64)
+        .find_map(|tag| {
+            tag.track()
+                .filter(|number| *number > 0)
+                .map(|number| number as i64)
+                .or_else(|| {
+                    tag.get_string(&ItemKey::TrackNumber)
+                        .and_then(parse_tag_index)
+                })
+        })
         .or(guess_track);
     let disc_number = tags
         .iter()
-        .find_map(|tag| tag.disk())
-        .filter(|number| *number > 0)
-        .map(|number| number as i64)
+        .find_map(|tag| {
+            tag.disk()
+                .filter(|number| *number > 0)
+                .map(|number| number as i64)
+                .or_else(|| {
+                    // Vorbis comments commonly encode DISCNUMBER as "2/2".
+                    // Lofty's Accessor::disk parses only a plain integer, so
+                    // retain the leading index through the generic item.
+                    tag.get_string(&ItemKey::DiscNumber)
+                        .and_then(parse_tag_index)
+                })
+        })
         .or(guess_disc);
     let release_date = tags
         .iter()
