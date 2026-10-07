@@ -1,59 +1,110 @@
 <script lang="ts">
   /**
-   * Dashboard › Generi e mood: pick genres and/or moods, see how many tracks
-   * match, shuffle them. Genres are split ("Hip Hop; Pop Rap" counts for both)
-   * and normalized ("Hip Hop" = "hip-hop") through `lib/genres`.
+   * Dashboard › Playlist al volo: pick genres and/or moods, see live how many
+   * tracks match (with a few of their covers), shuffle them or queue them.
+   *
+   * Genres are split ("Hip Hop; Pop Rap" counts for both) and normalized
+   * ("Hip Hop" = "hip-hop") through `lib/genres`. The matching and every chip
+   * count come from one pass over a per-track index (`lib/mixFilter`), rebuilt
+   * only when the catalog, the saved moods or the exclusions change.
+   * The last selection is remembered per account (localStorage, this device).
    */
-  import { Button, Panel, Skeleton } from "@rekord/ui";
+  import { Button, CoverArt, Panel, Skeleton } from "@rekord/ui";
   import MoodFilterGrid from "../MoodFilterGrid.svelte";
   import SectionHeadLead from "../../SectionHeadLead.svelte";
-  import TrackMoodGlyph from "../../TrackMoodGlyph.svelte";
   import UiIcon from "../../icons/UiIcon.svelte";
-  import type { Album, Track } from "../../../lib/api";
+  import { coverUrlFor, type Album, type Track } from "../../../lib/api";
+  import { formatTotalDuration } from "../../../lib/collectionInfo";
   import { normalizeGenreKey, trackGenres } from "../../../lib/genres";
   import { t, tp } from "../../../lib/i18n.svelte";
+  import {
+    computeMixFacets,
+    computeMixTotals,
+    parseMixSelection,
+    pickCoverTracks,
+    pruneMixSelection,
+    sortGenreKeys,
+    visibleGenreKeys,
+    type MixEntry,
+    type MixSelection,
+  } from "../../../lib/mixFilter";
   import { player } from "../../../lib/player";
   import { prefsRevision } from "../../../lib/prefsRevision.svelte";
   import { session } from "../../../lib/session.svelte";
+  import { buildSmartRandomQueue, CARD_QUEUE_CAP } from "../../../lib/smartShuffle";
   import { toasts } from "../../../lib/toasts.svelte";
-  import {
-    NO_GENRE_KEY,
-    TRACK_MOOD_COLORS,
-    TRACK_MOOD_IDS,
-    resolveTrackMoods,
-    trackMatchesMoodFilter,
-    trackMoodLabelKey,
-    type TrackMoodId,
-  } from "../../../lib/trackMoods";
+  import { NO_GENRE_KEY, resolveTrackMoods, type TrackMoodId } from "../../../lib/trackMoods";
   import { loadUserPrefs } from "../../../lib/userPrefs";
 
   let { loading = false }: { loading?: boolean } = $props();
 
-  /** Selected genre keys (`normalizeGenreKey`) or NO_GENRE_KEY. */
-  let mixGenres = $state<string[]>([]);
-  let mixMoods = $state<TrackMoodId[]>([]);
-  let mixMatchAll = $state(false);
+  /** Genres shown before "+N altri". */
+  const GENRE_LIMIT = 10;
+  const STORE_PREFIX = "rekord.next.dashMix.";
 
+  function readSaved(key: string): MixSelection {
+    try {
+      return parseMixSelection(localStorage.getItem(key));
+    } catch {
+      return parseMixSelection(null);
+    }
+  }
+
+  // ── Remembered selection (per account, on this device) ───────────────────
+  const storeKey = $derived(STORE_PREFIX + (session.activeAccountId || "default"));
+  let loadedKey = STORE_PREFIX + (session.activeAccountId || "default");
+  const initial = readSaved(loadedKey);
+
+  /** Selected genre keys (`normalizeGenreKey`) or NO_GENRE_KEY. */
+  let mixGenres = $state<string[]>([...initial.genres]);
+  let mixMoods = $state<TrackMoodId[]>([...initial.moods]);
+  let mixMatchAll = $state(initial.matchAll);
+  let genresExpanded = $state(false);
+
+  // Account switch: load that account's last selection.
+  $effect(() => {
+    const key = storeKey;
+    if (key === loadedKey) return;
+    loadedKey = key;
+    const saved = readSaved(key);
+    mixGenres = [...saved.genres];
+    mixMoods = [...saved.moods];
+    mixMatchAll = saved.matchAll;
+  });
+
+  function persist() {
+    try {
+      const empty = !mixGenres.length && !mixMoods.length && !mixMatchAll;
+      if (empty) localStorage.removeItem(storeKey);
+      else
+        localStorage.setItem(
+          storeKey,
+          JSON.stringify({ genres: mixGenres, moods: mixMoods, matchAll: mixMatchAll }),
+        );
+    } catch {
+      /* private mode / quota: the selection just is not remembered */
+    }
+  }
+
+  // ── Per-track index (catalog / moods / exclusions change) ─────────────────
   const savedMoods = $derived.by(() => {
     void session.moodPrefsTick;
     void prefsRevision.moods;
     return loadUserPrefs().trackMoods;
   });
-  const exclusionsRev = $derived(prefsRevision.exclusions);
 
   const albumById = $derived(new Map<number, Album>(session.allAlbums.map((a) => [a.id, a])));
 
-  /** Genre keys per track (album genre as fallback), computed once per catalog. */
+  /** Genre keys per track (album genre as fallback) + first label seen per key. */
   const genreIndex = $derived.by(() => {
     const keys = new Map<number, string[]>();
     const labels = new Map<string, string>();
     for (const tr of session.catalogTracks) {
       const album = tr.album_id != null ? albumById.get(tr.album_id) : null;
-      const list = trackGenres(tr, album);
       const trackKeys: string[] = [];
-      for (const label of list) {
+      for (const label of trackGenres(tr, album)) {
         const key = normalizeGenreKey(label);
-        if (!key) continue;
+        if (!key || trackKeys.includes(key)) continue;
         trackKeys.push(key);
         if (!labels.has(key)) labels.set(key, label);
       }
@@ -62,84 +113,90 @@
     return { keys, labels };
   });
 
+  /** Shuffle-eligible tracks (exclusions honoured, like every random mix). */
+  const pool = $derived.by(() => {
+    void prefsRevision.exclusions;
+    return session.catalogTracks.filter((tr) => !player.isTrackExcluded(tr));
+  });
+
+  const entries = $derived<MixEntry[]>(
+    pool.map((tr) => ({
+      genres: genreIndex.keys.get(tr.id) ?? [NO_GENRE_KEY],
+      moods: resolveTrackMoods(tr.id, tr.rel_path, savedMoods),
+      durationMs: tr.duration_ms,
+    })),
+  );
+
+  const catalogReady = $derived(session.catalogTracks.length > 0);
+  const totals = $derived(computeMixTotals(entries));
+
   function genreLabel(key: string) {
     return key === NO_GENRE_KEY ? t("library.noGenre") : (genreIndex.labels.get(key) ?? key);
   }
 
-  function moodLabel(id: TrackMoodId) {
-    return t(trackMoodLabelKey(id));
-  }
+  const orderedGenres = $derived(sortGenreKeys(totals.genres, genreLabel));
 
-  function matching(pool: readonly Track[], prefs: Record<string, string[]>): Track[] {
-    let list = pool.filter((tr) => !player.isTrackExcluded(tr));
-    if (mixGenres.length) {
-      const want = new Set(mixGenres);
-      list = list.filter((tr) => (genreIndex.keys.get(tr.id) ?? [NO_GENRE_KEY]).some((k) => want.has(k)));
-    }
-    if (mixMoods.length) {
-      list = list.filter((tr) =>
-        trackMatchesMoodFilter(resolveTrackMoods(tr.id, tr.rel_path, prefs), mixMoods, mixMatchAll),
-      );
-    }
-    return list;
-  }
-
-  const mixReady = $derived(mixGenres.length > 0 || mixMoods.length > 0);
-
-  const previewCount = $derived.by(() => {
-    void exclusionsRev;
-    if (!mixReady) return 0;
-    return matching(session.catalogTracks, savedMoods).length;
+  // ── Selection → matches + live counts (one pass per click) ───────────────
+  const selection = $derived.by<MixSelection>(() => {
+    const raw = { genres: mixGenres, moods: mixMoods, matchAll: mixMatchAll };
+    return catalogReady ? pruneMixSelection(raw, (k) => totals.genres.has(k)) : raw;
   });
+  const hasSelection = $derived(selection.genres.length > 0 || selection.moods.length > 0);
+  const facets = $derived(computeMixFacets(entries, selection));
+  const matchCount = $derived(facets.matches.length);
+  const duration = $derived(formatTotalDuration(facets.totalMs));
 
-  const moodCounts = $derived.by(() => {
-    void exclusionsRev;
-    const counts = Object.fromEntries(TRACK_MOOD_IDS.map((id) => [id, 0])) as Record<TrackMoodId, number>;
-    for (const tr of session.catalogTracks) {
-      if (player.isTrackExcluded(tr)) continue;
-      for (const m of resolveTrackMoods(tr.id, tr.rel_path, savedMoods)) counts[m] += 1;
-    }
-    return counts;
-  });
+  const genreRow = $derived(
+    visibleGenreKeys(orderedGenres, selection.genres, GENRE_LIMIT, genresExpanded),
+  );
 
-  const genreChips = $derived.by(() => {
-    void exclusionsRev;
-    const counts = new Map<string, number>();
-    for (const tr of session.catalogTracks) {
-      if (player.isTrackExcluded(tr)) continue;
-      for (const key of genreIndex.keys.get(tr.id) ?? [NO_GENRE_KEY]) {
-        counts.set(key, (counts.get(key) ?? 0) + 1);
-      }
-    }
-    return [...counts.entries()]
-      .map(([key, count]) => ({ key, label: genreLabel(key), count }))
-      .sort((a, b) => {
-        if (a.key === NO_GENRE_KEY) return 1;
-        if (b.key === NO_GENRE_KEY) return -1;
-        return b.count - a.count || a.label.localeCompare(b.label);
-      })
-      .slice(0, 16);
-  });
+  const coverTracks = $derived(
+    pickCoverTracks(
+      facets.matches.slice(0, 400).map((i) => pool[i]!),
+      (tr) => coverUrlFor(tr, 128) != null,
+      5,
+    ),
+  );
 
+  const zeroBecauseAll = $derived(
+    hasSelection && matchCount === 0 && selection.matchAll && selection.moods.length >= 2,
+  );
+
+  // ── Actions ───────────────────────────────────────────────────────────────
   function toggleGenre(key: string) {
+    void session.ensureCatalogTracks();
     mixGenres = mixGenres.includes(key) ? mixGenres.filter((g) => g !== key) : [...mixGenres, key];
+    persist();
   }
 
   function toggleMood(id: TrackMoodId) {
+    void session.ensureCatalogTracks();
     mixMoods = mixMoods.includes(id) ? mixMoods.filter((m) => m !== id) : [...mixMoods, id];
+    persist();
+  }
+
+  function setMatchAll(all: boolean) {
+    mixMatchAll = all;
+    persist();
   }
 
   function clearMix() {
     mixGenres = [];
     mixMoods = [];
+    mixMatchAll = false;
+    persist();
+  }
+
+  /** Matching tracks against the freshest catalog (a click may beat the load). */
+  async function matchingNow(): Promise<Track[]> {
+    await session.ensureCatalogTracks();
+    return facets.matches.map((i) => pool[i]!).filter(Boolean);
   }
 
   async function playMix() {
-    if (!mixReady) return;
-    const pool = await session.ensureCatalogTracks();
-    const list = matching(pool, loadUserPrefs().trackMoods);
+    const list = await matchingNow();
     if (!list.length) {
-      toasts.info(t("dashboard.mixNothing"));
+      toasts.info(t("mix.nothing"));
       return;
     }
     session.playPoolShuffle(list);
@@ -147,7 +204,18 @@
     session.navigate("studio");
   }
 
-  function openGenres() {
+  async function queueMix() {
+    const list = await matchingNow();
+    if (!list.length) {
+      toasts.info(t("mix.nothing"));
+      return;
+    }
+    const shuffled = buildSmartRandomQueue(list).slice(0, CARD_QUEUE_CAP);
+    player.addToQueue(shuffled);
+    toasts.info(tp("mix.queued", shuffled.length));
+  }
+
+  function openLibrary() {
     session.navigate("library");
     session.libraryBrowse = "genres";
   }
@@ -155,126 +223,135 @@
 
 <Panel class="session-card dashboard-session-card dashboard-mix-card dashboard-page__full dashboard-page__mix">
   <header class="section-head section-head--page-toolbar">
-    <SectionHeadLead eyebrow={t("dashboard.mixEyebrow")} title={t("dashboard.mixTitle")}>
+    <SectionHeadLead eyebrow={t("mix.eyebrow")} title={t("mix.title")}>
       <UiIcon name="music" />
     </SectionHeadLead>
     <div class="section-head__tools">
-      {#if mixReady}
-        <button type="button" class="text-btn" onclick={clearMix}>{t("library.moodClear")}</button>
-      {/if}
-      <button type="button" class="text-btn" onclick={openGenres}>{t("dashboard.openLibrary")}</button>
+      <button type="button" class="text-btn" onclick={openLibrary}>{t("dashboard.openLibrary")}</button>
     </div>
   </header>
-  <div class="dashboard-mix-body">
-    {#if mixReady}
-      <div class="dashboard-mix-selection" aria-live="polite">
-        <div class="dashboard-mix-selection__chips">
-          {#each mixGenres as g (g)}
-            <button
-              type="button"
-              class="dashboard-mix-pill"
-              title={t("dashboard.remove", { name: genreLabel(g) })}
-              aria-label={t("dashboard.remove", { name: genreLabel(g) })}
-              onclick={() => toggleGenre(g)}
-            >
-              <span>{genreLabel(g)}</span>
-              <UiIcon name="close" class="dashboard-mix-pill__x" />
-            </button>
-          {/each}
-          {#each mixMoods as id (id)}
-            <button
-              type="button"
-              class="dashboard-mix-pill dashboard-mix-pill--mood"
-              style="--mood-c:{TRACK_MOOD_COLORS[id]}"
-              title={t("dashboard.remove", { name: moodLabel(id) })}
-              aria-label={t("dashboard.remove", { name: moodLabel(id) })}
-              onclick={() => toggleMood(id)}
-            >
-              <TrackMoodGlyph mood={id} />
-              <UiIcon name="close" class="dashboard-mix-pill__x" />
-            </button>
-          {/each}
-        </div>
-      </div>
-    {/if}
+  <p class="mix-subtitle">{t("mix.subtitle")}</p>
 
-    <div class="dashboard-mix-panels">
-      <div class="dashboard-mix-panel">
-        <div class="dashboard-mix-panel__head">
-          <span class="dash-mix-label">{t("dashboard.genres")}</span>
-          {#if mixGenres.length}
-            <button type="button" class="text-btn" onclick={() => (mixGenres = [])}>
-              {t("dashboard.clear")}
+  <div class="mix-body">
+    <section class="mix-row" aria-labelledby="mix-genres-label">
+      <div class="mix-row__head">
+        <span class="mix-row-label" id="mix-genres-label">{t("dashboard.genres")}</span>
+        <span class="mix-row-help">{t("mix.genresHelp")}</span>
+      </div>
+      {#if loading && !catalogReady}
+        <Skeleton variant="text" lines={2} />
+      {:else if !orderedGenres.length}
+        <p class="mix-row-note">{t("dashboard.noGenres")}</p>
+      {:else}
+        <div class="mix-chips" role="group" aria-labelledby="mix-genres-label">
+          {#each genreRow.shown as key (key)}
+            {@const on = selection.genres.includes(key)}
+            {@const count = facets.genreCounts.get(key) ?? 0}
+            {@const name = genreLabel(key)}
+            <button
+              type="button"
+              class="mix-chip"
+              class:mix-chip--secondary={key === NO_GENRE_KEY}
+              class:is-on={on}
+              disabled={count === 0 && !on}
+              aria-pressed={on}
+              aria-label={tp("mix.chipAria", count, { name })}
+              title={name}
+              onclick={() => toggleGenre(key)}
+            >
+              <span class="mix-chip__name">{name}</span>
+              <span class="mix-chip__count" aria-hidden="true">{count}</span>
+            </button>
+          {/each}
+          {#if genreRow.hidden > 0 || genresExpanded}
+            <button
+              type="button"
+              class="mix-more"
+              aria-expanded={genresExpanded}
+              onclick={() => (genresExpanded = !genresExpanded)}
+            >
+              {genresExpanded ? t("mix.fewer") : tp("mix.moreGenres", genreRow.hidden)}
             </button>
           {/if}
         </div>
-        {#if loading && !session.catalogTracks.length}
-          <Skeleton variant="text" lines={3} />
-        {:else}
-          <div class="dashboard-mix-genre-chips">
-            {#each genreChips as g (g.key)}
-              <button
-                type="button"
-                class="dashboard-mix-genre-chip"
-                class:is-on={mixGenres.includes(g.key)}
-                aria-pressed={mixGenres.includes(g.key)}
-                title={g.label}
-                onclick={() => toggleGenre(g.key)}
-              >
-                <span class="dashboard-mix-genre-chip__label">{g.label}</span>
-                <span class="dashboard-mix-genre-chip__count">{g.count}</span>
+      {/if}
+    </section>
+
+    <section class="mix-row" aria-label={t("dashboard.moods")}>
+      <MoodFilterGrid
+        label={t("dashboard.moods")}
+        selected={selection.moods}
+        counts={facets.moodCounts}
+        totals={totals.moods}
+        matchAll={mixMatchAll}
+        countsReady={catalogReady}
+        onmatch={setMatchAll}
+        ontoggle={toggleMood}
+      />
+    </section>
+
+    <div
+      class="mix-result"
+      class:has-selection={hasSelection}
+      class:is-ready={hasSelection && matchCount > 0}
+    >
+      <div class="mix-result__summary" aria-live="polite">
+        {#if hasSelection && matchCount > 0}
+          {#if coverTracks.length}
+            <span class="mix-covers" aria-hidden="true">
+              {#each coverTracks as tr (tr.id)}
+                <span class="mix-covers__item">
+                  <CoverArt kind="album" size="xs" title={tr.album_name} src={coverUrlFor(tr, 128)} />
+                </span>
+              {/each}
+            </span>
+          {/if}
+          <p class="mix-result__text">
+            <strong>{tp("core.count.tracks", matchCount)}</strong>
+            {#if duration}<span class="mix-result__dur">· {t("mix.about", { d: duration })}</span>{/if}
+          </p>
+        {:else if hasSelection}
+          <p class="mix-result__text mix-result__text--empty">
+            {zeroBecauseAll ? t("mix.noneAll") : t("mix.none")}
+            {#if zeroBecauseAll}
+              <button type="button" class="text-btn" onclick={() => setMatchAll(false)}>
+                {t("mix.useAny")}
               </button>
-            {:else}
-              <p class="dashboard-mix-empty">{t("dashboard.noGenres")}</p>
-            {/each}
-          </div>
-        {/if}
-      </div>
-
-      <div class="dashboard-mix-panel">
-        <MoodFilterGrid
-          label={t("dashboard.moods")}
-          selected={mixMoods}
-          counts={moodCounts}
-          matchAll={mixMatchAll}
-          countsReady={session.catalogTracks.length > 0}
-          onmatch={(all) => (mixMatchAll = all)}
-          ontoggle={(id) => {
-            void session.ensureCatalogTracks();
-            toggleMood(id);
-          }}
-        />
-      </div>
-    </div>
-
-    <div class="dashboard-mix-footer">
-      <p class="dashboard-mix-footer__hint">
-        {#if !mixReady}
-          {t("dashboard.mixHintPick")}
-        {:else if previewCount === 0}
-          {t("dashboard.mixHintEmpty")}
+            {/if}
+          </p>
         {:else}
-          {tp("dashboard.mixQueued", previewCount)}
+          <p class="mix-result__text mix-result__text--hint">
+            <UiIcon name="shuffle" />
+            {t("mix.pick")}
+          </p>
         {/if}
-      </p>
-      <Button
-        class="dashboard-mix-footer__listen"
-        disabled={!mixReady || previewCount === 0}
-        title={mixReady ? t("dashboard.mixListenTitle") : t("dashboard.mixListenDisabled")}
-        onclick={() => void playMix()}
-      >
-        <UiIcon name="shuffle" />
-        {t("library.listen")}
-      </Button>
+      </div>
+      <div class="mix-result__actions">
+        {#if hasSelection}
+          <button type="button" class="text-btn mix-result__clear" onclick={clearMix}>
+            {t("mix.clear")}
+          </button>
+          <Button
+            variant="secondary"
+            class="mix-result__queue"
+            disabled={matchCount === 0}
+            title={t("mix.queue")}
+            onclick={() => void queueMix()}
+          >
+            <UiIcon name="queueMusic" />
+            <span class="mix-result__queue-label">{t("mix.queue")}</span>
+          </Button>
+        {/if}
+        <Button
+          class="mix-result__start"
+          disabled={!hasSelection || matchCount === 0}
+          title={t("mix.startTitle")}
+          onclick={() => void playMix()}
+        >
+          <UiIcon name="shuffle" />
+          {t("mix.start")}
+        </Button>
+      </div>
     </div>
   </div>
 </Panel>
-
-<style>
-  .dash-mix-label {
-    font-size: var(--rk-fs-sm);
-    font-weight: 650;
-    color: var(--rk-ink);
-  }
-
-</style>

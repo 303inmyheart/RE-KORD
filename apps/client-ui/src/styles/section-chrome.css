@@ -497,44 +497,44 @@
   pointer-events: none;
 }
 
-/* Dashboard mix panels */
+/* —— Playlist al volo (dashboard) + Library › Mood ————————————————————————
+   Builder: genres row, moods row, live result bar. Flat chips (no blur, no
+   shadows that repaint), colour-only transitions. Shared by
+   DashboardMixCard and MoodFilterGrid, hence global. */
 .dashboard-mix-card > .section-head.section-head--page-toolbar {
-  margin-bottom: var(--rk-space-lg);
+  margin-bottom: var(--rk-space-xs);
 }
 
-.dashboard-mix-body {
-  display: flex;
-  flex-direction: column;
-  /* Selection, the two pickers and the footer are separate decisions: keep them
-     a full rung apart so the panel does not read as one wall of chips. */
-  gap: var(--rk-space-xl);
-  min-height: 0;
+.mix-subtitle {
+  margin: 0 0 var(--rk-space-lg);
+  color: var(--rk-muted);
+  font-size: var(--rk-fs-sm);
+  line-height: var(--rk-lh-snug);
 }
 
-.dashboard-mix-panels {
+.mix-body {
   display: flex;
   flex-direction: column;
-  gap: var(--rk-space-xl);
+  gap: var(--rk-space-lg);
   min-width: 0;
 }
 
-.dashboard-mix-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--rk-space-md);
+.mix-row {
+  display: grid;
+  gap: var(--rk-space-sm);
   min-width: 0;
 }
 
-.dashboard-mix-panel__head,
-.dashboard-mix-mood-toolbar {
+.mix-row__head {
   display: flex;
+  align-items: baseline;
   flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--rk-space-xs) var(--rk-space-lg);
+  gap: var(--rk-space-xs) var(--rk-space-sm);
+  min-height: 1.5rem;
 }
 
-.dashboard-mix-panel__eyebrow {
+/* Legacy dashboard-mix-panel__eyebrow. */
+.mix-row-label {
   font-size: var(--rk-fs-3xs);
   font-weight: 700;
   letter-spacing: 0.1em;
@@ -542,140 +542,336 @@
   color: color-mix(in srgb, var(--rk-accent-2) 70%, var(--rk-muted) 30%);
 }
 
-.dashboard-mix-selection {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--rk-space-sm);
-  padding: var(--rk-space-md) var(--rk-space-lg);
-  border-radius: var(--rk-radius);
-  border: 1px solid color-mix(in srgb, var(--rk-line) 80%, transparent);
-  background: color-mix(in srgb, var(--rk-surface-3) 72%, transparent);
-}
-
-.dashboard-mix-selection__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--rk-space-xs);
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.dashboard-mix-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--rk-space-2xs);
-  max-width: 100%;
-  padding: var(--rk-space-2xs) var(--rk-space-md);
-  border-radius: var(--rk-radius);
-  border: 1px solid color-mix(in srgb, var(--rk-accent) 35%, var(--rk-line));
-  background: color-mix(in srgb, var(--rk-accent) 14%, transparent);
-  color: var(--rk-ink);
-  font: inherit;
+.mix-row-help {
   font-size: var(--rk-fs-2xs);
-  font-weight: 650;
-  cursor: pointer;
+  color: var(--rk-muted);
 }
 
-.dashboard-mix-pill--mood {
-  border-color: color-mix(in srgb, var(--mood-c) 45%, var(--rk-line));
-  background: color-mix(in srgb, var(--mood-c) 18%, transparent);
-  color: color-mix(in srgb, var(--mood-c) 85%, var(--rk-ink));
-}
-
-.dashboard-mix-pill--mood-ico {
-  padding: var(--rk-space-2xs) var(--rk-space-xs);
-  gap: var(--rk-space-3xs);
-}
-
-.dashboard-mix-pill :global(.mood-g),
-.dashboard-mix-pill :global(.mood-g svg) {
-  width: 0.9rem;
-  height: 0.9rem;
-}
-
-.dashboard-mix-pill__x {
-  width: 0.75rem;
-  height: 0.75rem;
-  opacity: 0.75;
-}
-
-.dashboard-mix-genre-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--rk-space-sm);
-}
-
-.dashboard-mix-empty {
+.mix-row-note {
   margin: 0;
   color: var(--rk-muted);
   font-size: var(--rk-fs-xs);
 }
 
-.dashboard-mix-genre-chip {
-  display: inline-flex;
-  align-items: baseline;
+.mix-chips {
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--rk-space-xs);
+  min-width: 0;
+}
+
+.mix-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.1rem;
+  max-width: 100%;
+  padding: 0.3rem 0.7rem;
   border: 1px solid color-mix(in srgb, var(--rk-line) 72%, transparent);
   border-radius: var(--rk-radius);
   background: color-mix(in srgb, var(--rk-surface-3) 70%, transparent);
   color: var(--rk-muted-strong);
-  padding: var(--rk-space-xs) var(--rk-space-lg);
   font: inherit;
   font-size: var(--rk-fs-xs);
   font-weight: 650;
+  line-height: 1.15;
   cursor: pointer;
   transition:
-    border-color 0.15s ease,
-    background 0.15s ease,
-    color 0.15s ease;
+    border-color 0.12s ease,
+    background-color 0.12s ease,
+    color 0.12s ease;
 }
 
-.dashboard-mix-genre-chip:hover:not(.is-on) {
+.mix-chip:hover:not(:disabled):not(.is-on) {
   border-color: var(--rk-line-strong);
   color: var(--rk-ink);
 }
 
-.dashboard-mix-genre-chip.is-on {
-  color: var(--rk-ink);
-  border-color: color-mix(in srgb, var(--rk-accent) 40%, var(--rk-line));
-  background: var(--rk-accent-soft);
+.mix-chip:focus-visible,
+.mix-more:focus-visible {
+  outline: 2px solid var(--rk-focus);
+  outline-offset: 2px;
 }
 
-/* Composite genres ("Hip Hop; Funk; Pop; Contemporary R&B; …") would wrap inside
-   the chip and turn the picker into a wall; one line each, full name on hover. */
-.dashboard-mix-genre-chip__label {
+.mix-chip.is-on {
+  color: var(--rk-ink);
+  border-color: color-mix(in srgb, var(--rk-accent) 62%, var(--rk-line));
+  background: color-mix(in srgb, var(--rk-accent) 18%, transparent);
+}
+
+/* No track left for it with the current choice: there, but clearly not an option. */
+.mix-chip:disabled {
+  cursor: default;
+  opacity: 0.4;
+  border-style: dashed;
+  background: transparent;
+}
+
+/* Composite genres ("Hip Hop; Funk; Pop; …") stay on one line, full name on hover. */
+.mix-chip__name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 14rem;
 }
 
-.dashboard-mix-genre-chip__count {
+.mix-chip__count {
   font-size: var(--rk-fs-2xs);
-  font-weight: 800;
+  font-weight: 750;
   font-variant-numeric: tabular-nums;
-  opacity: 0.8;
+  color: var(--rk-muted);
 }
 
-.dashboard-mix-footer {
+.mix-chip.is-on .mix-chip__count {
+  color: inherit;
+  opacity: 0.85;
+}
+
+/* "Senza genere": the leftover bucket, not a genre. */
+.mix-chip--secondary:not(.is-on) {
+  border-style: dashed;
+  background: transparent;
+  color: var(--rk-muted);
+  font-weight: 600;
+}
+
+/* Mood chips: glyph always in the mood colour; selected = mood tint. */
+/* A touch of ink keeps pale moods (Motivazionale) visible on light themes. */
+.mix-chip__glyph {
+  display: inline-flex;
+  color: color-mix(in srgb, var(--mood-c) 72%, var(--rk-ink));
+}
+
+.mix-chip--mood .mood-g,
+.mix-chip--mood .mood-g svg {
+  width: 1.05rem;
+  height: 1.05rem;
   flex-shrink: 0;
+}
+
+.mix-chip--mood:hover:not(:disabled):not(.is-on) {
+  border-color: color-mix(in srgb, var(--mood-c) 45%, var(--rk-line));
+}
+
+.mix-chip--mood.is-on {
+  border-color: color-mix(in srgb, var(--mood-c) 65%, var(--rk-line));
+  background: color-mix(in srgb, var(--mood-c) 20%, transparent);
+}
+
+.mix-more {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.1rem;
+  padding: 0.3rem 0.55rem;
+  border: 0;
+  border-radius: var(--rk-radius);
+  background: transparent;
+  color: color-mix(in srgb, var(--rk-accent-2) 82%, var(--rk-ink));
+  font: inherit;
+  font-size: var(--rk-fs-xs);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.mix-more:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+/* "Con più mood: [Almeno uno | Tutti insieme]  what it does" */
+.mix-match {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--rk-space-xs) var(--rk-space-sm);
+  padding-top: var(--rk-space-2xs);
+}
+
+.mix-match__label {
+  font-size: var(--rk-fs-xs);
+  font-weight: 650;
+  color: var(--rk-muted-strong);
+}
+
+.mix-match__help {
+  font-size: var(--rk-fs-xs);
+  color: var(--rk-muted);
+}
+
+/* Live result bar. */
+.mix-result {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--rk-space-md) var(--rk-space-xl);
-  padding-top: var(--rk-space-lg);
-  border-top: 1px solid color-mix(in srgb, var(--rk-line) 55%, transparent);
+  gap: var(--rk-space-sm) var(--rk-space-lg);
+  padding: var(--rk-space-md) var(--rk-space-lg);
+  border: 1px solid color-mix(in srgb, var(--rk-line) 70%, transparent);
+  border-radius: var(--rk-radius);
+  background: color-mix(in srgb, var(--rk-surface-3) 55%, transparent);
+  transition: border-color 0.15s ease;
 }
 
-.dashboard-mix-footer__hint {
-  margin: 0;
-  flex: 1 1 12rem;
+.mix-result.is-ready {
+  border-color: color-mix(in srgb, var(--rk-accent) 38%, var(--rk-line));
+}
+
+.mix-result__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--rk-space-md);
+  flex: 1 1 16rem;
   min-width: 0;
-  color: var(--rk-muted);
-  font-size: var(--rk-fs-xs);
+  min-height: 2.5rem;
+}
+
+.mix-result__text {
+  margin: 0;
+  min-width: 0;
+  color: var(--rk-muted-strong);
+  font-size: var(--rk-fs-sm);
   line-height: var(--rk-lh-snug);
+}
+
+.mix-result__text strong {
+  color: var(--rk-ink);
+  font-size: var(--rk-fs-md);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.mix-result__dur {
+  color: var(--rk-muted);
+}
+
+.mix-result__text--hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rk-space-sm);
+  color: var(--rk-muted);
+}
+
+.mix-result__text--hint svg,
+.mix-result__text--hint .ui-ic {
+  width: 1.1rem;
+  height: 1.1rem;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.mix-result__text--empty .text-btn {
+  margin-left: 0.25rem;
+  font-weight: 700;
+}
+
+.mix-covers {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.mix-covers__item {
+  display: block;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--rk-radius-sm, 4px);
+  overflow: hidden;
+  box-shadow: 0 0 0 2px var(--rk-surface-2);
+}
+
+.mix-covers__item + .mix-covers__item {
+  margin-left: -0.55rem;
+}
+
+.mix-covers__item .rk-cover {
+  border-radius: inherit;
+}
+
+.mix-result__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--rk-space-sm) var(--rk-space-md);
+}
+
+.mix-result__actions .rk-btn {
+  gap: var(--rk-space-xs);
+}
+
+.mix-result__start {
+  min-width: 9.5rem;
+}
+
+@media (max-width: 719.98px) {
+  .mix-chip__name {
+    max-width: 11rem;
+  }
+
+  /* Phone: the bar rides the bottom of the card while its chips scroll by.
+     The shell's bottom padding already clears the player dock / bottom nav
+     (sticky insets count from inside it). Opaque: no blur behind it.
+     Two compact rows: summary + "Svuota", then the full-width start button
+     with an icon-only "add to queue" beside it. */
+  .mix-result {
+    position: sticky;
+    bottom: var(--rk-space-sm);
+    z-index: 2;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--rk-space-sm);
+    padding: var(--rk-space-sm) var(--rk-space-md);
+    background: linear-gradient(
+        color-mix(in srgb, var(--rk-surface-3) 55%, transparent),
+        color-mix(in srgb, var(--rk-surface-3) 55%, transparent)
+      ),
+      var(--rk-surface-2);
+  }
+
+  .mix-result__summary {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 2.25rem;
+  }
+
+  .mix-result__actions {
+    display: contents;
+  }
+
+  .mix-result__queue {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .mix-result__clear {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .mix-result__start {
+    grid-column: 1;
+    grid-row: 2;
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Nothing picked yet: just a hint, it should not cover the chips. */
+  .mix-result:not(.has-selection) {
+    position: static;
+  }
+
+  .mix-result:not(.has-selection) .mix-result__start {
+    grid-column: 1 / -1;
+  }
+
+  .mix-result__queue-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 .dashboard-session-card.rk-panel,
@@ -917,202 +1113,4 @@
   .dashboard-smart-radio-tile__title {
     font-size: var(--rk-fs-xs);
   }
-}
-
-/* Match underline (Almeno uno / Tutti) — tab style */
-.dashboard-mix-match.segmented--joined,
-.match-underline {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.2rem 0.85rem;
-  background: transparent;
-}
-
-.dashboard-mix-match.segmented--joined {
-  gap: 0.25rem 0.55rem;
-}
-
-.dashboard-mix-match.segmented--joined button,
-.match-underline button {
-  position: relative;
-  margin: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  cursor: pointer;
-  font: inherit;
-  padding: 0.12rem 0;
-  font-weight: 800;
-  font-size: var(--rk-fs-title);
-  letter-spacing: -0.03em;
-  line-height: var(--rk-lh-tight);
-  color: color-mix(in srgb, var(--rk-muted) 78%, var(--rk-ink) 22%);
-  transition: color 0.16s ease;
-}
-
-.dashboard-mix-match.segmented--joined button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 2rem;
-  padding: 0.4rem 0.55rem;
-  font-size: var(--rk-fs-md);
-  font-weight: 750;
-  letter-spacing: -0.01em;
-  border-radius: var(--rk-radius);
-}
-
-.dashboard-mix-match.segmented--joined button:hover:not(.is-on),
-.match-underline button:hover:not(.is-on):not(.on) {
-  color: color-mix(in srgb, var(--rk-muted-strong) 85%, var(--rk-ink) 15%);
-  background: transparent;
-  border-color: transparent;
-}
-
-.dashboard-mix-match.segmented--joined button:hover:not(.is-on) {
-  background: color-mix(in srgb, var(--rk-surface-3) 55%, transparent);
-}
-
-.dashboard-mix-match.segmented--joined button.is-on,
-.match-underline button.is-on,
-.match-underline button.on {
-  color: var(--rk-ink);
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.dashboard-mix-match.segmented--joined button.is-on {
-  color: var(--rk-ink);
-  font-weight: 800;
-  background: color-mix(in srgb, var(--rk-accent) 10%, transparent);
-}
-
-.dashboard-mix-match.segmented--joined button.is-on::after,
-.match-underline button.is-on::after,
-.match-underline button.on::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -0.08rem;
-  height: 2px;
-  border-radius: var(--rk-radius-round);
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--rk-accent) 85%, transparent),
-    color-mix(in srgb, var(--rk-accent-2) 85%, transparent)
-  );
-}
-
-.dashboard-mix-match.segmented--joined button.is-on::after {
-  left: 0.55rem;
-  right: 0.55rem;
-  bottom: 0.22rem;
-  height: 2.5px;
-}
-
-.dashboard-mix-match.segmented--joined button:focus-visible {
-  outline: 2px solid var(--rk-focus);
-  outline-offset: 2px;
-}
-
-.dashboard-mix-mood-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--rk-space-sm);
-  width: 100%;
-}
-
-@media (min-width: 640px) {
-  .dashboard-mix-mood-grid {
-    grid-template-columns: repeat(7, minmax(0, 1fr));
-  }
-}
-
-@media (min-width: 900px) {
-  .dashboard-mix-mood-grid {
-    grid-template-columns: repeat(14, minmax(0, 1fr));
-  }
-}
-
-.dashboard-mix-footer__hint strong {
-  color: var(--rk-ink);
-  font-variant-numeric: tabular-nums;
-}
-
-.dashboard-mix-footer__listen {
-  flex-shrink: 0;
-  gap: var(--rk-space-xs);
-  min-width: 6.75rem;
-}
-
-/* Mood filter tiles — off (neutral) until selected; --on = mood tint */
-.library-mood-filter-btn {
-  width: 100%;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 2.75rem;
-  padding: var(--rk-space-sm) var(--rk-space-md);
-  border-radius: var(--rk-radius);
-  border: 1px solid color-mix(in srgb, var(--rk-line) 62%, transparent);
-  background: color-mix(in srgb, var(--rk-surface-2) 88%, transparent);
-  cursor: pointer;
-  color: color-mix(in srgb, var(--rk-muted) 78%, var(--rk-ink) 22%);
-  line-height: 0;
-  opacity: 0.82;
-  transition:
-    border-color 0.15s ease,
-    background 0.15s ease,
-    color 0.15s ease,
-    box-shadow 0.15s ease,
-    opacity 0.15s ease;
-}
-
-.library-mood-filter-btn:hover:not(:disabled):not(
-    .library-mood-filter-btn--on
-  ) {
-  opacity: 1;
-  border-color: color-mix(in srgb, var(--rk-line) 78%, transparent);
-  background: color-mix(in srgb, var(--rk-surface-3) 76%, transparent);
-  color: color-mix(in srgb, var(--rk-muted-strong) 70%, var(--rk-ink) 30%);
-}
-
-.library-mood-filter-btn:disabled {
-  opacity: 0.38;
-  cursor: not-allowed;
-}
-
-.library-mood-filter-btn--on {
-  opacity: 1;
-  color: color-mix(in srgb, var(--mood-c) 92%, var(--rk-ink));
-  border-color: color-mix(in srgb, var(--mood-c) 58%, var(--rk-line) 42%);
-  background: color-mix(in srgb, var(--mood-c) 28%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mood-c) 22%, transparent);
-}
-
-.library-mood-filter-btn__glyph-row {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--rk-space-xs);
-  width: 100%;
-  color: inherit;
-}
-
-.library-mood-filter-btn__glyph-row .mood-g,
-.library-mood-filter-btn__glyph-row svg {
-  width: 1.22rem;
-  height: 1.22rem;
-}
-
-.library-mood-filter-btn__count {
-  font-size: var(--rk-fs-2xs);
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  color: inherit;
 }
