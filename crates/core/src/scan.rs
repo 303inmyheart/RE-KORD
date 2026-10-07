@@ -1111,10 +1111,7 @@ fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMe
         .max_by_key(|date| crate::db::text::date_precision(date));
     let lyrics = tags
         .iter()
-        .find_map(|tag| {
-            tag.get_string(&ItemKey::Lyrics)
-                .or_else(|| tag.get_string(&ItemKey::UnsyncLyrics))
-        })
+        .find_map(|tag| tag.get_string(&ItemKey::Lyrics))
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
