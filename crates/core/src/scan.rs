@@ -777,7 +777,7 @@ enum FileWork {
     /// size+mtime unchanged: only re-point at the current album/artist rows.
     Relink,
     Index {
-        meta: AudioMeta,
+        meta: Box<AudioMeta>,
         size: u64,
         mtime: i64,
     },
@@ -842,7 +842,7 @@ fn index_group(
             path,
             rel,
             FileWork::Index {
-                meta: read_audio_meta(path, &file_stem, &group.artist),
+                meta: Box::new(read_audio_meta(path, &file_stem, &group.artist)),
                 size: size as u64,
                 mtime,
             },
@@ -1115,7 +1115,7 @@ fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMe
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let bpm = tags.iter().find_map(|tag| read_bpm(tag));
+    let bpm = tags.iter().find_map(read_bpm);
 
     let mut duration_ms = tagged.properties().duration().as_millis() as i64;
     let mut mp3_seek_header = None;
