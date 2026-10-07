@@ -573,7 +573,6 @@ fn v6_reread_flac_metadata(tx: &Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
-
 /// Nested CD/bonus directories used to become separate albums when deep_scan
 /// was enabled. A normal scan can re-link every unchanged track to the parent
 /// album, so make sure startup performs one scan. FLACs are marked stale as
