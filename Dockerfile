@@ -35,6 +35,7 @@ RUN pnpm build:ui
 
 # ---------------------------------------------------------------- server
 FROM rust:${RUST_VERSION}-${DEBIAN_RELEASE} AS server
+ARG TARGETARCH
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
@@ -43,8 +44,11 @@ COPY apps/server apps/server
 # (and an empty lib) is enough for cargo to read the workspace.
 COPY apps/client-shell/src-tauri/Cargo.toml apps/client-shell/src-tauri/Cargo.toml
 RUN mkdir -p apps/client-shell/src-tauri/src && : > apps/client-shell/src-tauri/src/lib.rs
-RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=rekord-target,target=/src/target \
+# Multi-platform Buildx builds amd64 and arm64 concurrently. Keep Cargo caches
+# architecture-specific so the two writers cannot corrupt the registry/target
+# directories. sharing=locked is an extra guard if a builder reuses an ID.
+RUN --mount=type=cache,id=cargo-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=rekord-target-${TARGETARCH},target=/src/target,sharing=locked \
     cargo build -p rekord-server --release --locked \
  && install -m 0755 target/release/rekord-server /rekord-server
 
