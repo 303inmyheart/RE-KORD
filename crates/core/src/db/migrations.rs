@@ -26,10 +26,11 @@ const MIGRATIONS: &[(i64, &str, Step)] = &[
         v4_display_model,
     ),
     (5, "recount mp3 durations", v5_recount_mp3_durations),
+    (6, "reread FLAC metadata", v6_reread_flac_metadata),
 ];
 
 /// Schema version this build writes.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 pub fn user_version(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
@@ -550,6 +551,18 @@ fn v5_recount_mp3_durations(tx: &Transaction<'_>) -> Result<()> {
           frame BLOB NOT NULL
         );
         UPDATE files SET mtime = -1 WHERE lower(rel_path) LIKE '%.mp3';
+        "#,
+    )?;
+    Ok(())
+}
+
+/// FLAC metadata reading now merges every parsed tag container (Vorbis
+/// Comments plus any legacy ID3v2 tag) and preserves the tag artist. Mark
+/// existing FLAC files stale so the next normal scan refreshes them once.
+fn v6_reread_flac_metadata(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch(
+        r#"
+        UPDATE files SET mtime = -1 WHERE lower(rel_path) LIKE '%.flac';
         "#,
     )?;
     Ok(())

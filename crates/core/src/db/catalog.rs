@@ -142,6 +142,27 @@ impl CatalogBatch<'_> {
         )
     }
 
+    /// Re-point an unchanged track at its album without destroying the artist
+    /// read from the file tags.
+    pub fn relink_track_album(
+        &self,
+        rel_path: &str,
+        album_id: i64,
+        album_name: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE tracks SET
+              album_id = ?2,
+              album_name = ?3
+            WHERE rel_path = ?1
+              AND (album_id IS NOT ?2 OR album_name <> ?3)
+            "#,
+            params![rel_path, album_id, album_name],
+        )?;
+        Ok(())
+    }
+
     pub fn backfill_album_meta_from_tracks(&self, album_id: i64) -> Result<()> {
         backfill_album_meta_from_tracks(self.conn, album_id)
     }
