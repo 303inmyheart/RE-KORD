@@ -1331,20 +1331,20 @@ fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMe
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("flac"));
-    if (tags.is_empty() || (is_flac && (raw_title.is_none() || artist.is_none() || album.is_none())))
-        && let Some(fallback) = ffprobe_metadata(path)
-    {
-        raw_title = raw_title.or(fallback.title);
-        artist = artist.or(fallback.artist);
-        album = album.or(fallback.album);
-        genre = genre.or(fallback.genre);
-        track_number = track_number.or(fallback.track_number);
-        disc_number = disc_number.or(fallback.disc_number);
-        release_date = release_date.or(fallback.release_date);
-        lyrics = lyrics.or(fallback.lyrics);
-        bpm = bpm.or(fallback.bpm);
-        if duration_ms <= 0 {
-            duration_ms = fallback.duration_ms.unwrap_or(0);
+    if tags.is_empty() || (is_flac && (raw_title.is_none() || artist.is_none() || album.is_none())) {
+        if let Some(fallback) = ffprobe_metadata(path) {
+            raw_title = raw_title.or(fallback.title);
+            artist = artist.or(fallback.artist);
+            album = album.or(fallback.album);
+            genre = genre.or(fallback.genre);
+            track_number = track_number.or(fallback.track_number);
+            disc_number = disc_number.or(fallback.disc_number);
+            release_date = release_date.or(fallback.release_date);
+            lyrics = lyrics.or(fallback.lyrics);
+            bpm = bpm.or(fallback.bpm);
+            if duration_ms <= 0 {
+                duration_ms = fallback.duration_ms.unwrap_or(0);
+            }
         }
     }
 
