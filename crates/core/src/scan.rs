@@ -622,18 +622,19 @@ fn collect_album_dir(
     album_path: &Path,
     artist_name: &str,
     album_folder: &str,
-    layout: &LibraryLayout,
+    _layout: &LibraryLayout,
     out: &mut Collected,
 ) {
     let folder_key = format!("{artist_name}/{album_folder}");
     let mut files: Vec<(PathBuf, String)> = Vec::new();
-    // Nested folders (CD1/CD2, bonus discs) are part of the same album unless the
-    // layout explicitly asks for one album per folder.
+    // CD1/CD2, bonus-disc and other nested directories belong to the album
+    // represented by this top-level album folder. `deep_scan` means "walk
+    // deeper", not "turn every nested directory into a separate album".
     collect_audio_recursive(
         album_path,
         &folder_key,
         0,
-        layout.deep_scan,
+        false,
         &mut files,
         out,
         artist_name,
@@ -1040,6 +1041,149 @@ fn ffmpeg_duration_ms(path: &Path) -> Option<i64> {
     (ms > 0).then_some(ms)
 }
 
+#[derive(Default)]
+struct FfprobeMeta {
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    track_number: Option<i64>,
+    disc_number: Option<i64>,
+    duration_ms: Option<i64>,
+    genre: Option<String>,
+    release_date: Option<String>,
+    lyrics: Option<String>,
+    bpm: Option<f64>,
+}
+
+fn merge_ffprobe_tags(
+    dst: &mut HashMap<String, String>,
+    value: Option<&serde_json::Value>,
+) {
+    let Some(obj) = value.and_then(serde_json::Value::as_object) else {
+        return;
+    };
+    for (key, value) in obj {
+        let Some(raw) = value.as_str() else {
+            continue;
+        };
+        let value = raw.trim();
+        if value.is_empty() {
+            continue;
+        }
+        dst.entry(key.to_ascii_lowercase())
+            .or_insert_with(|| value.to_string());
+    }
+}
+
+fn ffprobe_metadata_value(root: &serde_json::Value) -> Option<FfprobeMeta> {
+    let mut tags = HashMap::<String, String>::new();
+    merge_ffprobe_tags(&mut tags, root.pointer("/format/tags"));
+
+    let streams = root
+        .get("streams")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    for stream in streams {
+        if stream.get("codec_type").and_then(serde_json::Value::as_str) == Some("audio") {
+            merge_ffprobe_tags(&mut tags, stream.get("tags"));
+        }
+    }
+
+    let get = |keys: &[&str]| -> Option<String> {
+        keys.iter().find_map(|key| tags.get(*key).cloned())
+    };
+    let duration_ms = root
+        .pointer("/format/duration")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|raw| raw.parse::<f64>().ok())
+        .or_else(|| {
+            streams.iter().find_map(|stream| {
+                (stream
+                    .get("codec_type")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("audio"))
+                .then(|| stream.get("duration")?.as_str()?.parse::<f64>().ok())
+                .flatten()
+            })
+        })
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+        .map(|seconds| (seconds * 1000.0).round() as i64);
+
+    let meta = FfprobeMeta {
+        title: get(&["title"]),
+        artist: get(&["artist", "album_artist", "albumartist"]),
+        album: get(&["album"]),
+        track_number: get(&["track", "tracknumber", "track_number"])
+            .and_then(|raw| parse_tag_index(&raw)),
+        disc_number: get(&["disc", "discnumber", "disc_number"])
+            .and_then(|raw| parse_tag_index(&raw)),
+        duration_ms,
+        genre: get(&["genre"]),
+        release_date: get(&[
+            "date",
+            "release_date",
+            "releasedate",
+            "originaldate",
+            "original_date",
+            "year",
+        ])
+        .and_then(|raw| crate::db::text::normalize_date(&raw)),
+        lyrics: get(&[
+            "lyrics",
+            "unsyncedlyrics",
+            "unsynced_lyrics",
+            "syncedlyrics",
+            "synced_lyrics",
+        ]),
+        bpm: get(&["bpm", "tempo", "tbpm"]).and_then(|raw| parse_bpm(&raw)),
+    };
+
+    let has_any = meta.title.is_some()
+        || meta.artist.is_some()
+        || meta.album.is_some()
+        || meta.track_number.is_some()
+        || meta.disc_number.is_some()
+        || meta.duration_ms.is_some()
+        || meta.genre.is_some()
+        || meta.release_date.is_some()
+        || meta.lyrics.is_some()
+        || meta.bpm.is_some();
+    has_any.then_some(meta)
+}
+
+/// ffprobe is deliberately only a fallback: spawning a process for every
+/// healthy file would make large-library scans unnecessarily slow. It is
+/// valuable for FLAC/Vorbis files that Lofty rejects or only partially parses.
+fn ffprobe_metadata(path: &Path) -> Option<FfprobeMeta> {
+    let tool = crate::tools::resolve_blocking(
+        crate::tools::Tool::Ffprobe,
+        &crate::tools::ToolContext::default(),
+    );
+    if !tool.available {
+        return None;
+    }
+    let out = std::process::Command::new(&tool.path)
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration:format_tags:stream=codec_type,duration:stream_tags",
+            "-of",
+            "json",
+        ])
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    ffprobe_metadata_value(&value)
+}
+
 fn is_mp3(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -1053,8 +1197,41 @@ fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMe
     let (guess_disc, guess_track) = crate::db::text::guess_track_numbers(file_stem);
     let tagged = match Probe::open(path).and_then(|p| p.read()) {
         Ok(tagged) => tagged,
-        Err(error) => {
-            warn!(path = %path.display(), error = %error, "audio metadata read failed");
+        Err(lofty_error) => {
+            if let Some(meta) = ffprobe_metadata(path) {
+                info!(
+                    path = %path.display(),
+                    error = %lofty_error,
+                    "Lofty metadata read failed; using ffprobe fallback"
+                );
+                let title = crate::db::text::track_display_title(
+                    meta.title.as_deref(),
+                    file_stem,
+                    meta.artist.as_deref().unwrap_or(artist_folder),
+                );
+                return AudioMeta {
+                    title,
+                    artist: meta.artist,
+                    track_number: meta.track_number.or(guess_track),
+                    disc_number: meta.disc_number.or(guess_disc),
+                    duration_ms: meta
+                        .duration_ms
+                        .or_else(|| ffmpeg_duration_ms(path))
+                        .unwrap_or(0),
+                    genre: meta.genre,
+                    release_date: meta.release_date,
+                    lyrics: meta.lyrics,
+                    bpm: meta.bpm,
+                    album: meta.album,
+                    mp3_seek_header: None,
+                };
+            }
+
+            warn!(
+                path = %path.display(),
+                error = %lofty_error,
+                "audio metadata unreadable by Lofty and ffprobe"
+            );
             let counted = is_mp3(path)
                 .then(|| mp3_frames::count(path, true))
                 .flatten();
@@ -1079,30 +1256,29 @@ fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMe
     };
 
     // FLAC can legally contain Vorbis Comments plus a read-only ID3v2 tag.
-    // Do not choose only primary_tag()/first_tag(): merge every parsed tag and
-    // take the first non-empty value for each field independently.
+    // Merge every parsed tag and take the first non-empty value per field.
     let tags = tagged.tags();
-    let artist = tags
+    let mut artist = tags
         .iter()
         .filter_map(|tag| tag.artist())
         .map(|value| value.trim().to_string())
         .find(|value| !value.is_empty());
-    let raw_title = tags
+    let mut raw_title = tags
         .iter()
         .filter_map(|tag| tag.title())
         .map(|value| value.trim().to_string())
         .find(|value| !value.is_empty());
-    let album = tags
+    let mut album = tags
         .iter()
         .filter_map(|tag| tag.album())
         .map(|value| value.trim().to_string())
         .find(|value| !value.is_empty());
-    let genre = tags
+    let mut genre = tags
         .iter()
         .filter_map(|tag| tag.genre())
         .map(|value| value.trim().to_string())
         .find(|value| !value.is_empty());
-    let track_number = tags
+    let mut track_number = tags
         .iter()
         .find_map(|tag| {
             tag.track()
@@ -1114,32 +1290,29 @@ fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMe
                 })
         })
         .or(guess_track);
-    let disc_number = tags
+    let mut disc_number = tags
         .iter()
         .find_map(|tag| {
             tag.disk()
                 .filter(|number| *number > 0)
                 .map(|number| number as i64)
                 .or_else(|| {
-                    // Vorbis comments commonly encode DISCNUMBER as "2/2".
-                    // Lofty's Accessor::disk parses only a plain integer, so
-                    // retain the leading index through the generic item.
                     tag.get_string(&ItemKey::DiscNumber)
                         .and_then(parse_tag_index)
                 })
         })
         .or(guess_disc);
-    let release_date = tags
+    let mut release_date = tags
         .iter()
         .filter_map(read_tag_date)
         .max_by_key(|date| crate::db::text::date_precision(date));
-    let lyrics = tags
+    let mut lyrics = tags
         .iter()
         .find_map(|tag| tag.get_string(&ItemKey::Lyrics))
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let bpm = tags.iter().find_map(read_bpm);
+    let mut bpm = tags.iter().find_map(read_bpm);
 
     let mut duration_ms = tagged.properties().duration().as_millis() as i64;
     let mut mp3_seek_header = None;
@@ -1150,6 +1323,31 @@ fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMe
             mp3_seek_header = counted.seek_header.map(Box::new);
         }
     }
+
+    // A partially parsed FLAC is nearly as harmful as a rejected one: missing
+    // TITLE/ARTIST/ALBUM makes matching and album display fall back to folder
+    // names. Ask ffprobe only when one of those core fields is absent.
+    let is_flac = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("flac"));
+    if (tags.is_empty() || (is_flac && (raw_title.is_none() || artist.is_none() || album.is_none())))
+        && let Some(fallback) = ffprobe_metadata(path)
+    {
+        raw_title = raw_title.or(fallback.title);
+        artist = artist.or(fallback.artist);
+        album = album.or(fallback.album);
+        genre = genre.or(fallback.genre);
+        track_number = track_number.or(fallback.track_number);
+        disc_number = disc_number.or(fallback.disc_number);
+        release_date = release_date.or(fallback.release_date);
+        lyrics = lyrics.or(fallback.lyrics);
+        bpm = bpm.or(fallback.bpm);
+        if duration_ms <= 0 {
+            duration_ms = fallback.duration_ms.unwrap_or(0);
+        }
+    }
+
     if duration_ms <= 0 {
         // lofty can't time some containers (WMA/ASF, WebM): ask ffmpeg.
         duration_ms = ffmpeg_duration_ms(path).unwrap_or(0);
@@ -1616,5 +1814,45 @@ mod mp3_frames {
             duration_ms: ms as i64,
             seek_header,
         })
+    }
+}
+
+
+#[cfg(test)]
+mod ffprobe_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn parses_flac_vorbis_tags_from_ffprobe_json() {
+        let value = serde_json::json!({
+            "streams": [
+                {"codec_type": "audio", "duration": "42.125", "tags": {"encoder": "flac"}}
+            ],
+            "format": {
+                "duration": "42.125",
+                "tags": {
+                    "TITLE": "Song",
+                    "ARTIST": "Artist",
+                    "ALBUM": "Album",
+                    "GENRE": "Electronic",
+                    "DATE": "2024-05-06",
+                    "TRACK": "7/12",
+                    "DISC": "2/2",
+                    "BPM": "123.5",
+                    "LYRICS": "hello"
+                }
+            }
+        });
+        let meta = ffprobe_metadata_value(&value).expect("metadata");
+        assert_eq!(meta.title.as_deref(), Some("Song"));
+        assert_eq!(meta.artist.as_deref(), Some("Artist"));
+        assert_eq!(meta.album.as_deref(), Some("Album"));
+        assert_eq!(meta.genre.as_deref(), Some("Electronic"));
+        assert_eq!(meta.release_date.as_deref(), Some("2024-05-06"));
+        assert_eq!(meta.track_number, Some(7));
+        assert_eq!(meta.disc_number, Some(2));
+        assert_eq!(meta.bpm, Some(123.5));
+        assert_eq!(meta.lyrics.as_deref(), Some("hello"));
+        assert_eq!(meta.duration_ms, Some(42_125));
     }
 }
