@@ -7,6 +7,7 @@ import { test } from "node:test";
 import {
   computeMixFacets,
   computeMixTotals,
+  mixGenresOf,
   parseMixSelection,
   pickCoverTracks,
   pruneMixSelection,
@@ -139,4 +140,44 @@ test("generi spariti dalla libreria tolti dalla selezione", () => {
   assert.deepEqual(pruneMixSelection(sel, (k) => known.has(k)).genres, ["rock"]);
   const same = { genres: ["rock"], moods: [], matchAll: false };
   assert.equal(pruneMixSelection(same, (k) => known.has(k)), same);
+});
+
+test("alias genres share one chip and their counts merge", () => {
+  const tracks = [
+    { genres: ["Drum & Bass"] },
+    { genre: "Drum and Bass" },
+    { genre: "dnb; Rhythm & Blues" },
+    { genres: ["R&B"] },
+    { genre: "Hip Hop" },
+    { genre: "hip-hop" },
+  ];
+  const chips = tracks.map((t) => mixGenresOf(t));
+  const keys = chips.map((c) => c.map((x) => x.key));
+  assert.equal(keys[0][0], keys[1][0], "Drum & Bass = Drum and Bass");
+  assert.equal(keys[2][0], keys[0][0], "dnb = Drum and Bass");
+  assert.equal(keys[2][1], keys[3][0], "Rhythm & Blues = R&B");
+  assert.equal(keys[4][0], keys[5][0]);
+  assert.equal(chips[0][0].label, "Drum and Bass");
+  assert.equal(chips[3][0].label, "R&B");
+
+  const totals = computeMixTotals(
+    keys.map((genres) => ({ genres, moods: [], durationMs: 1000 })),
+  );
+  assert.equal(totals.genres.get(keys[0][0]), 3);
+  assert.equal(totals.genres.get(keys[3][0]), 2);
+  assert.equal(totals.genres.size, 3);
+});
+
+test("a track with two aliases of one genre counts once", () => {
+  assert.equal(mixGenresOf({ genre: "Drum & Bass; Drum and Bass" }).length, 1);
+  assert.deepEqual(mixGenresOf({ genre: "" }), []);
+  // Album genre as fallback.
+  assert.equal(mixGenresOf({ genre: null }, { genre: "R&B" })[0].label, "R&B");
+});
+
+test("selections saved with the old keys map onto the label keys", () => {
+  const sel = parseMixSelection(
+    JSON.stringify({ genres: ["drum&bass", "drumandbass", "hiphop", NONE], moods: [] }),
+  );
+  assert.deepEqual(sel.genres, [mixGenresOf({ genre: "Drum and Bass" })[0].key, "hiphop", NONE]);
 });

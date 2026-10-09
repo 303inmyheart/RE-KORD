@@ -11,10 +11,16 @@
  * - moods: **any** chosen mood ("Almeno uno") or **all** of them ("Tutti insieme");
  * - genres and moods together: the track must pass both.
  */
+import {
+  canonicalGenreLabel,
+  genreLabelKey,
+  trackGenres,
+  type GenreSource,
+} from "./genres";
 import { NO_GENRE_KEY, TRACK_MOOD_IDS, type TrackMoodId } from "./trackMoods";
 
 export type MixEntry = {
-  /** Genre keys (`normalizeGenreKey`), or `[NO_GENRE_KEY]`. */
+  /** Genre chip keys (`genreLabelKey`), or `[NO_GENRE_KEY]`. */
   genres: readonly string[];
   moods: readonly TrackMoodId[];
   durationMs: number;
@@ -158,6 +164,25 @@ export function pickCoverTracks<T extends { album_id: number | null }>(
   return out;
 }
 
+/**
+ * Genre chips of one track (album genre as fallback): one per label *as
+ * shown*, keyed by `genreLabelKey` like the album page, so aliases the hub
+ * keeps apart ("Drum & Bass" / "Drum and Bass", "Rhythm & Blues" / "R&B")
+ * are one chip and their counts merge. Empty when the track has no genre.
+ */
+export function mixGenresOf(
+  track: GenreSource | null | undefined,
+  album?: GenreSource | null,
+): Array<{ key: string; label: string }> {
+  const out: Array<{ key: string; label: string }> = [];
+  for (const g of trackGenres(track, album)) {
+    const key = genreLabelKey(g);
+    if (!key || out.some((c) => c.key === key)) continue;
+    out.push({ key, label: canonicalGenreLabel(g) });
+  }
+  return out;
+}
+
 /** Keep only choices that still exist (renamed genre, mood list change). */
 export function pruneMixSelection(
   sel: MixSelection,
@@ -173,8 +198,18 @@ export function parseMixSelection(raw: string | null | undefined): MixSelection 
   if (!raw) return EMPTY_MIX;
   try {
     const v = JSON.parse(raw) as Partial<Record<keyof MixSelection, unknown>>;
+    // Selections saved before chips were keyed by label used
+    // `normalizeGenreKey`: map them onto the label key ("drum&bass" →
+    // "drumandbass"), which is the same for every other genre.
     const genres = Array.isArray(v.genres)
-      ? [...new Set(v.genres.filter((g): g is string => typeof g === "string" && g !== ""))]
+      ? [
+          ...new Set(
+            v.genres
+              .filter((g): g is string => typeof g === "string" && g !== "")
+              .map((g) => (g === NO_GENRE_KEY ? g : genreLabelKey(g)))
+              .filter((g) => g !== ""),
+          ),
+        ]
       : [];
     const moods = Array.isArray(v.moods)
       ? [

@@ -15,11 +15,11 @@
   import UiIcon from "../../icons/UiIcon.svelte";
   import { coverUrlFor, type Album, type Track } from "../../../lib/api";
   import { formatTotalDuration } from "../../../lib/collectionInfo";
-  import { normalizeGenreKey, trackGenres } from "../../../lib/genres";
   import { t, tp } from "../../../lib/i18n.svelte";
   import {
     computeMixFacets,
     computeMixTotals,
+    mixGenresOf,
     parseMixSelection,
     pickCoverTracks,
     pruneMixSelection,
@@ -55,7 +55,7 @@
   let loadedKey = STORE_PREFIX + (session.activeAccountId || "default");
   const initial = readSaved(loadedKey);
 
-  /** Selected genre keys (`normalizeGenreKey`) or NO_GENRE_KEY. */
+  /** Selected genre chip keys (`genreLabelKey`) or NO_GENRE_KEY. */
   let mixGenres = $state<string[]>([...initial.genres]);
   let mixMoods = $state<TrackMoodId[]>([...initial.moods]);
   let mixMatchAll = $state(initial.matchAll);
@@ -95,20 +95,15 @@
 
   const albumById = $derived(new Map<number, Album>(session.allAlbums.map((a) => [a.id, a])));
 
-  /** Genre keys per track (album genre as fallback) + first label seen per key. */
+  /** Genre chip keys per track (album genre as fallback, aliases merged) + label per key. */
   const genreIndex = $derived.by(() => {
     const keys = new Map<number, string[]>();
     const labels = new Map<string, string>();
     for (const tr of session.catalogTracks) {
       const album = tr.album_id != null ? albumById.get(tr.album_id) : null;
-      const trackKeys: string[] = [];
-      for (const label of trackGenres(tr, album)) {
-        const key = normalizeGenreKey(label);
-        if (!key || trackKeys.includes(key)) continue;
-        trackKeys.push(key);
-        if (!labels.has(key)) labels.set(key, label);
-      }
-      keys.set(tr.id, trackKeys.length ? trackKeys : [NO_GENRE_KEY]);
+      const chips = mixGenresOf(tr, album);
+      for (const c of chips) if (!labels.has(c.key)) labels.set(c.key, c.label);
+      keys.set(tr.id, chips.length ? chips.map((c) => c.key) : [NO_GENRE_KEY]);
     }
     return { keys, labels };
   });
