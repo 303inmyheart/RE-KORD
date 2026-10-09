@@ -170,13 +170,6 @@ export function serializeTrackGenres(genres: readonly string[] | null | undefine
   return s || null;
 }
 
-/** Whether the field holds `genreToken` (same key: spelling does not matter). */
-export function trackHasGenre(raw: string | null | undefined, genreToken: string): boolean {
-  const key = normalizeGenreKey(genreToken.trim());
-  if (!key) return false;
-  return parseTrackGenres(raw).some((g) => normalizeGenreKey(g) === key);
-}
-
 export function formatTrackGenresForDisplay(raw: string | null | undefined): string {
   const g = parseTrackGenres(raw).map(canonicalGenreLabel);
   return g.length ? g.join(" · ") : "";

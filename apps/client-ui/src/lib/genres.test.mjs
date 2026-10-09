@@ -12,7 +12,6 @@ import {
   genreLabelKey,
   parseTrackGenres,
   serializeTrackGenres,
-  trackHasGenre,
 } from "./genres.ts";
 
 test("niente genere: lista vuota, non una lista con la stringa vuota", () => {
@@ -51,11 +50,11 @@ test("un giro di andata e ritorno non cambia il campo", () => {
 });
 
 test("il filtro per genere ignora maiuscole e spazi", () => {
-  assert.equal(trackHasGenre("Techno; Acid", "acid"), true);
-  assert.equal(trackHasGenre("Techno; Acid", "  TECHNO "), true);
-  assert.equal(trackHasGenre("Techno; Acid", "house"), false);
+  assert.equal(fieldHasGenreLabel("Techno; Acid", "acid"), true);
+  assert.equal(fieldHasGenreLabel("Techno; Acid", "  TECHNO "), true);
+  assert.equal(fieldHasGenreLabel("Techno; Acid", "house"), false);
   // Un token vuoto non deve pescare tutta la libreria.
-  assert.equal(trackHasGenre("Techno", "  "), false);
+  assert.equal(fieldHasGenreLabel("Techno", "  "), false);
 });
 
 test("a schermo i generi si separano col punto in mezzo", () => {
