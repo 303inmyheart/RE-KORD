@@ -99,7 +99,17 @@ fn options(req: ReadRequest, picture: bool) -> ParseOptions {
 fn lofty_read(path: &Path, opts: ParseOptions) -> lofty::error::Result<lofty::file::TaggedFile> {
     // The content decides the format (a `.m4a` that is really WebM, a FLAC
     // with an ID3 header); the extension is only the fallback.
-    Probe::open(path)?.options(opts).guess_file_type()?.read()
+    // A parser bug on one odd file must not take the scan (or the backfill,
+    // which would retry the same batch at every start) down with it.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Probe::open(path)?.options(opts).guess_file_type()?.read()
+    }))
+    .unwrap_or_else(|_| {
+        tracing::warn!(path = %path.display(), "tag reader panicked; file skipped");
+        Err(lofty::error::LoftyError::new(
+            lofty::error::ErrorKind::UnknownFormat,
+        ))
+    })
 }
 
 /// Read `path` once: tags and/or the picture and/or the properties.
