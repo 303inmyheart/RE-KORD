@@ -223,3 +223,43 @@ async fn settings_reread_and_job_progress() {
     assert_eq!(track(&lib, "01 - one.mp3")["title"], "Tagged One");
     assert_eq!(status(&hub).await["overrideStudio"], false);
 }
+
+/// A scan whose request goes away (closed admin tab: the handler's future
+/// is dropped) still releases the scan lock and its sleep-prevention
+/// activity when the work ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_scan_request_still_releases_the_scan_lock() {
+    let hub = Hub::new("scanlease");
+    for a in 0..30 {
+        for t in 0..40 {
+            let p = hub.root.join(format!("Artist {a}/Album/{t:02} - x.mp3"));
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, mp3(&format!("T{t}"), "Rock")).unwrap();
+        }
+    }
+    let state = hub.state.clone();
+    let task = tokio::spawn(async move {
+        let _ = state
+            .run_scan(rekord_core::scan::ScanOptions {
+                mode: rekord_core::scan::ScanMode::Full,
+                ..Default::default()
+            })
+            .await;
+    });
+    for _ in 0..200 {
+        if hub.state.is_scanning() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    task.abort();
+    let _ = task.await;
+    for _ in 0..600 {
+        if !hub.state.is_scanning() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(!hub.state.is_scanning(), "scan lock stuck");
+    assert_eq!(hub.state.power.status().active_jobs, 0, "activity stuck");
+}

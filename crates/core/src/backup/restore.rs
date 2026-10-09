@@ -241,12 +241,11 @@ pub async fn restore_backup_zip(
         }
         fs::write(&dest, settings.as_bytes())?;
         // Sleep prevention follows the restored settings at once.
-        let power = {
+        {
             let mut cfg = state.config.lock().unwrap();
             cfg.reload_power_settings();
-            cfg.power
-        };
-        state.power.configure(power);
+            state.power.configure(cfg.power);
+        }
     }
     // Legacy v2 machine config: library root fallback plus Discogs token,
     // Cloudflare login and cookies (only filled where this hub has none).
@@ -606,18 +605,20 @@ pub async fn restore_backup_zip(
 
     // Full library scan then re-link favorites/playlists
     info!(root = %music_root.display(), "restore: scanning library");
-    if !state.try_begin_scan() {
+    let Some(lease) = state.try_scan_lease() else {
         bail!("could not start scan after restore");
-    }
+    };
     let db = state.db.clone();
     let root = music_root.clone();
     let scan_opts = scan::ScanOptions {
         embedded: state.embedded_options(),
         ..Default::default()
     };
-    let scan_result =
-        tokio::task::spawn_blocking(move || scan::scan_library_opts(&db, &root, scan_opts)).await;
-    state.end_scan();
+    let scan_result = tokio::task::spawn_blocking(move || {
+        let _lease = lease;
+        scan::scan_library_opts(&db, &root, scan_opts)
+    })
+    .await;
     let report = match scan_result {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => return Err(e),

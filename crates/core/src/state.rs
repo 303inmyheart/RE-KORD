@@ -106,6 +106,14 @@ impl AppState {
         acquired
     }
 
+    /// The scan lock as a value that releases it when dropped. Moved into the
+    /// blocking work, it ends when the work does, even when the request that
+    /// started it is gone (a closed admin tab drops the handler's future, and
+    /// the lock, the "scanning" flag and the sleep prevention would stay).
+    pub fn try_scan_lease(&self) -> Option<ScanLease> {
+        self.try_begin_scan().then(|| ScanLease(self.clone()))
+    }
+
     pub fn end_scan(&self) {
         drop(self.scan_activity.lock().unwrap().take());
         let started = self.scan_generations.started.load(Ordering::SeqCst);
@@ -226,9 +234,9 @@ impl AppState {
     pub async fn run_scan(&self, mut opts: scan::ScanOptions) -> anyhow::Result<scan::ScanReport> {
         let mode = opts.mode;
         opts.embedded = self.embedded_options();
-        if !self.try_begin_scan() {
+        let Some(lease) = self.try_scan_lease() else {
             anyhow::bail!(SCAN_BUSY);
-        }
+        };
         {
             let data_dir = self.config.lock().unwrap().data_dir.clone();
             crate::diagnostics::log_activity(
@@ -246,7 +254,6 @@ impl AppState {
             cfg.music_root.clone()
         };
         let Some(root) = root else {
-            self.end_scan();
             anyhow::bail!("music_root not set");
         };
         let db = self.db.clone();
@@ -259,6 +266,7 @@ impl AppState {
             false,
         );
         let result = tokio::task::spawn_blocking(move || {
+            let _lease = lease;
             job.message_coded(
                 "scan.indexing",
                 serde_json::Value::Null,
@@ -304,7 +312,6 @@ impl AppState {
             Ok(report)
         })
         .await;
-        self.end_scan();
         match result {
             Ok(inner) => inner,
             Err(e) => Err(anyhow::anyhow!(e)),
@@ -323,20 +330,23 @@ impl AppState {
             .music_root
             .clone()
             .ok_or_else(|| anyhow::anyhow!("music_root not set"))?;
-        while !self.try_begin_scan() {
+        let lease = loop {
+            if let Some(lease) = self.try_scan_lease() {
+                break lease;
+            }
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        }
+        };
         let db = self.db.clone();
         let data_dir = self.config.lock().unwrap().data_dir.clone();
         let rel = rel_dir.to_string();
         let embedded = self.embedded_options();
         let result = tokio::task::spawn_blocking(move || {
+            let _lease = lease;
             let report = scan::scan_subtree(&db, &root, &rel, &embedded)?;
             post_scan_metadata(&db, &data_dir, &root);
             Ok::<_, anyhow::Error>(report.index_epoch)
         })
         .await;
-        self.end_scan();
         match result {
             Ok(inner) => inner,
             Err(e) => Err(anyhow::anyhow!(e)),
@@ -419,5 +429,14 @@ fn post_scan_metadata(db: &crate::db::Db, data_dir: &std::path::Path, root: &std
             }
         }
         Err(e) => warn!(error = %e, "sidecar metadata after scan failed"),
+    }
+}
+
+/// See [`AppState::try_scan_lease`].
+pub struct ScanLease(AppState);
+
+impl Drop for ScanLease {
+    fn drop(&mut self) {
+        self.0.end_scan();
     }
 }

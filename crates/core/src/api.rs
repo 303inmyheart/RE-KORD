@@ -1201,9 +1201,9 @@ async fn sync_legacy_meta(
         return err(StatusCode::NOT_FOUND, "legacy_data_not_found");
     }
     // Under the scan lock: a scan rewrites the catalog the import links to.
-    if !state.try_begin_scan() {
+    let Some(lease) = state.try_scan_lease() else {
         return err(StatusCode::CONFLICT, crate::state::SCAN_BUSY);
-    }
+    };
     let db = state.db.clone();
     let job = (!q.dry_run).then(|| {
         state.jobs.start_coded(
@@ -1221,6 +1221,7 @@ async fn sync_legacy_meta(
         ..Default::default()
     };
     let out = tokio::task::spawn_blocking(move || {
+        let _lease = lease;
         let out = backup::run_legacy_import(&db, &data_dir, &root, opts);
         if let Some(job) = job {
             match &out {
@@ -1250,7 +1251,6 @@ async fn sync_legacy_meta(
         out
     })
     .await;
-    state.end_scan();
     match out {
         Ok(Ok(report)) => ok(report).into_response(),
         Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
