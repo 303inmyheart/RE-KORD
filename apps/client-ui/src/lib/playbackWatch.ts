@@ -55,6 +55,12 @@ export type WatchOptions = {
   busyCapMs: number;
   /** No progress for this long despite every recovery: stop trying. */
   giveUpMs: number;
+  /**
+   * A gap this long between two checks is a suspend / clock jump, not a
+   * stall (hidden pages still check about once a minute): the stall clock
+   * restarts instead of acting on the time spent asleep.
+   */
+  clockJumpMs: number;
 };
 
 export const DEFAULT_WATCH_OPTIONS: WatchOptions = {
@@ -66,6 +72,7 @@ export const DEFAULT_WATCH_OPTIONS: WatchOptions = {
   healthyMs: 20_000,
   busyCapMs: 25_000,
   giveUpMs: 10 * 60_000,
+  clockJumpMs: 3 * 60_000,
 };
 
 export class PlaybackWatch {
@@ -77,6 +84,7 @@ export class PlaybackWatch {
   private nextAttemptAt = 0;
   private lastRecoveryAt = 0;
   private stuckSince = 0;
+  private lastCheckAt = Number.NaN;
 
   constructor(opts: Partial<WatchOptions> = {}) {
     this.opts = { ...DEFAULT_WATCH_OPTIONS, ...opts };
@@ -91,6 +99,7 @@ export class PlaybackWatch {
     this.nextAttemptAt = 0;
     this.lastRecoveryAt = 0;
     this.stuckSince = 0;
+    this.lastCheckAt = Number.NaN;
   }
 
   /** Recoveries tried since playback was last healthy. */
@@ -101,6 +110,16 @@ export class PlaybackWatch {
   check(now: number, s: WatchSample, urgent = false): WatchAction {
     if (!s.wantsPlay) {
       this.reset(now);
+      return { kind: "none" };
+    }
+    const gap = Number.isNaN(this.lastCheckAt) ? 0 : now - this.lastCheckAt;
+    this.lastCheckAt = now;
+    if (gap >= this.opts.clockJumpMs) {
+      // Woken from suspend: what was stuck before it is not measured.
+      this.lastProgressAt = now;
+      this.stuckSince = 0;
+      this.lastTime = s.currentTime;
+      this.busySince = 0;
       return { kind: "none" };
     }
     if (s.busy) {
@@ -126,15 +145,17 @@ export class PlaybackWatch {
     if (!this.stuckSince) this.stuckSince = this.lastProgressAt;
     if (now < this.nextAttemptAt) return { kind: "none" };
 
+    // Only after at least one recovery was tried; checked before `ended`
+    // too, or an `ended` the player keeps ignoring would loop forever.
+    if (this.attempts > 0 && now - this.stuckSince >= this.opts.giveUpMs) {
+      this.reset(now);
+      return { kind: "giveUp", stuckMs };
+    }
+
     if (s.ended) {
       if (stuckMs < this.opts.endedMs) return { kind: "none" };
       this.note(now);
       return { kind: "advance", stuckMs };
-    }
-
-    if (now - this.stuckSince >= this.opts.giveUpMs) {
-      this.reset(now);
-      return { kind: "giveUp", stuckMs };
     }
 
     if (s.paused && !s.error) {

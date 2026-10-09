@@ -128,3 +128,28 @@ test("nothing plays for ten minutes despite retries: give up", () => {
   }
   assert.equal(last.kind, "giveUp");
 });
+
+test("waking from a long suspend is not a stall, and never an immediate give-up", () => {
+  const w = new PlaybackWatch();
+  w.reset(0);
+  w.check(0, sample({ currentTime: 10 }));
+  // 15 minutes asleep, position unchanged at the first check after waking.
+  const t = 15 * 60_000;
+  assert.equal(w.check(t, sample({ currentTime: 10 })).kind, "none");
+  // Still stuck afterwards: normal recovery, from attempt 1.
+  const r = w.check(t + 12_000, sample({ currentTime: 10 }));
+  assert.equal(r.kind, "reload");
+  assert.equal(r.attempt, 1);
+});
+
+test("an `ended` the player keeps ignoring ends in a give-up", () => {
+  const w = new PlaybackWatch();
+  w.reset(0);
+  const s = sample({ ended: true, paused: true, currentTime: 200 });
+  let last;
+  for (let t = 0; t <= 12 * 60_000; t += 5_000) {
+    last = w.check(t, s);
+    if (last.kind === "giveUp") break;
+  }
+  assert.equal(last.kind, "giveUp");
+});
