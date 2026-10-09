@@ -132,6 +132,9 @@ fn find_ci(hay: &str, needle: &str) -> Option<usize> {
 
 /// Attributes of a start tag; returns them, the bytes consumed (through `>`)
 /// and whether the tag closed itself.
+/// Attributes kept per tag.
+const MAX_ATTRS: usize = 32;
+
 fn parse_attrs(s: &str) -> (Vec<(String, String)>, usize, bool) {
     let b = s.as_bytes();
     let mut i = 0;
@@ -187,7 +190,11 @@ fn parse_attrs(s: &str) -> (Vec<(String, String)>, usize, bool) {
             }
         }
         if !key.is_empty() {
-            attrs.push((key, value));
+            // Real feeds use a handful per tag; a hostile one must not
+            // turn a few MB into millions of allocations.
+            if attrs.len() < MAX_ATTRS {
+                attrs.push((key, value));
+            }
         }
     }
     (attrs, b.len(), self_closing)

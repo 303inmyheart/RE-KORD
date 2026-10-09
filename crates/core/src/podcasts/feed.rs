@@ -55,6 +55,13 @@ impl Node {
 /// Parse up to `limit` episodes (feed order: newest first in practice; the
 /// result is sorted by date when dates are known). `base` resolves relative
 /// URLs.
+/// Element nesting followed (real feeds go 5–6 levels deep): deeper tags are
+/// treated as empty, so a hostile feed cannot make every end tag scan a
+/// stack of millions.
+const MAX_DEPTH: usize = 64;
+/// Children kept per element of an item (enclosures, chapters, categories…).
+const MAX_CHILDREN: usize = 256;
+
 pub fn parse_feed(body: &[u8], base: &url::Url, limit: usize) -> Option<Feed> {
     let text = decode_text(body);
     if !looks_like_feed(text.as_bytes()) {
@@ -81,9 +88,11 @@ pub fn parse_feed(body: &[u8], base: &url::Url, limit: usize) -> Option<Feed> {
                         attrs,
                         ..Default::default()
                     };
-                    if self_closing {
+                    if self_closing || item_stack.len() >= MAX_DEPTH {
                         if let Some(parent) = item_stack.last_mut() {
-                            parent.children.push(node);
+                            if parent.children.len() < MAX_CHILDREN {
+                                parent.children.push(node);
+                            }
                         }
                     } else {
                         item_stack.push(node);
@@ -100,7 +109,7 @@ pub fn parse_feed(body: &[u8], base: &url::Url, limit: usize) -> Option<Feed> {
                         feed.artwork_url = resolve(base, href).or(feed.artwork_url.take());
                     }
                 }
-                if !self_closing {
+                if !self_closing && path.len() < MAX_DEPTH {
                     path.push(name);
                 }
             }
@@ -110,11 +119,18 @@ pub fn parse_feed(body: &[u8], base: &url::Url, limit: usize) -> Option<Feed> {
                     if let Some(pos) = item_stack.iter().rposition(|n| n.name == name) {
                         while item_stack.len() > pos + 1 {
                             let child = item_stack.pop().unwrap();
-                            item_stack.last_mut().unwrap().children.push(child);
+                            let parent = item_stack.last_mut().unwrap();
+                            if parent.children.len() < MAX_CHILDREN {
+                                parent.children.push(child);
+                            }
                         }
                         let node = item_stack.pop().unwrap();
                         match item_stack.last_mut() {
-                            Some(parent) => parent.children.push(node),
+                            Some(parent) => {
+                                if parent.children.len() < MAX_CHILDREN {
+                                    parent.children.push(node);
+                                }
+                            }
                             None => {
                                 items.push(node);
                                 if items.len() >= collect_cap {
@@ -418,6 +434,37 @@ pub fn parse_date(raw: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostile_nesting_stays_linear_and_bounded() {
+        let base = url::Url::parse("https://example.com/feed.xml").unwrap();
+        let body = format!(
+            "<rss><channel>{}{}</channel></rss>",
+            "<a>".repeat(200_000),
+            "</b>".repeat(200_000)
+        );
+        let t = std::time::Instant::now();
+        let _ = parse_feed(body.as_bytes(), &base, 10);
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            t.elapsed()
+        );
+
+        let body = format!(
+            "<rss><channel><item><title>x</title><enclosure url=\"https://example.com/a.mp3\" type=\"audio/mpeg\"/>{}{}</item></channel></rss>",
+            "<a/>".repeat(100_000),
+            "<d>".repeat(100_000)
+        );
+        let t = std::time::Instant::now();
+        let feed = parse_feed(body.as_bytes(), &base, 10).unwrap();
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            t.elapsed()
+        );
+        assert_eq!(feed.episodes.len(), 1);
+    }
 
     #[test]
     fn durations() {
