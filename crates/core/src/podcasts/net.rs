@@ -106,10 +106,10 @@ pub async fn resolve_allowed_all(
     )
     .await
     .map_err(|_| PodcastError::Timeout)?
-    .map_err(|e| PodcastError::Fetch(format!("resolve {host}: {e}")))?
+    .map_err(|_| PodcastError::Fetch("could not resolve the host".into()))?
     .collect();
     if addrs.is_empty() {
-        return Err(PodcastError::Fetch(format!("{host} did not resolve")));
+        return Err(PodcastError::Fetch("could not resolve the host".into()));
     }
     // One internal answer poisons the name (split horizon / rebinding).
     if addrs.iter().any(|a| !policy.allows(a.ip())) {
@@ -143,6 +143,8 @@ pub async fn open(req: Request<'_>) -> Result<Opened, PodcastError> {
         let mut builder = reqwest::Client::builder()
             .user_agent(user_agent())
             .connect_timeout(CONNECT_TIMEOUT)
+            // A system proxy would resolve names itself, past the checks.
+            .no_proxy()
             .redirect(reqwest::redirect::Policy::none());
         if let Some(t) = req.timeout {
             builder = builder.timeout(t);
@@ -153,12 +155,15 @@ pub async fn open(req: Request<'_>) -> Result<Opened, PodcastError> {
         let client = builder
             .build()
             .map_err(|e| PodcastError::Fetch(e.to_string()))?;
-        let res = client
-            .get(url.clone())
-            .headers(req.headers.clone())
-            .send()
-            .await
-            .map_err(classify_reqwest)?;
+        let send = client.get(url.clone()).headers(req.headers.clone()).send();
+        let res = match req.timeout {
+            Some(_) => send.await,
+            // Streams: no whole-request limit, but the answer must start.
+            None => tokio::time::timeout(HEADERS_TIMEOUT, send)
+                .await
+                .map_err(|_| PodcastError::Timeout)?,
+        }
+        .map_err(classify_reqwest)?;
         if res.status().is_redirection() {
             let Some(loc) = res
                 .headers()
@@ -180,11 +185,15 @@ pub async fn open(req: Request<'_>) -> Result<Opened, PodcastError> {
     Err(PodcastError::Fetch("too many redirects".into()))
 }
 
+/// Longest wait for an upstream's response headers on a stream.
+const HEADERS_TIMEOUT: Duration = Duration::from_secs(20);
+
 pub fn classify_reqwest(e: reqwest::Error) -> PodcastError {
     if e.is_timeout() {
         PodcastError::Timeout
     } else {
-        PodcastError::Fetch(e.to_string())
+        // Upstream URLs (signed, tokened) stay on the hub.
+        PodcastError::Fetch(e.without_url().to_string())
     }
 }
 
