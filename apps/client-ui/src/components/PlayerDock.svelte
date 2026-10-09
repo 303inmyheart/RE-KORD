@@ -578,6 +578,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* Buttons centre their text: a short album name inside its 3rem
+       minimum would float away from the separator. */
+    text-align: start;
   }
 
   /* The album gives way first (it shrinks 6 times faster), the artist keeps
