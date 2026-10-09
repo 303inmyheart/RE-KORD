@@ -14,12 +14,15 @@ import { existsSync } from "node:fs";
 import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("..", import.meta.url).pathname;
+// fileURLToPath: a checkout path with spaces (or on Windows) stays usable.
+const root = fileURLToPath(new URL("..", import.meta.url));
 const extra = process.argv.slice(2).filter((a) => a !== "--");
+const dataDirGiven = extra.some((a) => a === "--data-dir" || a.startsWith("--data-dir="));
 
 function dataDirArgs() {
-  if (extra.includes("--data-dir") || process.env.REKORD_DATA_DIR) return [];
+  if (dataDirGiven || process.env.REKORD_DATA_DIR) return [];
   if (platform() === "linux") {
     const appDir = join(homedir(), ".local/share/app.rekord.server/hub");
     if (existsSync(appDir)) return ["--data-dir", appDir];
@@ -61,6 +64,12 @@ function run(name, cmd, args, cwd = root) {
       for (const line of lines) process.stdout.write(tag + line + "\n");
     });
   }
+  // Spawn failure (vite not installed, cargo not on PATH): stop the others
+  // instead of crashing and leaving the detached hub running.
+  child.on("error", (e) => {
+    process.stdout.write(`${tag}${e.message}\n`);
+    if (!stopping) stop(1);
+  });
   child.on("exit", (code, signal) => {
     process.stdout.write(`${tag}exited (${signal ?? code})\n`);
     if (!stopping) stop(code ?? 1);
@@ -68,11 +77,20 @@ function run(name, cmd, args, cwd = root) {
   children.push(child);
 }
 
+function running(child) {
+  return child.exitCode === null && child.signalCode === null && child.pid !== undefined;
+}
+
 function stop(code = 0) {
-  if (stopping) return;
+  if (stopping) {
+    // Second Ctrl+C: whatever is still there goes now.
+    for (const child of children) if (running(child)) child.kill("SIGKILL");
+    return;
+  }
   stopping = true;
+  process.exitCode = code;
   for (const child of children) {
-    if (child.exitCode !== null) continue;
+    if (!running(child)) continue;
     // `cargo run` execs rekord-server and vite stops its own esbuild helper,
     // so the direct child is enough (a group kill made vite log EPIPE noise).
     child.kill("SIGTERM");
@@ -82,6 +100,19 @@ function stop(code = 0) {
 
 process.on("SIGINT", () => stop(0));
 process.on("SIGTERM", () => stop(0));
+// Terminal closed: the children are detached and would not get the hangup.
+process.on("SIGHUP", () => stop(0));
+process.on("exit", () => {
+  for (const child of children) {
+    if (running(child)) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+});
 
 for (const port of [7420, 7421, 7422]) {
   if (await portInUse(port)) {
@@ -94,8 +125,9 @@ for (const port of [7420, 7421, 7422]) {
 
 const hubArgs = ["run", "-p", "rekord-server", "--", ...dataDirArgs(), ...extra];
 const dataIdx = hubArgs.indexOf("--data-dir");
+const dataArg = hubArgs.find((a) => a.startsWith("--data-dir="));
 console.log(
-  `RE-KORD dev hub — data: ${dataIdx >= 0 ? hubArgs[dataIdx + 1] : process.env.REKORD_DATA_DIR ?? "rekord-server default"}`,
+  `RE-KORD dev hub — data: ${dataIdx >= 0 ? hubArgs[dataIdx + 1] : dataArg ? dataArg.slice(11) : process.env.REKORD_DATA_DIR ?? "rekord-server default"}`,
 );
 console.log("  app:   http://localhost:7422/");
 console.log("  admin: http://localhost:7421/admin/\n");

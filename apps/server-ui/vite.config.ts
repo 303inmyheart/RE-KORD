@@ -8,6 +8,8 @@ export default defineConfig({
   base: "/admin/",
   server: {
     port: 7421,
+    // dev:hub prints this port: fail instead of moving to another one.
+    strictPort: true,
     proxy: {
       "/api": "http://127.0.0.1:7420",
       "/media": "http://127.0.0.1:7420",
