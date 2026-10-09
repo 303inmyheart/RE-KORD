@@ -6,6 +6,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.webkit.JavascriptInterface
 import androidx.mediarouter.app.MediaRouteChooserDialog
 import androidx.mediarouter.media.MediaRouter
@@ -76,6 +77,7 @@ class RekordCastOptionsProvider : OptionsProvider {
  */
 object RekordCast {
     private const val EVENT = "rekord:cast"
+    private const val EVENT_WAKE_MS = 10_000L
     /** Volume key step on the Cast device (0..1). */
     private const val VOLUME_STEP = 0.05
 
@@ -97,6 +99,23 @@ object RekordCast {
     private var chooser: Dialog? = null
 
     private var lastSent = ""
+
+    /**
+     * While casting the phone plays nothing, so the media service holds no wake or
+     * Wi-Fi lock for the whole session. Only a change the page must act on (track
+     * finished → load the next one, session events, load results) keeps the CPU
+     * awake for a few seconds, long enough for the page to answer the receiver.
+     */
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var lastStateKey = ""
+
+    private fun wakeBriefly() {
+        try {
+            wakeLock?.acquire(EVENT_WAKE_MS)
+        } catch (e: Exception) {
+            Logger.warn("RekordCast: wake lock unavailable: ${e.message}")
+        }
+    }
 
     /** Latest status, read synchronously by the page with `getStatus()`. */
     @Volatile
@@ -168,6 +187,10 @@ object RekordCast {
         if (initStarted) return
         initStarted = true
         appContext = context.applicationContext
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Rekord:Cast")?.apply {
+            setReferenceCounted(false)
+        }
         val gms = try {
             GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context)
         } catch (e: Exception) {
@@ -318,11 +341,19 @@ object RekordCast {
         latestStatus = json
         if (json == lastSent) return
         lastSent = json
+        // Position ticks (1 Hz) need no wake lock; state changes do.
+        val key = listOf("castState", "playerState", "idleReason", "contentId")
+            .joinToString("|") { status.opt(it)?.toString() ?: "" }
+        if (key != lastStateKey) {
+            lastStateKey = key
+            wakeBriefly()
+        }
         dispatch(JSONObject().put("type", "status").put("status", status))
     }
 
     private fun dispatch(detail: JSONObject) {
         val view = RekordMediaBridge.webView ?: return
+        if (detail.optString("type") != "status") wakeBriefly()
         // JSONObject produces a valid JS literal: it is pasted in as is.
         val script = "window.dispatchEvent(new CustomEvent('$EVENT',{detail:$detail}))"
         main.post {

@@ -179,6 +179,21 @@ object RekordMediaBridge {
         }
     }
 
+    /**
+     * The page has nothing left to do in the background (paused for a while,
+     * Cast over): pause the WebView as WryActivity would have, unless the
+     * activity is in front or a Cast session needs the page.
+     */
+    fun sleepIfHidden() {
+        main.post {
+            if (MainActivity.inFront || RekordCast.isConnected) return@post
+            if (RekordMediaService.keepWebViewAwake) return@post
+            val view = webView ?: return@post
+            view.onPause()
+            RekordLog.i("WebView paused: nothing to do in the background")
+        }
+    }
+
     private fun scheduleRetry() {
         attempts += 1
         if (attempts >= MAX_ATTEMPTS) {

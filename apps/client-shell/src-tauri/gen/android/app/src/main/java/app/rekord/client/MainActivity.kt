@@ -120,7 +120,13 @@ class MainActivity : TauriActivity() {
    * resumed immediately: the foreground service keeps the process alive, so the
    * music keeps playing with the screen off.
    */
+  override fun onResume() {
+    super.onResume()
+    inFront = true
+  }
+
   override fun onPause() {
+    inFront = false
     super.onPause()
     // Not only while a track plays: also while one is loading or reconnecting
     // (the screen locked right after tapping a track), and for a while after a
@@ -148,6 +154,13 @@ class MainActivity : TauriActivity() {
       Manifest.permission.POST_NOTIFICATIONS,
     ) == PackageManager.PERMISSION_GRANTED
     if (!granted) askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+  }
+
+  companion object {
+    /** Activity resumed (read by [RekordMediaBridge.sleepIfHidden]). */
+    @Volatile
+    var inFront = false
+      private set
   }
 
   override fun onDestroy() {

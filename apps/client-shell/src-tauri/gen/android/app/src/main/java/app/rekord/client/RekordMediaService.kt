@@ -432,7 +432,11 @@ class RekordMediaService : Service() {
         } else {
             session.setPlaybackToLocal(AudioManager.STREAM_MUSIC)
         }
-        if (rerender) latest?.let { render(it) }
+        if (rerender) {
+            latest?.let { render(it) }
+            // Cast ended with the app in the background and nothing playing here.
+            if (castTarget == null && !inForeground) RekordMediaBridge.sleepIfHidden()
+        }
     }
 
     private fun castVolume(): VolumeProviderCompat {
@@ -534,6 +538,10 @@ class RekordMediaService : Service() {
                 ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
                 inForeground = false
                 RekordLog.i("service: out of the foreground (paused for ${PAUSE_GRACE_MS / 60_000} min)")
+                // MainActivity kept the WebView running for a possible resume: with
+                // the app still in the background, let it sleep now. Every command
+                // from the notification wakes it first.
+                RekordMediaBridge.sleepIfHidden()
             }
             NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification)
         }
@@ -546,7 +554,10 @@ class RekordMediaService : Service() {
     private fun applyLocks(state: NowPlaying) {
         val now = SystemClock.elapsedRealtime()
         val silentTooLong = silentIntentSince != 0L && now - silentIntentSince > SILENT_INTENT_MAX_MS
-        val want = state.playing || (state.wantsPlay && !silentTooLong)
+        // While casting the sound comes out of the Chromecast: no stream through
+        // the phone, nothing to keep awake for a whole session (RekordCast wakes
+        // the CPU briefly on the events the page must answer).
+        val want = castTarget == null && (state.playing || (state.wantsPlay && !silentTooLong))
         if (want == locksHeld) return
         locksHeld = want
         if (want) {
