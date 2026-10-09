@@ -317,3 +317,24 @@ async fn personal_routes_stay_open_to_remote_clients() {
     assert_eq!(res.status, StatusCode::OK);
     assert!(!hub.root.join("A/B/kord-trackinfo.json").exists());
 }
+
+/// A negative grace typed in the admin form is clamped (envelope answer,
+/// not a bare 422), and what is saved is what the manager runs.
+#[tokio::test]
+async fn power_grace_is_clamped_and_applied_as_saved() {
+    let hub = Hub::new("powergrace");
+    let r = hub
+        .send(
+            req(Method::PUT, "/api/v1/system/power")
+                .json(json!({ "graceMinutes": -5 }))
+                .build(),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.json());
+    let saved = hub.state.config.lock().unwrap().power;
+    assert_eq!(
+        saved.grace_minutes,
+        rekord_core::config::PowerSettings::MIN_GRACE_MINUTES
+    );
+    assert_eq!(hub.state.power.settings(), saved);
+}

@@ -226,6 +226,18 @@ impl Inner {
         }
     }
 
+    /// When to try the lock again after a failure that may pass (a helper
+    /// killed, a transient refusal), while it is still wanted.
+    fn retry_at(&self, now: Instant) -> Option<Instant> {
+        if self.hold.is_some() || self.wanted(now).is_none() {
+            return None;
+        }
+        self.failure
+            .as_ref()
+            .filter(|f| f.err.code != ERR_UNSUPPORTED)
+            .map(|f| f.at + RETRY_AFTER)
+    }
+
     fn retry_blocked(&self, now: Instant) -> bool {
         self.failure
             .as_ref()
@@ -282,6 +294,11 @@ impl Shared {
             && inner.hold.is_some()
             && !inner.busy()
         {
+            self.arm_timer(inner);
+        }
+        // `always` (or a busy `whenActive`) after a failure: nothing else
+        // would ever call reconcile again, so a timer retries the lock.
+        if inner.retry_at(now).is_some() {
             self.arm_timer(inner);
         }
     }
@@ -422,7 +439,11 @@ impl Shared {
         let keep = inner.settings.prevent_sleep == PreventSleep::WhenActive
             && inner.hold.is_some()
             && !inner.busy();
-        match inner.deadline().filter(|_| keep) {
+        match inner
+            .deadline()
+            .filter(|_| keep)
+            .or_else(|| inner.retry_at(now))
+        {
             Some(deadline) => Some(deadline.max(now)),
             None => {
                 inner.timer = None;
@@ -445,12 +466,15 @@ impl Shared {
                     events.push(Event::LidFailed(err));
                 }
                 LockPart::Sleep => {
+                    let now = Instant::now();
                     inner.hold = None;
                     inner.failure = Some(Failure {
                         err: err.clone(),
-                        at: Instant::now(),
+                        at: now,
                     });
                     events.push(Event::Failed(err));
+                    // Arms the retry timer (the lock is not retried at once).
+                    self.reconcile(&mut inner, now, &mut events);
                 }
             }
         }
@@ -1086,6 +1110,41 @@ mod tests {
         assert_eq!(held(&st), 1);
         notifier.lost(LockPart::Sleep, InhibitError::new(ERR_FAILED, "old"));
         assert!(pm.status().inhibiting);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn always_takes_the_lock_again_after_losing_it() {
+        let (pm, st) = started(PreventSleep::Always, 10);
+        let notifier = st.notifier.lock().unwrap().clone().unwrap();
+        notifier.lost(LockPart::Sleep, InhibitError::new(ERR_FAILED, "killed"));
+        assert_eq!(held(&st), 0);
+        settle().await;
+        assert_eq!(held(&st), 0, "not retried at once");
+        tokio::time::advance(RETRY_AFTER + Duration::from_secs(1)).await;
+        settle().await;
+        assert_eq!(held(&st), 1, "retried after RETRY_AFTER");
+        assert_eq!(st.acquired.load(Ordering::SeqCst), 2);
+        assert_eq!(pm.status().error_code, None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn always_retries_a_failed_first_lock() {
+        let (pm, st) = manager();
+        *st.fail.lock().unwrap() = Some(InhibitError::new(ERR_FAILED, "transient"));
+        pm.configure(settings(PreventSleep::Always, 10));
+        pm.start(None);
+        assert_eq!(held(&st), 0);
+        *st.fail.lock().unwrap() = None;
+        tokio::time::advance(RETRY_AFTER + Duration::from_secs(1)).await;
+        settle().await;
+        assert_eq!(held(&st), 1);
+        // Unsupported is final: no timer keeps waking up for it.
+        let (pm2, st2) = manager();
+        *st2.fail.lock().unwrap() = Some(InhibitError::new(ERR_UNSUPPORTED, "no"));
+        pm2.configure(settings(PreventSleep::Always, 10));
+        pm2.start(None);
+        assert!(pm2.shared.lock().timer.is_none());
+        drop(pm);
     }
 
     #[test]

@@ -73,7 +73,9 @@ async fn get_power(
 #[serde(rename_all = "camelCase")]
 struct PowerBody {
     prevent_sleep: Option<String>,
-    grace_minutes: Option<u32>,
+    /// Signed: a negative value typed in a form is clamped, not rejected
+    /// outside the usual error envelope.
+    grace_minutes: Option<i64>,
     keep_awake_lid_closed: Option<bool>,
 }
 
@@ -98,7 +100,7 @@ async fn put_power(
         Some(Some(m)) => Some(m),
         None => None,
     };
-    let (before, next, data_dir) = {
+    let (before, next, data_dir, was_inhibiting) = {
         let mut cfg = state.config.lock().unwrap();
         let before = cfg.power;
         if cfg.power_mode_from_env && mode.is_some_and(|m| m != before.prevent_sleep) {
@@ -113,7 +115,7 @@ async fn put_power(
             next.prevent_sleep = m;
         }
         if let Some(g) = body.grace_minutes {
-            next.grace_minutes = g;
+            next.grace_minutes = g.clamp(0, i64::from(u32::MAX)) as u32;
         }
         if let Some(l) = body.keep_awake_lid_closed {
             next.keep_awake_lid_closed = l;
@@ -125,10 +127,12 @@ async fn put_power(
                 Some(e.to_string()),
             );
         }
-        (before, cfg.power, cfg.data_dir.clone())
+        // Applied under the config lock: two concurrent changes cannot leave
+        // the manager running one and the file saying the other.
+        let was_inhibiting = state.power.status().inhibiting;
+        state.power.configure(cfg.power);
+        (before, cfg.power, cfg.data_dir.clone(), was_inhibiting)
     };
-    let was_inhibiting = state.power.status().inhibiting;
-    state.power.configure(next);
     if next != before {
         crate::diagnostics::log_activity(
             &data_dir,
