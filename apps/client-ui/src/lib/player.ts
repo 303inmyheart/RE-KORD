@@ -3306,7 +3306,10 @@ class PlayerController {
 
     if (this.remote) {
       // Remote output: state and events only, the receiver does the playing.
-      this.currentTime = 0;
+      // An episode's resume point applies there too (and is consumed, so it
+      // never fires on a later local load).
+      const startAt = this.takeStartAt(track.rel_path);
+      this.currentTime = startAt;
       this.duration = track.duration_ms > 0 ? track.duration_ms / 1000 : 0;
       this.playing = autoplay;
       this.syncMediaPlaybackState();
@@ -3314,7 +3317,7 @@ class PlayerController {
       if (autoplay) this.pushRecentDeferred(track);
       this.emit();
       this.emitProgress();
-      this.remote.loadTrack(track, 0, autoplay);
+      this.remote.loadTrack(track, startAt, autoplay);
       return;
     }
 
