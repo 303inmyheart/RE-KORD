@@ -12,6 +12,8 @@ mod downloads;
 mod embedded_hub;
 #[cfg(target_os = "linux")]
 mod linux_env;
+#[cfg(desktop)]
+mod mpris;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -33,7 +35,13 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![downloads::save_download]);
+        .manage(mpris::MediaState::default())
+        .invoke_handler(tauri::generate_handler![
+            downloads::save_download,
+            mpris::media_update,
+            mpris::media_clear,
+            mpris::media_art
+        ]);
 
     // The camera is only needed to read the hub's QR code on first launch, and only
     // where there is a camera: on desktop the address is typed on the keyboard.

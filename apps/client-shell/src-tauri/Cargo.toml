@@ -39,6 +39,11 @@ rekord-core = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 anyhow = { workspace = true, optional = true }
 
+# Native media controls (MPRIS, src/mpris.rs). Already in the tree through
+# tauri-plugin-single-instance: no new crates.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
+
 [lib]
 name = "rekord_client_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

@@ -13,6 +13,11 @@
  */
 
 import { coverUrlFor, type CoverSize } from "./api";
+import {
+  pushDesktopMetadata,
+  pushDesktopPlaybackState,
+  pushDesktopPosition,
+} from "./desktopMedia";
 import { positionChanged, type SentPosition } from "./mediaPosition";
 import { platformCaps } from "./platformCaps";
 import {
@@ -134,6 +139,7 @@ export function setMediaSessionMetadata(track: MediaSessionTrack | null): void {
   // a few megabytes for a small square.
   const shade = trackCover(track, 256);
   pushNativeMetadata(track, shade ? absolute(shade) : "");
+  pushDesktopMetadata(track, shade ? absolute(shade) : "");
   if (!canUseMediaSession()) return;
   if (!track) {
     lastMetadataKey = null;
@@ -171,6 +177,7 @@ export function setMediaSessionPlaybackState(
   state: MediaSessionPlaybackState,
 ): void {
   pushNativePlaybackState(state);
+  pushDesktopPlaybackState(state);
   if (!canUseMediaSession()) return;
   if (state === lastPlaybackState) return;
   lastPlaybackState = state;
@@ -186,6 +193,7 @@ export function setMediaSessionPosition(
   playbackRate = 1,
 ): void {
   pushNativePosition(duration, position);
+  pushDesktopPosition(duration, position);
   if (!canUseMediaSession()) return;
   if (!("setPositionState" in navigator.mediaSession)) return;
   if (!Number.isFinite(duration) || duration <= 0) return;
