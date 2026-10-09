@@ -196,6 +196,29 @@ impl Db {
 }
 
 impl CatalogBatch<'_> {
+    /// Whether the row of `t` is still what the backfill read: same file
+    /// state, same place, still pending.
+    pub fn pending_track_unchanged(&self, t: &PendingTrack, version: i64) -> Result<bool> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT 1 FROM tracks
+                  WHERE id = ?1 AND rel_path = ?2 AND size = ?3 AND mtime = ?4
+                    AND album_id IS ?5 AND tags_version < ?6",
+                params![
+                    t.id,
+                    t.rel_path,
+                    t.size as i64,
+                    t.mtime,
+                    t.album_id,
+                    version
+                ],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
     /// Record that a file was looked at by tag reader `version` even though
     /// it could not be read (missing, unreadable): the next scan handles it.
     pub fn mark_tags_version(&self, track_id: i64, version: i64) -> Result<()> {

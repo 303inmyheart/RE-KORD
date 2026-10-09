@@ -88,6 +88,7 @@ pub fn request_reread(state: &AppState, override_studio: bool) -> Result<()> {
     state
         .db
         .set_meta(OVERRIDE_META_KEY, if override_studio { "1" } else { "" })?;
+    state.embedded_reread_gen.fetch_add(1, Ordering::SeqCst);
     start(state);
     Ok(())
 }
@@ -148,10 +149,10 @@ async fn run(state: &AppState) -> Result<bool> {
     if pending_tracks + pending_albums == 0 {
         return Ok(false);
     }
-    let opts = state.embedded_options();
-    let override_user = state.db.get_meta(OVERRIDE_META_KEY)?.as_deref() == Some("1");
-    let mut policy = opts.merge_policy();
-    policy.override_user = override_user && policy.prefer_embedded;
+    // Settings and the override choice are read again before every batch:
+    // a change while the job runs (priority back to Studio, reader off)
+    // must apply to the rest, not be overridden by the old choice.
+    let (mut opts, mut policy, mut gen) = current_policy(state)?;
     let job = state.jobs.start_coded(
         "embeddedTags",
         "Lettura metadati incorporati",
@@ -178,6 +179,14 @@ async fn run(state: &AppState) -> Result<bool> {
             break;
         }
         wait_while_scanning(state).await;
+        if !music_root_available(state) {
+            // Unplugged drive / unmounted share: nothing is marked as read,
+            // the rest waits for the next start.
+            warn!("embedded metadata backfill paused: music folder unavailable");
+            canceled = true;
+            break;
+        }
+        (opts, policy, gen) = current_policy(state)?;
         let db = state.db.clone();
         let opts_b = opts.clone();
         let read = tokio::task::spawn_blocking(move || tag_batch(&db, &opts_b, policy)).await??;
@@ -195,6 +204,12 @@ async fn run(state: &AppState) -> Result<bool> {
             break;
         }
         wait_while_scanning(state).await;
+        if !music_root_available(state) {
+            warn!("embedded metadata backfill paused: music folder unavailable");
+            canceled = true;
+            break;
+        }
+        opts = state.embedded_options();
         let db = state.db.clone();
         let opts_b = opts.clone();
         let (seen, found) =
@@ -208,7 +223,9 @@ async fn run(state: &AppState) -> Result<bool> {
         tokio::time::sleep(PAUSE).await;
     }
 
-    // Derived data, once, for everything this run touched.
+    // Derived data, once, for everything this run touched. Not during a
+    // scan: its covers saved but not yet recorded would look unused.
+    wait_while_scanning(state).await;
     let db = state.db.clone();
     let store = opts.cover_store.clone();
     tokio::task::spawn_blocking(move || -> Result<()> {
@@ -229,7 +246,10 @@ async fn run(state: &AppState) -> Result<bool> {
             format!("annullato dopo {} brani", counts.tracks),
         );
     } else {
-        state.db.set_meta(OVERRIDE_META_KEY, "")?;
+        // A newer request (maybe with the override) keeps its flag.
+        if state.embedded_reread_gen.load(Ordering::SeqCst) == gen {
+            state.db.set_meta(OVERRIDE_META_KEY, "")?;
+        }
         job.finish_coded(
             "embeddedTags.done",
             params,
@@ -246,6 +266,22 @@ async fn run(state: &AppState) -> Result<bool> {
         "embedded metadata backfill finished"
     );
     Ok(canceled)
+}
+
+/// Reader options and merge policy as set now, with the re-read generation
+/// they belong to.
+fn current_policy(state: &AppState) -> Result<(EmbeddedOptions, MergePolicy, u64)> {
+    let gen = state.embedded_reread_gen.load(Ordering::SeqCst);
+    let opts = state.embedded_options();
+    let override_user = state.db.get_meta(OVERRIDE_META_KEY)?.as_deref() == Some("1");
+    let mut policy = opts.merge_policy();
+    policy.override_user = override_user && policy.prefer_embedded;
+    Ok((opts, policy, gen))
+}
+
+fn music_root_available(state: &AppState) -> bool {
+    let root = state.config.lock().unwrap().music_root.clone();
+    root.is_some_and(|r| r.is_dir())
 }
 
 fn progress(job: &crate::jobs::JobHandle, c: Counts, total: u64) {
@@ -273,7 +309,9 @@ pub fn tag_batch(db: &Db, opts: &EmbeddedOptions, policy: MergePolicy) -> Result
     let reads: Vec<Option<crate::scan::AudioMeta>> = batch
         .iter()
         .map(|t| {
-            if !t.file_path.is_file() {
+            // Missing (the next scan removes it) or not readable (no
+            // permission): nothing to merge, and nothing to wipe either.
+            if std::fs::File::open(&t.file_path).is_err() {
                 return None;
             }
             let read = read_file(
@@ -309,6 +347,11 @@ pub fn tag_batch(db: &Db, opts: &EmbeddedOptions, policy: MergePolicy) -> Result
         .collect();
     db.write_batch(|w| {
         for (t, meta) in batch.iter().zip(&reads) {
+            // A scan may have rewritten (or removed) the track since it was
+            // read: its values are newer, and a removed row must not come back.
+            if !w.pending_track_unchanged(t, TAGS_VERSION)? {
+                continue;
+            }
             match meta {
                 Some(meta) => {
                     w.upsert_track(&meta.track_row(crate::scan::RowPlace {

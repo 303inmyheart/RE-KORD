@@ -33,6 +33,9 @@ pub struct AppState {
     scan_generations: Arc<ScanGenerations>,
     /// The embedded-tags backfill job is running (one at a time).
     pub embedded_backfill: Arc<AtomicBool>,
+    /// Bumped by every "re-read embedded tags" request, so a running backfill
+    /// notices a newer request (and its override choice).
+    pub embedded_reread_gen: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// `started` is bumped when a scan takes the lock, `completed` catches up when
@@ -76,6 +79,7 @@ impl AppState {
             scan_activity: Arc::new(Mutex::new(None)),
             scan_generations: Arc::new(ScanGenerations::default()),
             embedded_backfill: Arc::new(AtomicBool::new(false)),
+            embedded_reread_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
     }
 

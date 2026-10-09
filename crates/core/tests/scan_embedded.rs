@@ -572,6 +572,16 @@ fn embedded_covers_only_stand_in_for_missing_folder_images() {
     lib.scan();
     let now = lib.album("A/No Folder");
     assert_eq!(now.cover_source.as_deref(), Some("folder"));
+    // Kept for a while (a cover saved moments ago may not be on its album
+    // row yet), pruned once it is old.
+    assert!(stored.exists(), "fresh cover pruned");
+    fs::File::options()
+        .write(true)
+        .open(&stored)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(3600))
+        .unwrap();
+    lib.scan_with(lib.options(EmbeddedPriority::Studio), ScanMode::Full);
     assert!(!stored.exists(), "unused embedded cover kept");
 
     // With the setting off no picture is used.
@@ -857,5 +867,88 @@ fn root_files_keep_their_5_0_group() {
         .track_id_by_rel(&format!("{virtual_artist}/Tracks/loose.webm"))
         .unwrap()
         .is_some());
-    assert!(lib.db.track_id_by_rel("First/Tracks/two.flac").unwrap().is_some());
+    assert!(lib
+        .db
+        .track_id_by_rel("First/Tracks/two.flac")
+        .unwrap()
+        .is_some());
+}
+
+/// The backfill never wipes values of a file it cannot read, and never
+/// writes over a row a scan changed (or removed) since it was listed.
+#[test]
+fn the_backfill_skips_unreadable_files_and_rows_changed_meanwhile() {
+    use std::os::unix::fs::PermissionsExt;
+    let lib = Lib::new("bfguard");
+    let rel = "A/B/01 - x.flac";
+    let path = lib.add("silent.flac", rel);
+    write_tags(&path, &Tags::full());
+    let rel2 = "A/B/02 - y.flac";
+    let path2 = lib.add("silent.flac", rel2);
+    write_tags(&path2, &Tags::full());
+    lib.scan();
+    let before = lib.track(rel);
+    let set_pending = || {
+        lib.db
+            .with_conn(|c| {
+                c.execute("UPDATE tracks SET tags_version = 0", [])?;
+                Ok(())
+            })
+            .unwrap();
+    };
+
+    // Unreadable (no permission): values kept, the track is not re-read.
+    set_pending();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    let readable_anyway = fs::File::open(&path).is_ok(); // running as root
+    let opts = lib.options(EmbeddedPriority::Studio);
+    while backfill::tag_batch(&lib.db, &opts, opts.merge_policy()).unwrap() > 0 {}
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    if !readable_anyway {
+        let after = lib.track(rel);
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.genres, before.genres);
+        assert_eq!(after.album_name, before.album_name);
+    }
+
+    // A row the scan rewrote since it was listed: the scan's values stay.
+    set_pending();
+    let pending = lib.db.embedded_pending_tracks(1, 10).unwrap();
+    assert_eq!(pending.len(), 2);
+    lib.db
+        .with_conn(|c| {
+            c.execute(
+                "UPDATE tracks SET size = size + 1, title = 'From the scan' WHERE rel_path = ?1",
+                [rel2],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    lib.db
+        .write_batch(|w| {
+            let t2 = pending.iter().find(|t| t.rel_path == rel2).unwrap();
+            assert!(!w.pending_track_unchanged(t2, 1)?);
+            let t1 = pending.iter().find(|t| t.rel_path == rel).unwrap();
+            assert!(w.pending_track_unchanged(t1, 1)?);
+            Ok(())
+        })
+        .unwrap();
+    // Removed by a scan: not brought back.
+    let id2 = lib.db.track_id_by_rel(rel2).unwrap().unwrap();
+    lib.db
+        .with_conn(|c| {
+            c.execute("DELETE FROM tracks WHERE id = ?1", [id2])?;
+            Ok(())
+        })
+        .unwrap();
+    lib.db
+        .write_batch(|w| {
+            let t2 = pending.iter().find(|t| t.rel_path == rel2).unwrap();
+            assert!(!w.pending_track_unchanged(t2, 1)?);
+            Ok(())
+        })
+        .unwrap();
+    while backfill::tag_batch(&lib.db, &opts, opts.merge_policy()).unwrap() > 0 {}
+    assert!(lib.db.track_id_by_rel(rel2).unwrap().is_none());
+    let _ = path2;
 }
