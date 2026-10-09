@@ -81,7 +81,14 @@ const ARTWORK_VARIANTS = [
   { size: "full" as const, sizes: "512x512" },
 ];
 
+/**
+ * The Linux desktop shell publishes its own MPRIS player (`desktopMedia.ts`).
+ * There WebKitGTK's Media Session would add a second one: a player whose bus
+ * name changes with the web process (the widget lost the track), with a
+ * remote artwork URL, sending ~60 PropertiesChanged per play/next/seek.
+ */
 function canUseMediaSession(): boolean {
+  if (platformCaps.tauri && platformCaps.linux) return false;
   return typeof navigator !== "undefined" && "mediaSession" in navigator;
 }
 
