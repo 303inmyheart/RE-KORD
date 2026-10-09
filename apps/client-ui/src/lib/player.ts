@@ -482,6 +482,14 @@ class PlayerController {
   private playRetry = false;
   /** Loads in flight that end in `play()`: the player already means to play. */
   private autoplayLoads = 0;
+  /**
+   * Bumped by every pause (user, notification, headset, car, sleep timer). A load
+   * or reconnect started before it must not call `play()` afterwards: a pause
+   * always wins over an automatic reload.
+   */
+  private pauseGen = 0;
+  /** `pauseGen` when the latest autoplay load started (see `autoplayPending`). */
+  private autoplayPauseGen = 0;
   /** Reason carried by the active deck's next `pause` event (null: not asked for). */
   private expectedPause: string | null = null;
   /**
@@ -562,7 +570,8 @@ class PlayerController {
         this.pauseReason = "user";
         this.playRetry = false;
         if (this.outage) this.outage.play = false;
-        if (this.playing) this.pause();
+        // Also while a reconnect is loading (silent, but about to play).
+        if (this.playing || this.wantsPlay()) this.pause();
         else this.syncNativeIntent();
       },
       next: () => void this.next(),
@@ -881,7 +890,27 @@ class PlayerController {
   /** Does the player mean to play (even with nothing sounding yet)? */
   private wantsPlay(): boolean {
     if (this.remote) return this.playing;
-    return this.playing || this.playRetry || this.autoplayLoads > 0 || this.outage?.play === true;
+    return this.playing || this.playRetry || this.autoplayPending() || this.outage?.play === true;
+  }
+
+  /** A load that will end in `play()` is in flight, and no pause came since. */
+  private autoplayPending(): boolean {
+    return this.autoplayLoads > 0 && this.pauseGen === this.autoplayPauseGen;
+  }
+
+  /**
+   * A pause arrived while a load or reconnect of `gen`'s era was in flight:
+   * it must not play, and the state says paused even if the deck's own `pause`
+   * event went to a deck that is no longer the active one.
+   */
+  private pausedSince(pauseGen: number): boolean {
+    if (this.pauseGen === pauseGen) return false;
+    if (this.playing) {
+      this.playing = false;
+      this.syncMediaPlaybackState();
+      this.emitPlayState();
+    }
+    return true;
   }
 
   /**
@@ -969,9 +998,21 @@ class PlayerController {
   }
 
   private async retryPlay(a: HTMLAudioElement) {
+    const gen = this.loadGen;
+    const pauseGen = this.pauseGen;
     try {
       const resume = this.resumeGraphForPlay();
       if (resume) await resume;
+      // Anything may have happened meanwhile: a skip, a pause, a Cast session.
+      if (
+        gen !== this.loadGen ||
+        pauseGen !== this.pauseGen ||
+        a !== this.activeAudio() ||
+        this.remote ||
+        !this.wantsPlay()
+      ) {
+        return;
+      }
       await a.play();
     } catch (e) {
       nativeLog(`play() refused again: ${e instanceof DOMException ? e.name : String(e)}`);
@@ -1055,7 +1096,9 @@ class PlayerController {
     const cur = this.current;
     if (!cur) return;
     this.deckOpsInFlight += 1;
+    const pauseGen = this.pauseGen;
     if (play) {
+      this.autoplayPauseGen = pauseGen;
       this.autoplayLoads += 1;
       this.syncNativeIntent();
     }
@@ -1078,9 +1121,15 @@ class PlayerController {
       }
       await this.waitForAudioReady(a, 8000, this.knownDuration(cur) > 0);
       if (gen !== this.loadGen) return;
+      // Paused (app, notification, car) while it loaded: stay paused.
+      if (this.pausedSince(pauseGen)) {
+        this.emit();
+        return;
+      }
       try {
         const resume = this.resumeGraphForPlay();
         if (resume) await resume;
+        if (gen !== this.loadGen || this.pausedSince(pauseGen)) return;
         await a.play();
         if (gen !== this.loadGen) return;
         this.playing = true;
@@ -2699,10 +2748,15 @@ class PlayerController {
       }
     }
     const a = this.activeAudio();
-    if (!a.paused || !this.inactiveDeck().paused) {
+    // `playing` too: during a reconnect the deck is silent (reloading) while the
+    // player still plays, and the button shows pause. Pressing it must pause,
+    // not start the old element.
+    if (this.playing || !a.paused || !this.inactiveDeck().paused) {
       this.pauseLocalDecks();
       return;
     }
+    // A track is already loading to play (tapped a moment ago): nothing to add.
+    if (this.autoplayPending()) return;
     if (a.error != null && a.getAttribute("src")) {
       // The element broke earlier (hub hiccup): play() would just fail again.
       await this.reloadCurrentAt(this.currentTime, true);
@@ -2751,11 +2805,9 @@ class PlayerController {
   private pauseLocalDecks() {
     const a = this.activeAudio();
     const wasSilent = a.paused;
+    this.pauseGen += 1;
     this.expectPause("user");
-    if (this.playRetry) {
-      this.playRetry = false;
-      this.syncNativeIntent();
-    }
+    this.playRetry = false;
     const other = this.inactiveDeck();
     if (!other.paused) other.pause();
     a.pause();
@@ -2765,12 +2817,15 @@ class PlayerController {
       this.persistPosition(true, true);
       this.emitPlayState();
     }
+    // A pending load no longer means "about to play": tell the shell.
+    this.syncNativeIntent();
   }
 
   private pauseHard() {
     // Queue emptied while casting: the receiver must stop too — the dock (and
     // its Cast button) goes away with the queue.
     this.remote?.pause();
+    this.pauseGen += 1;
     this.expectPause("user");
     this.playRetry = false;
     this.deck0.pause();
@@ -3286,6 +3341,7 @@ class PlayerController {
     if (autoplay) {
       // Means to play from now on: with the screen locked right after a tap the
       // Android shell must not let the WebView sleep before the first sound.
+      this.autoplayPauseGen = this.pauseGen;
       this.autoplayLoads += 1;
       this.syncNativeIntent();
     }
@@ -3305,6 +3361,9 @@ class PlayerController {
     const track = this.current;
     if (!track) return;
     const gen = ++this.loadGen;
+    const pauseGen = this.pauseGen;
+    // Autoplay, unless a pause came in while the track loaded.
+    const autoplayNow = () => autoplay && !this.pausedSince(pauseGen);
     // A fresh load: its own transition out gets a fresh crossfade attempt.
     this.crossfadeRefused = null;
     this.resetHalfListen(track);
@@ -3382,11 +3441,11 @@ class PlayerController {
         // Last resort: load on the active deck (may gap) so playback isn't stuck.
         outEl.loop = this.repeat === "one";
         outEl.src = url;
-        if (autoplay) {
+        if (autoplayNow()) {
           try {
             const resume = this.resumeGraphForPlay();
             if (resume) await resume;
-            if (gen !== this.loadGen) return;
+            if (gen !== this.loadGen || !autoplayNow()) return;
             await outEl.play();
             this.playing = true;
             this.pushRecentDeferred(track);
@@ -3425,7 +3484,7 @@ class PlayerController {
     if (length > 0) this.duration = length;
     this.currentTime = inEl.currentTime;
 
-    if (autoplay) {
+    if (autoplayNow()) {
       try {
         await inEl.play();
         if (gen !== this.loadGen) return;

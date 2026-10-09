@@ -547,3 +547,107 @@ test("pause while waiting for the hub: the shell is told, no idle watch timer", 
   await tick(500);
   assert.equal(player.playing, true);
 });
+
+/** A load held by `hung` gets its answer now (metadata and data arrive). */
+const answer = async (el) => {
+  el.readyState = 4;
+  el.duration = TRACK_SEC;
+  el.fire("loadedmetadata");
+  el.fire("durationchange");
+  el.fire("canplay");
+  await flush();
+};
+
+/** Track 1 stalls at 15 s and the watch starts a reconnect that is still loading. */
+async function reconnectInFlight() {
+  const a = await start();
+  await advance(a, 15);
+  hung.add("Song 1.mp3");
+  const loads = a.loads;
+  await tick(13_000);
+  await heartbeat();
+  assert.ok(a.loads > loads, "a reconnect is loading");
+  assert.ok(a.paused, "silent while it loads");
+  return a;
+}
+
+test("pause (player button) during a reconnect wins: no play() once it has loaded", async () => {
+  const a = await reconnectInFlight();
+  const plays = a.playCalls;
+  await player.toggle();
+  await flush();
+  assert.equal(player.playing, false);
+  assert.equal(a.playCalls, plays, "the button did not start the reloading element");
+  hung.clear();
+  await answer(a);
+  await tick(9_000);
+  assert.ok(a.paused, "still paused after the reload finished");
+  assert.equal(a.playCalls, plays);
+  assert.equal(player.playing, false);
+  await tick(500);
+  assert.equal(lastUpdate().wantsPlay, false, "the shell lets go");
+  assert.equal(lastUpdate().pauseReason, "user");
+  for (let i = 0; i < 4; i++) {
+    await heartbeat();
+    await tick(10_000);
+  }
+  assert.ok(a.paused, "the watch does not restart it either");
+});
+
+test("pause from the car during a reconnect wins", async () => {
+  const a = await reconnectInFlight();
+  const plays = a.playCalls;
+  dispatchEvent(new CustomEvent("rekord:media-action", { detail: { action: "pause" } }));
+  await flush();
+  hung.clear();
+  await answer(a);
+  await tick(9_000);
+  assert.ok(a.paused);
+  assert.equal(a.playCalls, plays);
+  assert.equal(player.playing, false);
+});
+
+test("pause while a skipped-to track is loading: it loads paused", async () => {
+  await start();
+  hung.add("Song 2.mp3");
+  void player.next();
+  await flush();
+  const b = deckWith(2);
+  assert.ok(b && b.paused, "track 2 is loading");
+  player.pause();
+  await flush();
+  hung.clear();
+  await answer(b);
+  await tick(9_000);
+  assert.equal(player.current?.title, "Song 2");
+  assert.deepEqual(audible(), [], "nothing plays");
+  assert.equal(player.playing, false);
+  // Play again works as usual.
+  await player.toggle();
+  await flush();
+  assert.deepEqual(audible(), [b]);
+  assert.equal(player.playing, true);
+});
+
+test("a play() retry pending in the background is dropped by a pause", async () => {
+  const a = await start();
+  refuseOnce.add("Song 2.mp3");
+  await advance(a, TRACK_SEC - 10);
+  a.currentTime = TRACK_SEC;
+  a.ended = true;
+  a.paused = true;
+  a.fire("ended");
+  await tick(200);
+  assert.equal(lastUpdate().wantsPlay, true, "retry pending");
+  const b = deckWith(2);
+  const plays = b.playCalls;
+  dispatchEvent(new CustomEvent("rekord:media-action", { detail: { action: "pause" } }));
+  await flush();
+  for (let i = 0; i < 4; i++) {
+    await heartbeat();
+    await tick(5_000);
+  }
+  assert.equal(b.playCalls, plays, "no retry after the pause");
+  assert.equal(player.playing, false);
+  assert.equal(lastUpdate().wantsPlay, false);
+});
