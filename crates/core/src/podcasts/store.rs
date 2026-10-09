@@ -272,7 +272,12 @@ pub struct FetchSave<'a> {
 
 pub fn save_fetch(db: &Db, id: i64, f: &FetchSave<'_>) -> Result<(), PodcastError> {
     let episodes = serde_json::to_string(f.episodes).map_err(db_err)?;
-    let title = f.title.map(str::trim).filter(|t| !t.is_empty());
+    // Same bound as a name typed in the admin panel.
+    let title: Option<String> = f
+        .title
+        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|t| !t.is_empty())
+        .map(|t| t.chars().take(120).collect());
     db.with_conn(|c| {
         c.execute(
             "UPDATE podcast_sources

@@ -297,7 +297,10 @@ pub fn needs_fetch(src: &Source, ttl_secs: i64, now: i64, force: bool) -> bool {
     }
     let age = src.fetched_at.map(|t| now - t);
     if force {
-        return age.is_none_or(|a| a >= MANUAL_REFRESH_MIN_SECS);
+        // A failed attempt counts too: a client asking again and again must
+        // not make the hub refetch a broken source nonstop.
+        let last = src.fetched_at.max(src.error_at);
+        return last.is_none_or(|t| now - t >= MANUAL_REFRESH_MIN_SECS);
     }
     if src
         .error_at
@@ -413,6 +416,25 @@ mod tests {
             ttl,
             now,
             false
+        ));
+        // A forced refresh honours a recent failure too (no refetch loop).
+        assert!(!needs_fetch(
+            &src(SourceKind::Rss, None, Some(now - 5)),
+            ttl,
+            now,
+            true
+        ));
+        assert!(!needs_fetch(
+            &src(SourceKind::Rss, Some(now - ttl * 2), Some(now - 5)),
+            ttl,
+            now,
+            true
+        ));
+        assert!(needs_fetch(
+            &src(SourceKind::Rss, Some(now - ttl * 2), Some(now - 40)),
+            ttl,
+            now,
+            true
         ));
         // A recent failure holds automatic retries back for a minute.
         assert!(!needs_fetch(

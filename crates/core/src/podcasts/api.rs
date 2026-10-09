@@ -198,6 +198,27 @@ macro_rules! machine_op {
     };
 }
 
+/// A source address without its query string and fragment (private feeds
+/// carry tokens there), for callers that may not manage the hub.
+fn redact_url(raw: &str) -> String {
+    match url::Url::parse(raw) {
+        Ok(mut u) => {
+            let had_secret =
+                u.query().is_some() || u.fragment().is_some() || !u.username().is_empty();
+            u.set_query(None);
+            u.set_fragment(None);
+            let _ = u.set_username("");
+            let _ = u.set_password(None);
+            let mut s = u.to_string();
+            if had_secret {
+                s.push_str("?…");
+            }
+            s
+        }
+        Err(_) => raw.split(['?', '#']).next().unwrap_or("").to_string(),
+    }
+}
+
 fn admin_payload(state: &AppState) -> Result<Value, PodcastError> {
     let settings = state.config.lock().unwrap().podcasts;
     let sources = store::list(&state.db)?;
@@ -216,10 +237,27 @@ fn admin_payload(state: &AppState) -> Result<Value, PodcastError> {
     }))
 }
 
-/// Module settings and sources as stored (no fetch).
-async fn admin_get(State(state): State<AppState>) -> Response {
+/// Module settings and sources as stored (no fetch). Who may not manage the
+/// hub sees the source addresses without their query strings.
+async fn admin_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    PeerAddr(peer): PeerAddr,
+) -> Response {
+    let reveal = crate::perm::require_machine_op(&state, &headers, None, peer).is_ok();
     match admin_payload(&state) {
-        Ok(v) => ok(v),
+        Ok(mut v) => {
+            if !reveal {
+                if let Some(list) = v.get_mut("sources").and_then(Value::as_array_mut) {
+                    for s in list {
+                        if let Some(u) = s.get("url").and_then(Value::as_str).map(redact_url) {
+                            s["url"] = Value::String(u);
+                        }
+                    }
+                }
+            }
+            ok(v)
+        }
         Err(e) => error_response(&e),
     }
 }
@@ -427,6 +465,10 @@ async fn admin_update(
     Json(body): Json<UpdateBody>,
 ) -> Response {
     let _op = machine_op!(&state, &headers, peer);
+    // A refresh of this source in flight would save the old target's
+    // episodes over the new one: wait for it, and keep new ones out.
+    let lock = state.podcasts.source_lock(id);
+    let _guard = lock.lock().await;
     let src = match store::get(&state.db, id) {
         Ok(Some(s)) => s,
         Ok(None) => return error_response(&PodcastError::SourceNotFound),
@@ -555,5 +597,27 @@ async fn admin_order(
     match admin_payload(&state) {
         Ok(v) => ok(v),
         Err(e) => error_response(&e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_url;
+
+    #[test]
+    fn redacted_urls_keep_no_tokens() {
+        assert_eq!(
+            redact_url("https://feeds.example.com/show/rss?auth=SECRET"),
+            "https://feeds.example.com/show/rss?…"
+        );
+        assert_eq!(
+            redact_url("https://user:pw@example.com/f.xml#t"),
+            "https://example.com/f.xml?…"
+        );
+        assert_eq!(
+            redact_url("https://example.com/f.xml"),
+            "https://example.com/f.xml"
+        );
+        assert_eq!(redact_url("not a url?x=1"), "not a url");
     }
 }
