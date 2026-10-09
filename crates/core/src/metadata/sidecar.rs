@@ -18,6 +18,20 @@ pub const FILE_TRACK_WPP: &str = "wpp-trackinfo.json";
 pub const FILE_ARTIST_INFO: &str = "kord-artistinfo.json";
 pub const FILE_ARTIST_IMAGE: &str = "kord-artistinfo.jpg";
 
+/// RE-KORD's own sidecar files (and the legacy `wpp-*` ones): never read by
+/// the scan, so the library watcher ignores them.
+pub fn is_sidecar_name(name: &str) -> bool {
+    [
+        FILE_ALBUM,
+        FILE_ALBUM_WPP,
+        FILE_TRACK,
+        FILE_TRACK_WPP,
+        FILE_ARTIST_INFO,
+        FILE_ARTIST_IMAGE,
+    ]
+    .contains(&name)
+}
+
 fn locks() -> &'static Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> {
     static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
     LOCKS.get_or_init(|| Mutex::new(HashMap::new()))

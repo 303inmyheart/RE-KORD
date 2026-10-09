@@ -8,7 +8,6 @@ use crate::path_util::{join_under_root, safe_rel_path, under_root};
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 const UA: &str = "RE-KORD/5.1 (studio artwork; +local)";
@@ -562,12 +561,14 @@ async fn download_image(url: &str) -> Result<(Vec<u8>, &'static str)> {
 
 fn write_cover(dir: &Path, bytes: &[u8], ext: &str) -> Result<PathBuf> {
     let dest = dir.join(format!("cover.{ext}"));
-    super::sidecar::write_atomic(&dest, bytes)?;
+    // The hub's own write: the library watcher must not re-index for it
+    // (the album row is updated right after).
+    crate::watcher::own_write(&dest, || super::sidecar::write_atomic(&dest, bytes))?;
     // Remove competing cover basenames once the new one is in place.
     for name in ["cover.jpg", "cover.png", "folder.jpg", "folder.png"] {
         let p = dir.join(name);
         if p != dest && p.is_file() {
-            let _ = fs::remove_file(p);
+            let _ = crate::watcher::own_remove(&p);
         }
     }
     Ok(dest)
