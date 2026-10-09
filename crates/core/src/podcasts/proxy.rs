@@ -321,7 +321,7 @@ fn art_cache_dir(state: &AppState) -> std::path::PathBuf {
 }
 
 fn art_cache_name(url: &str) -> String {
-    format!("{}.jpg", &super::episode_key(url))
+    format!("{}.jpg", super::episode_key(url))
 }
 
 /// Artwork URL of an episode (its own, else the source's); `_` = the source.
