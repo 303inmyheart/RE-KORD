@@ -10,7 +10,37 @@ const PRECACHE = __REKORD_SW_PRECACHE__;
 const CACHE = `rekord-shell-${VERSION}`;
 const NETWORK_ONLY = [/^\/api(\/|$)/, /^\/media(\/|$)/, /^\/admin(\/|$)/];
 
+/**
+ * Audio streams: tracks, transcodes, podcast episodes. Where the browser
+ * supports static routes (Chromium) the worker is bypassed for them
+ * entirely. Elsewhere (WebKit: Safari, the iOS PWA, Epiphany) a request the
+ * worker merely declines still went through it, and WebKit's media loader
+ * then restarted the download over and over: 2-40 requests and up to 5x the
+ * file's bytes per track. There the worker answers with the network
+ * response itself, so a track is one streamed request again.
+ */
+const STREAM_PATHS = ["/media/*", "/api/v1/media/*", "/api/v1/transcode/*", "/api/v1/podcasts/play/*"];
+
+function isStream(req, url) {
+  return (
+    req.headers.has("range") ||
+    req.destination === "audio" ||
+    req.destination === "video" ||
+    STREAM_PATHS.some((p) => url.pathname.startsWith(p.slice(0, -1)))
+  );
+}
+
 self.addEventListener("install", (event) => {
+  if (typeof event.addRoutes === "function") {
+    try {
+      event.addRoutes([
+        ...STREAM_PATHS.map((pathname) => ({ condition: { urlPattern: { pathname } }, source: "network" })),
+        { condition: { requestDestination: "audio" }, source: "network" },
+      ]);
+    } catch {
+      /* Older static-routing syntax: the fetch handler below covers it. */
+    }
+  }
   event.waitUntil(
     caches
       .open(CACHE)
@@ -39,9 +69,12 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  if (isStream(req, url)) {
+    // Never from the cache; streamed straight from the network (see above).
+    event.respondWith(fetch(req));
+    return;
+  }
   if (NETWORK_ONLY.some((re) => re.test(url.pathname))) return;
-  // Partial (Range) requests don't go through the cache.
-  if (req.headers.has("range")) return;
 
   if (req.mode === "navigate") {
     // Network first: an updated hub serves the new UI right away. Offline,
