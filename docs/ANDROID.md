@@ -153,9 +153,10 @@ The Android WebView has no Media Session API — `navigator.mediaSession` is sim
 so on the phone that whole file would talk to nobody. The three setters therefore also push
 the same state to the shell through `src/lib/nativeMedia.ts`, which looks for
 `window.RekordMediaNative` and does nothing when it is not there (browser, desktop). The
-snapshot (title, artist, album, artwork URL, playing, duration, position) is coalesced over
-80 ms, because metadata, transport state and position arrive as three separate calls on
-every track change.
+snapshot (title, artist, album, artwork URL, playing, duration, position, plus `wantsPlay`
+and `pauseReason`, see [Screen off, network, car](#screen-off-network-car)) is coalesced
+over 80 ms, because metadata, transport state and position arrive as three separate calls
+on every track change.
 
 The Kotlin side lives in `gen/android`, all of it in versioned files:
 
@@ -173,19 +174,26 @@ The Kotlin side lives in `gen/android`, all of it in versioned files:
   a `Player` implementation, and here the player is an `<audio>` tag on the far side of a
   JavaScript bridge.
 - `MainActivity.kt` — `WryActivity.onPause()` pauses the WebView, and a paused WebView
-  stops the audio, so while a track is playing the WebView is resumed right after. The
-  foreground service is what makes that safe: the process is not frozen.
+  stops the audio, so the WebView is resumed right after while the page plays, means to
+  play (a track loading when the screen is locked right after the tap) or while the
+  service is still in the foreground after a pause (so an interruption can be resumed).
+  The foreground service is what makes that safe: the process is not frozen.
+- `RekordInterruption.kt` — `InterruptionPolicy`, the resume-after-another-app decision
+  (plain Kotlin, JVM unit tests in `app/src/test`).
 
-Service lifecycle: it starts on the first track that plays (Android 12+ only allows a
-foreground service to start from the foreground, which is where the first play happens), it
-drops out of foreground on pause while keeping the notification, and it stops when the queue
-empties, when the notification is dismissed or when the activity dies. That last one is not
-a detail: the audio lives in the WebView, so closing the app from Recents ends playback and
-the notification must go with it.
+Service lifecycle: it starts on the first track that plays or starts loading (Android 12+
+only allows a foreground service to start from the foreground, which is where that tap
+happens). It stays in the foreground while the page plays or means to play, and for
+**10 minutes after a pause** (the same default as Media3's `MediaSessionService`), or as
+long as an interruption may still be resumed; then it leaves the foreground and keeps the
+notification. It stops when the queue empties, when the notification is dismissed or when
+the activity dies. That last one is not a detail: the audio lives in the WebView, so
+closing the app from Recents ends playback and the notification must go with it.
 
 Permissions in the manifest: `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`
-(required as a permission from Android 14) and `POST_NOTIFICATIONS`, asked on the first
-track rather than at startup — first there is something to show, then we ask to show it. If
+(required as a permission from Android 14), `WAKE_LOCK`, `ACCESS_NETWORK_STATE` (normal
+permissions, no prompt) and `POST_NOTIFICATIONS`, asked on the first track rather than at
+startup — first there is something to show, then we ask to show it. If
 it is refused the music still plays, without controls. `proguard-rekord.pro` keeps the
 `@JavascriptInterface` methods: nothing in Java calls them, and R8 would drop them.
 
@@ -226,8 +234,114 @@ reason.
 
 | Event | Action |
 |-------|--------|
-| `ACTION_AUDIO_BECOMING_NOISY` (headphones unplugged, BT off) | `pause` (receiver registered only while playing) |
+| `ACTION_AUDIO_BECOMING_NOISY` (headphones unplugged, BT off) | `pause`, and no automatic resume afterwards (receiver registered while playing or while an interruption may resume) |
 | service destroyed / stop | receiver removed |
+
+#### Interruptions by other apps
+
+What Chromium does on its own (`AudioFocusDelegate`): on `AUDIOFOCUS_LOSS_TRANSIENT`
+(call, voice note, navigation prompt, a short video that asks for transient focus) it
+suspends the element and resumes it on `AUDIOFOCUS_GAIN`; on `…_CAN_DUCK` it lowers the
+volume; on `AUDIOFOCUS_LOSS` (another music app, most video players) it **abandons focus
+and pauses**, and nothing ever resumes it. The page sees plain `pause` / `play` events,
+without a user gesture.
+
+The player labels every pause it asks for (`user`, `outage`, `error`, …); a `pause` event it
+did not ask for is `external`, i.e. the engine reacting to a focus loss. That reason travels
+in the snapshot (`pauseReason`). `RekordMediaService` then observes, without requesting
+focus:
+
+- other apps' playback through `AudioManager.registerAudioPlaybackCallback` (apps get the
+  anonymized list of *active* players; while our page is paused, any active player that is
+  not a key click or an accessibility hint is someone else);
+- calls through the audio mode (`getMode() != MODE_NORMAL`), with
+  `OnModeChangedListener` on Android 12+ and a 30 s poll while armed as a backstop.
+
+`InterruptionPolicy` decides:
+
+- armed only by an `external` pause of a track that was playing;
+- once no other audio has played for 2.5 s and no call is up, it sends `play` (the delay
+  lets Chromium resume a transient loss itself first; a `play` to a page that already
+  plays does nothing). Re-sent after 10 s if the page did not react, at most three times;
+- disarmed by a user pause from anywhere (app, notification, headset, car, which also
+  turns an `external` pause into a `user` one), by "becoming noisy" (headphones or car
+  disconnected: the music must not come back on the phone's speaker), and after **30
+  minutes** of interruption.
+
+Transitions are logged (`interruption: PLAYING -> INTERRUPTED`, `interruption over (audio
+change): resuming`). Unit tests: `./gradlew :app:testUniversalDebugUnitTest` from
+`gen/android` (`InterruptionPolicyTest`).
+
+#### Screen off, network, car
+
+With the screen off the page is hidden: Chromium throttles its timers to once a second (and
+to once a minute after five silent minutes), the CPU sleeps as soon as no audio comes out
+(between two tracks), and Wi-Fi drops into power save. What the app does about it:
+
+- **Foreground across pauses.** Before 5.1 the service left the foreground at every pause.
+  A call or another app pausing the track, then the track resuming from the background,
+  meant `startForeground` from the background, which Android 12+ refuses with
+  `ForegroundServiceStartNotAllowedException`: uncaught, it closed the app. Now the service
+  stays in the foreground (see the lifecycle above), every `startForeground` is guarded
+  (logged, the notification is still drawn), and a foreground service keeps network access
+  and wake locks in Doze.
+- **`wantsPlay`.** The page also reports when it means to play without sound yet: a track
+  loading, a `play()` being retried, a stream reconnecting, the hub coming back. The
+  service treats it like playing.
+- **Locks.** While the page plays or means to play: a partial wake lock (10 min timeout,
+  re-armed every 10 s) and a `WIFI_MODE_FULL_HIGH_PERF` Wi-Fi lock (`LOW_LATENCY` only
+  applies with the screen on and the app in front). Released on pause, and after 10 minutes
+  of wanting to play with nothing playing (hub gone for good).
+- **Watchdog.** Every 10 s while the locks are held the service dispatches
+  `rekord:playback-watchdog` in the page (`evaluateJavascript` is not throttled) and logs
+  a page that says "playing" without a position update for 25 s. The event carries
+  `otherAudio` (silent page, and a call or another app's audio): the page then holds its
+  `play()` retries and reloads, which would take the audio focus back.
+- **Stall watch in the page** (`src/lib/playbackWatch.ts`, driven by the heartbeat, a 5 s
+  interval, `waiting` / `stalled`, `online` and network changes). Decisions come from the
+  clock, so a late check still decides right: no progress for 12 s (2 s right after a
+  network change) → reload the stream at the current position; deck paused while it should
+  play → `play()` twice, then reload; `ended` with no advance after 4 s → next track;
+  backoff 2–4–8–16–30 s; nothing played for 10 minutes → stop with the usual error toast.
+  A reconnect resumes at the position of the first one even if the element already went
+  back to 0 (`resumePoint()`), and keeps the intent to play if it fails because the hub is
+  gone.
+  A media network error with the hub reachable reconnects at the same position (three
+  times per track and minute) instead of skipping the track as unreadable, and the hub is
+  asked before a "format not supported" sends the track to the transcoder (a refused
+  connection reports that error too); with the hub
+  unreachable the existing outage path waits for it, and the heartbeat and network events
+  probe the hub at once instead of waiting out a throttled backoff timer.
+- **Track changes.** The next track is buffered on the idle deck 20 s before the end (fade
+  + 15 s with crossfade), so the boundary needs no cold request; the advance on `ended` has
+  no timer in between; a crossfade completes on the outgoing deck's `ended` even if its
+  timers are frozen. A `play()` refused in the background is retried by the watch instead
+  of leaving silence (in front, the error toast as before).
+- **Network changes.** The service registers a default-network callback and passes changes
+  to the page (`rekord:network`). `ACCESS_NETWORK_STATE` also lets the WebView watch the
+  network itself: `online` / `offline` events, and sockets of a lost network are dropped
+  instead of left hanging. A hub reached through its LAN address is not reachable over
+  mobile data; for the car, pair the app with the tunnel address.
+- **Bluetooth / car.** The car's buttons arrive as MediaSession callbacks and go through
+  `RekordMediaBridge` (wake lock, WebView resumed, retry every 250 ms up to 3 s, all on the
+  main thread: the page's throttled timers are not involved). A car that sends PLAY on
+  connect resumes only an existing session (the service exists only after something
+  played); after the app was closed there is no page to play, and nothing starts.
+
+Logs, all under one tag:
+
+```bash
+adb logcat -s RekordMedia
+# service: in the foreground / out of the foreground / foreground refused
+# locks: CPU and Wi-Fi held / released
+# page: playing / waiting to play / paused (external)
+# page: watch (heartbeat): no progress for 14s, reconnecting at 83s (attempt 1)
+# network changed: now cellular
+# interruption: PLAYING -> INTERRUPTED, interruption over (audio change): resuming
+```
+
+Lines starting with `page:` come from the player (`nativeLog` in `nativeMedia.ts`); only
+transitions are logged, never the 5 s position refreshes.
 
 All of these reach the player through the same `rekord:media-action` event as the
 notification buttons. `RekordMediaBridge` delivers each command with a 5 s partial wake lock
@@ -320,11 +434,24 @@ adb logcat | grep -iE "RekordCast|CastContext|MediaRouter"
   (hub address, chosen account) to another phone where that hub may not exist. The data
   that matters lives on the hub, which has its own backup.
 
-On device, still to be checked by hand (no emulator on the build machine):
+Checked on an emulator (Android 15, x86_64 debug build, hub on the host at
+`10.0.2.2`, screen off and `dumpsys deviceidle force-idle`): eight track changes with
+crossfade in deep Doze; Wi-Fi off (handover to mobile data) and all networks off for a
+minute; a proxy in front of the hub that stops forwarding with the sockets open (stall →
+reconnect at the same position once it forwards again) and one that refuses connections
+(outage → resume); another app taking `AUDIOFOCUS_GAIN` for 15 s (paused, resumed 2.5 s
+after it stopped), `GAIN_TRANSIENT` (Chromium resumes it), `…_MAY_DUCK` (no pause), an
+emulated phone call (`adb emu gsm call/accept/cancel`: resumed after hang-up), and a media
+key pause during an interruption (no resume).
+
+Still to be checked on a phone: real Bluetooth / car head units (AVRCP buttons, "becoming
+noisy" on disconnect, PLAY sent on connect), OEM battery savers that kill foreground
+services anyway, real Wi-Fi power save and cell handovers, and a tunnel connection.
 
 ```bash
-adb shell dumpsys media_session | grep -A6 rekord     # session and state
-adb shell dumpsys activity services app.rekord.client # servizio in foreground
+adb shell dumpsys media_session | grep -A6 RE-KORD    # session and state
+adb shell dumpsys activity services app.rekord.client # service in the foreground
+adb logcat -s RekordMedia                             # what the player and service did
 ```
 
 Play a track, lock the screen, wait a minute: the sound must not stop, and the notification

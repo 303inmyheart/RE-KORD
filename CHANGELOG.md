@@ -99,6 +99,29 @@ one version number covers the hub, the clients and the packages.
 
 ### Fixed
 
+- **Android: background playback is reliable with the screen off, in the car and across
+  network changes.** Tracks sometimes did not start, or stopped after a while:
+  - the media service left the foreground at every pause, and a pause caused by a call or
+    another app ended with Android 12+ refusing to bring it back (the app could close);
+    it now stays in the foreground while playing, while a track loads or reconnects, and
+    for 10 minutes after a pause;
+  - CPU and Wi-Fi now stay awake while playing (the gap between two tracks let the phone
+    sleep and Wi-Fi doze);
+  - a stalled stream is reconnected at the same position (also right after a switch
+    from Wi-Fi to mobile data), a network error no longer skips the track as unreadable,
+    a `play()` refused in the background is retried, and the next track is buffered 20 s
+    ahead;
+  - a heartbeat from the service drives these checks while the page's timers are
+    throttled;
+  - the queue end now clears the notification's "playing" state.
+- **Android: music resumes after an interruption.** Calls, voice notes and navigation
+  prompts were already resumed by the WebView; now, when another app's music or video
+  pauses RE-KORD, playback resumes once that audio stops (within 30 minutes, never after
+  you paused it yourself or after headphones / the car disconnected). No second audio
+  focus request: the service only watches other apps' playback and the call state.
+- Android diagnostics: `adb logcat -s RekordMedia` shows state changes, stalls,
+  reconnects, network changes and interruptions (quiet in normal playback).
+
 - **FLACs showed no metadata** when their tags were not in the primary tag (for example an
   ID3v2 block in front of the FLAC stream, or numbers written as `4/11`), and only the first
   of several `GENRE` / `ARTIST` values was kept: every tag of a file is now read and
