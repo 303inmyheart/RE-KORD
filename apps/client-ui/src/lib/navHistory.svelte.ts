@@ -23,6 +23,7 @@ import {
   pushHistoryEntry,
   replaceHistoryEntry,
 } from "@rekord/ui";
+import { hubModules } from "./hubModules.svelte";
 import { session, type ViewId } from "./session.svelte";
 
 const VIEWS: ReadonlySet<string> = new Set<ViewId>([
@@ -63,6 +64,8 @@ export function bindNavHistory(): () => void {
   function apply(target: string, forward: boolean) {
     const [view, level] = target.split(":");
     if (!view || !VIEWS.has(view)) return;
+    // A module switched off meanwhile: not even its view's code is loaded.
+    if (view === "podcasts" && hubModules.list != null && !hubModules.podcasts) return;
     if (view === "library" && session.view === "library") {
       // Library drill-down: only "up" can be rebuilt without the item ids.
       if (!forward && level !== session.libraryLevel) void session.backLibrary();
