@@ -24,6 +24,7 @@
   } from "../lib/api";
   import { formatTrackGenresForDisplay } from "../lib/genres";
   import { t } from "../lib/i18n.svelte";
+  import { listenMetaParts, type ListenMetaPart } from "../lib/listenMeta";
   import { formatTime, player } from "../lib/player";
   import { session, type StudioPane } from "../lib/session.svelte";
   import {
@@ -72,6 +73,21 @@
     session.current?.duration_ms
       ? formatTime(session.current.duration_ms / 1000)
       : null,
+  );
+  const listenMeta = $derived(
+    session.current
+      ? listenMetaParts({
+          artist: session.current.artist_name,
+          album: session.current.album_name,
+          lyrics: lyricsKind(session.current.lyrics),
+          duration: durationLabel,
+          plays: currentExternal ? null : playCount,
+        })
+      : [],
+  );
+  const listenLeadParts = $derived(listenMeta.filter((p) => p.kind !== "plays"));
+  const listenPlays = $derived(
+    listenMeta.find((p): p is Extract<ListenMetaPart, { kind: "plays" }> => p.kind === "plays"),
   );
   const currentMoods = $derived.by(() => {
     const t = session.current;
@@ -346,28 +362,27 @@
                         <div class="listen-stage__meta-full">
                           <p class="listen-stage__sub listen-stage__sub--with-stats">
                             <span class="listen-stage__sub-lead">
-                              <span
-                                class="listen-stage__sub-names"
-                                title={`${session.current.artist_name} · ${session.current.album_name}`}
-                                >{session.current.artist_name} · {session.current.album_name}</span
-                              >
-                              <span class="track-row__meta-sep" aria-hidden="true"> · </span>
-                              <TrackLyricsIcon
-                                kind={lyricsKind(session.current?.lyrics)}
-                                class="listen-stage__lyrics-inline"
-                              />
-                              {#if durationLabel}
-                                {" "}· {durationLabel}
+                              {#each listenLeadParts as part, i (part.kind)}
+                                {#if i > 0}<span class="track-row__meta-sep" aria-hidden="true"> · </span>{/if}
+                                {#if part.kind === "names"}
+                                  <span class="listen-stage__sub-names" title={part.text}>{part.text}</span>
+                                {:else if part.kind === "lyrics"}
+                                  <TrackLyricsIcon kind={part.lyrics} class="listen-stage__lyrics-inline" />
+                                {:else if part.kind === "duration"}
+                                  {part.text}
+                                {/if}
+                              {/each}
+                            </span>
+                            {#if listenPlays}
+                              {#if listenLeadParts.length > 0}
+                                <span class="listen-stage__sub-sep" aria-hidden="true"> · </span>
                               {/if}
-                            </span>
-                            {#if !currentExternal}
-                            <span class="listen-stage__sub-sep" aria-hidden="true"> · </span>
-                            <span
-                              class="track-row__plays listen-stage__sub-plays"
-                              aria-label={t("studio.listen.playsAria", { n: playCount })}
-                            >
-                              ({playCount})
-                            </span>
+                              <span
+                                class="track-row__plays listen-stage__sub-plays"
+                                aria-label={t("studio.listen.playsAria", { n: listenPlays.count })}
+                              >
+                                ({listenPlays.count})
+                              </span>
                             {/if}
                             <MetaBadgeCluster
                               variant="inline"
