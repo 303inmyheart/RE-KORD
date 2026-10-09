@@ -167,18 +167,19 @@ pub fn read_picture(path: &Path) -> Option<EmbeddedPicture> {
     .picture
 }
 
-/// Artist from the tags (flat / tag-based layouts group by it).
-pub fn read_artist(path: &Path) -> Option<String> {
-    read_file(
-        path,
-        ReadRequest {
-            tags: true,
-            picture: false,
-            properties: false,
-        },
-    )
-    .tags
-    .artist
+/// Artist that files in the library root are grouped by (`{artist}/Tracks`).
+///
+/// Frozen to what 5.0 read: the first artist of the primary (else first)
+/// tag, the file type taken from the extension, nothing else. The group is
+/// part of every track's `rel_path`, the key favorites, playlists and Studio
+/// edits hang on: reading it the richer 5.1 way (all tags, ffmpeg, joined
+/// multi-value artists) would move those tracks and detach their data.
+pub fn group_artist(path: &Path) -> Option<String> {
+    let tagged = Probe::open(path).ok()?.read().ok()?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
+    tag.artist()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn clean(s: &str) -> Option<String> {

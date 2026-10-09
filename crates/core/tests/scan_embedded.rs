@@ -833,3 +833,29 @@ fn downgrade_to_v6(lib: &Lib) -> rusqlite::Connection {
     .unwrap();
     conn
 }
+
+/// Files in the library root are grouped by artist exactly like 5.0 did: the
+/// group is part of their `rel_path`, which favorites and playlists hang on.
+#[test]
+fn root_files_keep_their_5_0_group() {
+    let lib = Lib::new("rootgroup");
+    // Not readable by lofty: 5.0 put it under the virtual artist.
+    lib.add("tagged.webm", "loose.webm");
+    // Two ARTIST fields: 5.0 took the first one.
+    let flac = lib.add("silent.flac", "two.flac");
+    write_tags(
+        &flac,
+        &Tags::default()
+            .with(ItemKey::TrackArtist, "First")
+            .with(ItemKey::TrackArtist, "Second")
+            .with(ItemKey::TrackTitle, "Two"),
+    );
+    lib.scan();
+    let virtual_artist = rekord_core::layout::LibraryLayout::default().virtual_artist;
+    assert!(lib
+        .db
+        .track_id_by_rel(&format!("{virtual_artist}/Tracks/loose.webm"))
+        .unwrap()
+        .is_some());
+    assert!(lib.db.track_id_by_rel("First/Tracks/two.flac").unwrap().is_some());
+}

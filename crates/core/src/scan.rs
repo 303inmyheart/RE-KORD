@@ -569,7 +569,7 @@ fn collect_groups(root: &Path, layout: &LibraryLayout) -> Result<Collected> {
                 continue;
             };
             let artist = if layout.uses_tags() {
-                crate::embedded::tags::read_artist(&file)
+                crate::embedded::tags::group_artist(&file)
                     .unwrap_or_else(|| layout.virtual_artist.clone())
             } else {
                 layout.virtual_artist.clone()
