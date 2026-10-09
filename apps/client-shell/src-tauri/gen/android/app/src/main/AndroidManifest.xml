@@ -14,8 +14,18 @@
     <!--
       Commands from the notification / headphones with the screen off: a wake lock of
       a few seconds keeps the CPU awake until the WebView has received the command.
+      While the player plays (or is about to), RekordMediaService also holds a partial
+      wake lock and a Wi-Fi lock, which need the same permission.
     -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!--
+      Network changes (Wi-Fi to mobile data in the car): RekordMediaService tells the
+      player to reconnect the stream. Without this permission the WebView does not
+      watch the network either: no online/offline events, and connections of the
+      network just lost are not dropped, so the stream waits on a dead socket.
+      Normal permission, no prompt.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!--
       Camera for scanning the hub's QR code (barcode-scanner plugin). The plugin

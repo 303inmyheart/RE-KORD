@@ -4,9 +4,27 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import org.json.JSONObject
+
+/**
+ * Playback diagnostics, under one tag so a logcat from a phone tells the story:
+ * `adb logcat -s RekordMedia`. Only transitions, stalls, retries and failures are
+ * logged, never the 5 s position refreshes.
+ */
+object RekordLog {
+    private const val TAG = "RekordMedia"
+
+    fun i(message: String) {
+        Log.i(TAG, message)
+    }
+
+    fun w(message: String) {
+        Log.w(TAG, message)
+    }
+}
 
 /**
  * The track now playing, as reported by the player in the WebView.
@@ -23,6 +41,14 @@ data class NowPlaying(
     val playing: Boolean,
     val durationMs: Long,
     val positionMs: Long,
+    /**
+     * The player means to play even if no sound comes out yet: a track loading,
+     * a `play()` being retried, a stream reconnecting, the hub coming back.
+     * Keeps the service in the foreground and the CPU and Wi-Fi awake.
+     */
+    val wantsPlay: Boolean = playing,
+    /** Why it is paused: `external` (another app took the audio), `user`, … */
+    val pauseReason: String = "",
 ) {
     companion object {
         fun fromJson(raw: String): NowPlaying? {
@@ -38,9 +64,11 @@ data class NowPlaying(
                     playing = o.optBoolean("playing", false),
                     durationMs = o.optLong("durationMs", 0L).coerceAtLeast(0L),
                     positionMs = o.optLong("positionMs", 0L).coerceAtLeast(0L),
+                    wantsPlay = o.optBoolean("wantsPlay", false) || o.optBoolean("playing", false),
+                    pauseReason = o.optString("pauseReason").trim(),
                 )
             } catch (e: Exception) {
-                Logger.warn("RekordMedia: unreadable state: ${e.message}")
+                RekordLog.w("unreadable state: ${e.message}")
                 null
             }
         }
@@ -83,15 +111,16 @@ object RekordMediaBridge {
         }
     }
 
-    fun send(action: String, value: Double? = null) {
+    fun send(action: String, value: Double? = null, source: String = "") {
         main.post {
+            if (source.isNotEmpty()) RekordLog.i("command $action ($source)")
             pending = action to value
             attempts = 0
             main.removeCallbacks(retry)
             try {
                 wakeLock?.acquire(WAKE_MS)
             } catch (e: Exception) {
-                Logger.warn("RekordMedia: wake lock unavailable: ${e.message}")
+                RekordLog.w("command wake lock unavailable: ${e.message}")
             }
             deliver()
         }
@@ -121,6 +150,7 @@ object RekordMediaBridge {
         view.evaluateJavascript(script) { result ->
             if (pending !== command) return@evaluateJavascript
             if (result == "true") {
+                if (attempts > 0) RekordLog.i("command $action delivered after ${attempts + 1} attempts")
                 done()
             } else {
                 scheduleRetry()
@@ -128,10 +158,31 @@ object RekordMediaBridge {
         }
     }
 
+    /**
+     * Fire-and-forget event for the page (watchdog heartbeat, network change).
+     * No retry and no wake lock of its own (the playback wake lock is held while
+     * these are sent), and it never replaces a pending command.
+     */
+    fun signal(event: String, detailJson: String = "{}") {
+        main.post {
+            val view = webView ?: return@post
+            // Same as for commands: a WebView paused by the activity would leave the
+            // player asleep. While these are sent the page means to play.
+            view.onResume()
+            view.resumeTimers()
+            view.evaluateJavascript(
+                "(function(){if(!window.__rekordNativeMediaReady)return false;" +
+                    "window.dispatchEvent(new CustomEvent('$event',{detail:$detailJson}));" +
+                    "return true})()",
+                null,
+            )
+        }
+    }
+
     private fun scheduleRetry() {
         attempts += 1
         if (attempts >= MAX_ATTEMPTS) {
-            Logger.warn("RekordMedia: command ${pending?.first} not delivered")
+            RekordLog.w("command ${pending?.first} not delivered: the page did not answer")
             done()
             return
         }
@@ -146,7 +197,7 @@ object RekordMediaBridge {
         try {
             if (wakeLock?.isHeld == true) wakeLock?.release()
         } catch (e: Exception) {
-            Logger.warn("RekordMedia: wake lock not released: ${e.message}")
+            RekordLog.w("command wake lock not released: ${e.message}")
         }
     }
 }
@@ -164,8 +215,18 @@ class RekordMedia(private val activity: MainActivity) {
             // The permission is requested on the first track, not at startup: first
             // there is something to show, then we ask to be allowed to show it.
             if (state.playing) activity.ensureNotificationPermission()
+            // A track that starts (or is being loaded) while the activity is in the
+            // background: the WebView may have been paused when the activity was,
+            // and a paused WebView is a silent one.
+            if (state.wantsPlay) activity.keepWebViewAwake()
             RekordMediaService.publish(activity, state)
         }
+    }
+
+    /** Diagnostics from the page (`nativeMedia.ts` `nativeLog`), into the same logcat tag. */
+    @JavascriptInterface
+    fun log(message: String) {
+        RekordLog.i("page: ${message.take(400)}")
     }
 
     @JavascriptInterface

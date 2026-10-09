@@ -12,6 +12,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 
 class MainActivity : TauriActivity() {
   private var webView: WebView? = null
@@ -121,9 +122,21 @@ class MainActivity : TauriActivity() {
    */
   override fun onPause() {
     super.onPause()
-    // While casting, the page advances the queue (track ends on the receiver →
-    // next track): even when paused it must stay awake to notice.
-    if (RekordMediaService.isPlaying || RekordCast.isConnected) webView?.onResume()
+    // Not only while a track plays: also while one is loading or reconnecting
+    // (the screen locked right after tapping a track), and for a while after a
+    // pause, so that a pause caused by another app (a call, a video) can be
+    // resumed from the background. While casting, the page advances the queue
+    // (track ends on the receiver → next track): it must stay awake to notice.
+    if (RekordMediaService.keepWebViewAwake || RekordCast.isConnected) {
+      webView?.onResume()
+      RekordLog.i("activity paused: WebView kept running")
+    }
+  }
+
+  /** The page started (or is starting) a track while the activity is not in front. */
+  fun keepWebViewAwake() {
+    if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+    webView?.onResume()
   }
 
   fun ensureNotificationPermission() {
