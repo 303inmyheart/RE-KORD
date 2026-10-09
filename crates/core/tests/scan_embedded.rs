@@ -952,3 +952,25 @@ fn the_backfill_skips_unreadable_files_and_rows_changed_meanwhile() {
     assert!(lib.db.track_id_by_rel(rel2).unwrap().is_none());
     let _ = path2;
 }
+
+/// "Drum & Bass" and "Drum and Bass" (or "R&B" and "Rhythm & Blues") are one
+/// genre in the library index, not two entries with split counts.
+#[test]
+fn ampersand_genre_aliases_are_one_library_genre() {
+    let lib = Lib::new("ampgenres");
+    for (i, g) in ["Drum & Bass", "Drum and Bass", "R&B", "Rhythm & Blues"]
+        .iter()
+        .enumerate()
+    {
+        let p = lib.add("silent.flac", &format!("A/B/0{i} - x.flac"));
+        write_tags(&p, &Tags::default().with(ItemKey::Genre, g));
+    }
+    lib.scan();
+    let labels = lib.db.genre_labels().unwrap();
+    let mut shown: Vec<&String> = labels.values().collect();
+    shown.sort();
+    shown.dedup();
+    assert_eq!(shown, vec!["Drum and Bass", "R&B"], "{labels:?}");
+    assert_eq!(lib.track("A/B/00 - x.flac").genres, vec!["Drum and Bass"]);
+    assert_eq!(lib.track("A/B/03 - x.flac").genres, vec!["R&B"]);
+}

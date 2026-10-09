@@ -22,6 +22,10 @@ const CANONICAL: &[(&str, &str)] = &[
     ("rnb", "R&B"),
     ("randb", "R&B"),
     ("rhythmandblues", "R&B"),
+    // `&` is dropped by the key: "R&B", "Rhythm & Blues", "Drum & Bass",
+    // "Rock & Roll" (the client's table has the same aliases).
+    ("rb", "R&B"),
+    ("rhythmblues", "R&B"),
     ("poprock", "Pop Rock"),
     ("electronic", "Electronic"),
     ("electronica", "Electronica"),
@@ -33,6 +37,7 @@ const CANONICAL: &[(&str, &str)] = &[
     ("lofihiphop", "Lo-Fi Hip Hop"),
     ("drumandbass", "Drum and Bass"),
     ("drumnbass", "Drum and Bass"),
+    ("drumbass", "Drum and Bass"),
     ("dnb", "Drum and Bass"),
     ("kpop", "K-Pop"),
     ("jpop", "J-Pop"),
@@ -48,6 +53,7 @@ const CANONICAL: &[(&str, &str)] = &[
     ("poppunk", "Pop Punk"),
     ("rocknroll", "Rock & Roll"),
     ("rockandroll", "Rock & Roll"),
+    ("rockroll", "Rock & Roll"),
     ("rock", "Rock"),
     ("pop", "Pop"),
     ("soul", "Soul"),
@@ -134,6 +140,24 @@ pub fn normalize_genre_opt(raw: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ampersand_aliases_share_one_label() {
+        for (a, b) in [
+            ("Drum & Bass", "Drum and Bass"),
+            ("Rhythm & Blues", "R&B"),
+            ("R&B", "rnb"),
+            ("Rock & Roll", "Rock and Roll"),
+        ] {
+            assert_eq!(
+                canonical_genre_label(a),
+                canonical_genre_label(b),
+                "{a} / {b}"
+            );
+        }
+        assert_eq!(canonical_genre_label("Drum & Bass"), "Drum and Bass");
+        assert_eq!(canonical_genre_label("R&B"), "R&B");
+    }
 
     #[test]
     fn variants_collapse_to_one_label() {
