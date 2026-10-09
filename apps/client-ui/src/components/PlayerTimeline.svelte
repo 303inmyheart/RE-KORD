@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t } from "../lib/i18n.svelte";
+  import { platformCaps } from "../lib/platformCaps";
   import { formatTime } from "../lib/player";
 
   let {
@@ -24,7 +25,14 @@
   let dragTime = $state<number | null>(null);
   let dragPointer: number | null = null;
 
-  const shownTime = $derived(dragTime ?? currentTime);
+  /**
+   * WebKitGTK: the bar moves once per second, with the time text, instead of
+   * at every `timeupdate` (4 Hz). Each update there is a whole-window frame
+   * (re-blurring the glass player bar), and the text changes once a second
+   * anyway, so this cuts playback frames by four.
+   */
+  const coarse = platformCaps.webkitGtk;
+  const shownTime = $derived(dragTime ?? (coarse ? Math.floor(currentTime) : currentTime));
   /** 0..1 — drives transforms only, so a tick never triggers layout. */
   const ratio = $derived(duration > 0 ? Math.min(1, Math.max(0, shownTime / duration)) : 0);
 

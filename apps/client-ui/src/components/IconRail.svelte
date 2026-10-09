@@ -48,7 +48,7 @@
         active={active === "studio"}
         onclick={() => onnavigate("studio")}
       >
-        <GraphicEq animated={studioAnimated} live />
+        <GraphicEq animated={studioAnimated} live beat={Math.floor(session.currentTime)} />
       </IconRailButton>
       <IconRailButton
         label={t("nav.library")}

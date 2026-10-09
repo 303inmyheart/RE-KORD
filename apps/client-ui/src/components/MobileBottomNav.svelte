@@ -59,7 +59,7 @@
       onclick={() => go("studio")}
     >
       <!-- The live Studio icon, like the sidebar (legacy RekordNavIcon). -->
-      <span class="icon"><GraphicEq animated={session.playing} live /></span>
+      <span class="icon"><GraphicEq animated={session.playing} live beat={Math.floor(session.currentTime)} /></span>
       <span class="label">{t("nav.studio")}</span>
     </button>
     <button

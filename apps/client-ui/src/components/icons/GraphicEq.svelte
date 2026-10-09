@@ -13,10 +13,12 @@
    *
    * Cost: `transform` only, on five tiny bars inside a `contain: strict`
    * box promoted to its own layer, so the page around it is never repainted.
-   * WebKitGTK does not run it on the compositor: every frame repainted and
-   * re-sent the whole window (under Xwayland on a 2× panel: Xwayland 35% of a
-   * core, WebKit 14%, while a track played). There the same motion is
-   * stepped from a timer at 5 fps: one small repaint every 200 ms.
+   * WebKitGTK does not run it on the compositor: every frame repaints and
+   * re-sends the whole window, re-blurring the glass rail and player bar
+   * (measured on a 2× Wayland panel, glass on: even at 5 fps the icon cost
+   * ~25% of a core while a track played). There the pose changes only on
+   * `beat` — the whole second of playback the timeline already redraws
+   * for — so it adds no frame of its own.
    * Rows and dashboard cards stay static: dozens of animated icons were what
    * kept WebKitGTK busy (perf report: 34% CPU with an icon in every row).
    */
@@ -26,10 +28,13 @@
   let {
     animated = false,
     live = false,
+    beat,
     class: className = "",
   }: {
     animated?: boolean;
     live?: boolean;
+    /** WebKitGTK: a value that changes with the timeline (whole seconds). */
+    beat?: number;
     class?: string;
   } = $props();
 
@@ -61,10 +66,8 @@
   const moving = $derived(animated && live && allowed && !hidden);
   const posed = $derived(animated && !moving);
 
-  /** WebKitGTK: the pulse sampled at 5 fps from a timer (see above). */
-  const STEP_MS = 200;
+  /** WebKitGTK: one pose per `beat` (see above), no timer of its own. */
   const stepped = platformCaps.webkitGtk;
-  let scales = $state<number[] | null>(null);
 
   /** Legacy curve: min → 1 → min over `dur`, ease-in-out, after `delay`. */
   function pulseAt(bar: (typeof BARS)[number], t: number): number {
@@ -75,20 +78,12 @@
     return bar.min + (1 - bar.min) * eased;
   }
 
-  $effect(() => {
-    if (!stepped || !moving) {
-      scales = null;
-      return;
-    }
-    const t0 = performance.now();
-    const tick = () => {
-      const t = (performance.now() - t0) / 1000;
-      scales = BARS.map((bar) => Math.round(pulseAt(bar, t) * 20) / 20);
-    };
-    tick();
-    const id = window.setInterval(tick, STEP_MS);
-    return () => window.clearInterval(id);
-  });
+  // 0.37 s of the legacy curve per beat: consecutive poses look unrelated.
+  const scales = $derived(
+    stepped && moving && beat != null
+      ? BARS.map((bar) => Math.round(pulseAt(bar, beat * 0.37) * 20) / 20)
+      : null,
+  );
 </script>
 
 <span class="geq {className}" class:pulse={moving && !stepped} class:posed aria-hidden="true">
