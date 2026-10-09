@@ -3,7 +3,12 @@
 All notable changes to RE-KORD. Versions follow [semantic versioning](https://semver.org);
 one version number covers the hub, the clients and the packages.
 
-## Unreleased
+## 5.1.0 — 2026-10-09
+
+A feature and polish release on top of RE-KORD 5: podcasts and news, embedded tags and
+covers for every format, keep-awake for the hub, reliable Android background playback,
+native media controls on Linux and the fixes from GitHub issue #97. Hubs and clients 5.0
+and 5.1 work together; the database migrates automatically (schema v7).
 
 ### New
 
@@ -67,6 +72,16 @@ one version number covers the hub, the clients and the packages.
 - Libraries indexed by 5.0 are completed once by a background job (*Reading embedded
   metadata*: throttled, paused during scans, resumable, with progress in **Jobs**).
   Database schema v7.
+- **Linux: native media controls (MPRIS).** GNOME's media widget, shell extensions and the
+  media keys now see RE-KORD as `org.mpris.MediaPlayer2.rekord`, with title, artist,
+  album, cover and Play / Pause / Next / Previous / Seek, in the client and the server
+  app. Updates are sent only on changes; the player exists only while something is queued.
+- **Instant playlist** (Home › *Playlist al volo*): a clearer builder with genre and mood
+  chips (icon, name, live counts), a match mode shown only when it matters, a result bar
+  with the number of tracks and their length, *Start playlist* and *Add to queue*, and the
+  selection remembered per account.
+- `pnpm dev:hub`: hub, client UI and admin panel together for development, without Tauri
+  or the GTK development packages.
 
 ### Changed
 
@@ -93,6 +108,11 @@ one version number covers the hub, the clients and the packages.
   of their own (one row shorter). The bottom nav is 54px. Touch targets stay at least
   44px (dense chips and sort options get an invisible hit area instead of padding). The
   desktop layout is unchanged.
+- **Linux desktop app is lighter during playback**: on WebKitGTK the timeline and the
+  Studio icon now change once per second, so a playing track costs one frame per second
+  (about half the CPU in Queue and Library, including GNOME Shell's share).
+- **Genre aliases are merged**: "Drum & Bass" / "Drum and Bass", "R&B" / "Rhythm & Blues"
+  and "Rock & Roll" spellings show as one genre in the library and the instant playlist.
 - **No scrollbars on touch screens**: pages, sheets and lists still scroll (touch,
   momentum, jump-to-track) but no longer draw a scrollbar or reserve its gutter. With a
   mouse they are unchanged.
@@ -145,8 +165,29 @@ one version number covers the hub, the clients and the packages.
   render. Aliases are now one chip and one menu entry, removing a genre removes its
   aliases too, and the menu closes as soon as a genre is picked (a second tap during the
   save could start a concurrent edit).
+- **Web app (PWA): tracks were downloaded several times** while loading when the service
+  worker was active (up to five times the file size in WebKit-based browsers): audio,
+  transcode and podcast streams now bypass the service worker.
+- The offline app fell back to Italian: English and German translations are now cached too.
+- Saving metadata or a cover in Studio no longer triggers a full library re-index a few
+  seconds later.
+- Podcasts: hardened proxy (audio content types only, header timeouts, no system proxy),
+  bounded feed and artwork parsing, a forced refresh honours the error backoff, and source
+  addresses (which may contain tokens) are hidden from users who cannot manage the hub.
+- A pause pressed while the player is reconnecting or loading always wins.
+- Closing the admin panel during a scan no longer leaves the scan lock (and the keep-awake
+  activity) held until restart.
+- Studio › Listen no longer shows a doubled "· ·" separator.
+- Cast: podcast episodes start at their resume point on the receiver.
 - **Phones: the end of a page was hidden behind the bottom nav** when nothing was in the
   player; it now always clears the nav and the home indicator.
+
+### Known issues
+
+- Linux: while a track plays, GNOME may also list a second, bare "RE-KORD" media entry
+  created by WebKitGTK itself, next to the full native one.
+- Android background playback was verified on an emulator; real phones with aggressive
+  battery savers, Bluetooth head units and car systems are still to be confirmed.
 
 ## 5.0.0 — RE-KORD 5
 

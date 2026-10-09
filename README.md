@@ -61,12 +61,16 @@ first scan of your existing library imports everything automatically.
 - Synced **LRC lyrics** with one-click **Auto LRC** and a karaoke mode.
 - Eight visualizers, including **DiscoWall**; sleep timer with a 30-second fade-out.
 - **Google Cast** from the Android app and from Chrome; lock-screen, notification and
-  headset controls.
+  headset controls, and native media controls (MPRIS) on Linux.
+- **Instant playlist** from genres and moods, with live track counts.
+- **Podcasts & news** (optional module): RSS feeds, radio news such as RTL 102.5's
+  *Giornale Orario* and live radio, in the same player, with resume and "listened" marks.
 
 **Library**
 - Folder-first indexing (`Artist/Album/track`) with automatic layout detection and a
-  filesystem watcher; embedded tags fill in genres, full dates, track/disc numbers, BPM and
-  lyrics.
+  filesystem watcher; **embedded tags and covers** from FLAC, MP3, M4A, Ogg/Opus, WAV,
+  AIFF, WMA and WebM fill in what you have not edited (titles, artists, genres, dates,
+  track/disc numbers, BPM, lyrics, artwork).
 - Browse by artist, genre or one of 14 personal **moods**; instant accent-insensitive
   search.
 - **Sonic Nebula**: explore your library as a galaxy laid out by tempo and energy.
@@ -91,12 +95,15 @@ first scan of your existing library imports everything automatically.
 
 **Make it yours**
 - 17 theme presets plus a custom theme: your colors, a background image or animated GIF,
-  colors extracted from the picture, adjustable glass. Export a theme and share it.
+  colors extracted from the picture, your own text color, adjustable glass. Export a theme
+  and share it.
+- Adjustable content and player-bar width on wide screens.
 
 **Anywhere**
 - LAN access out of the box, with **QR pairing** for the Android app.
 - One-click **Cloudflare tunnel** for listening away from home, with HTTPS and a QR code.
 - Installable web app (PWA) over HTTPS.
+- **Keep the hub awake**: stop the server PC from sleeping, always or only while in use.
 
 **Multi-profile**
 - Several accounts on one hub, each with its own library selection, favorites, playlists,

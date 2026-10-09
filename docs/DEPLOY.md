@@ -79,8 +79,8 @@ verifies its checksum and installs it in `<data dir>/tools/`.
 ## Linux, systemd
 
 ```bash
-tar -xzf RE-KORD-Server-5.0.0-linux-x64-headless.tar.gz
-cd RE-KORD-Server-5.0.0-linux-x64-headless
+tar -xzf RE-KORD-Server-5.1.0-linux-x64-headless.tar.gz
+cd RE-KORD-Server-5.1.0-linux-x64-headless
 sudo ./systemd/install.sh            # /opt/rekord, data in /var/lib/rekord, user "rekord"
 sudoedit /etc/default/rekord-server  # REKORD_MUSIC_ROOT, REKORD_BIND, ...
 sudo systemctl restart rekord-server
