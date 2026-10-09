@@ -21,6 +21,105 @@ pub struct PersistedSettings {
     pub allow_remote_admin: Option<bool>,
     /// Optional "Podcast e notizie" module (off unless enabled in the admin panel).
     pub podcasts: Option<PodcastSettings>,
+    /// "Prevent the computer from sleeping" (`settings.json` → `power`). Kept as
+    /// raw JSON and read leniently: a bad value must not void the other keys.
+    pub power: Option<serde_json::Value>,
+}
+
+/// When the hub keeps the computer from going to sleep.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PreventSleep {
+    /// Never (default): the hub does nothing.
+    #[default]
+    Off,
+    /// For as long as the hub runs.
+    Always,
+    /// While the hub is in use, plus a grace period after the last activity.
+    WhenActive,
+}
+
+impl PreventSleep {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Always => "always",
+            Self::WhenActive => "whenActive",
+        }
+    }
+
+    /// Accepts the API spelling (`whenActive`) and the CLI one (`when-active`).
+    pub fn parse(raw: &str) -> Option<Self> {
+        let k: String = raw
+            .trim()
+            .chars()
+            .filter(|c| !matches!(c, '-' | '_' | ' '))
+            .flat_map(char::to_lowercase)
+            .collect();
+        match k.as_str() {
+            "off" | "never" | "0" | "false" | "no" => Some(Self::Off),
+            "always" | "on" | "1" | "true" | "yes" => Some(Self::Always),
+            "whenactive" | "active" | "inuse" => Some(Self::WhenActive),
+            _ => None,
+        }
+    }
+}
+
+/// Hub settings of "Prevent the computer from sleeping" (`settings.json` → `power`).
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PowerSettings {
+    pub prevent_sleep: PreventSleep,
+    /// `whenActive`: minutes the lock is kept after the last activity.
+    pub grace_minutes: u32,
+    /// Linux only: also block the suspend a closed laptop lid triggers.
+    pub keep_awake_lid_closed: bool,
+}
+
+impl Default for PowerSettings {
+    fn default() -> Self {
+        Self {
+            prevent_sleep: PreventSleep::Off,
+            grace_minutes: Self::DEFAULT_GRACE_MINUTES,
+            keep_awake_lid_closed: false,
+        }
+    }
+}
+
+impl PowerSettings {
+    pub const DEFAULT_GRACE_MINUTES: u32 = 10;
+    pub const MIN_GRACE_MINUTES: u32 = 1;
+    pub const MAX_GRACE_MINUTES: u32 = 120;
+
+    pub fn clamped(mut self) -> Self {
+        self.grace_minutes = self
+            .grace_minutes
+            .clamp(Self::MIN_GRACE_MINUTES, Self::MAX_GRACE_MINUTES);
+        self
+    }
+
+    /// Lenient read of `settings.json` → `power`: unknown or mistyped values
+    /// fall back to their defaults one by one.
+    pub fn from_json(v: &serde_json::Value) -> Self {
+        let d = Self::default();
+        Self {
+            prevent_sleep: v
+                .get("preventSleep")
+                .and_then(|x| x.as_str())
+                .and_then(PreventSleep::parse)
+                .unwrap_or(d.prevent_sleep),
+            grace_minutes: v
+                .get("graceMinutes")
+                .and_then(|x| x.as_u64())
+                .map(|n| n.min(u32::MAX as u64) as u32)
+                .unwrap_or(d.grace_minutes),
+            keep_awake_lid_closed: v
+                .get("keepAwakeLidClosed")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(d.keep_awake_lid_closed),
+        }
+        .clamped()
+    }
 }
 
 /// Hub settings of the podcasts module (`settings.json` → `podcasts`).
@@ -79,6 +178,12 @@ pub struct AppConfig {
     /// Podcasts module settings (persisted).
     #[serde(default)]
     pub podcasts: PodcastSettings,
+    /// Sleep prevention (persisted; the mode can be locked by `REKORD_PREVENT_SLEEP`).
+    #[serde(skip)]
+    pub power: PowerSettings,
+    /// `power.prevent_sleep` comes from `REKORD_PREVENT_SLEEP` / `--prevent-sleep`.
+    #[serde(skip)]
+    pub power_mode_from_env: bool,
 }
 
 fn default_watch_library() -> bool {
@@ -108,6 +213,8 @@ impl AppConfig {
             watch_library: true,
             allow_remote_admin: false,
             podcasts: PodcastSettings::default(),
+            power: PowerSettings::default(),
+            power_mode_from_env: false,
         }
     }
 
@@ -245,7 +352,57 @@ impl AppConfig {
             None => file.allow_remote_admin.unwrap_or(false),
         };
         self.podcasts = file.podcasts.unwrap_or_default().clamped();
+        self.load_power_settings(&file);
 
+        Ok(())
+    }
+
+    /// `power` from the file, then the mode from `REKORD_PREVENT_SLEEP`
+    /// (which `--prevent-sleep` sets), which locks it.
+    fn load_power_settings(&mut self, file: &PersistedSettings) {
+        self.power = file
+            .power
+            .as_ref()
+            .map(PowerSettings::from_json)
+            .unwrap_or_default();
+        self.power_mode_from_env = false;
+        if let Some(raw) = Self::env_first(&["REKORD_PREVENT_SLEEP"]) {
+            match PreventSleep::parse(&raw) {
+                Some(mode) => {
+                    self.power.prevent_sleep = mode;
+                    self.power_mode_from_env = true;
+                }
+                None => tracing::warn!(
+                    value = %raw,
+                    "REKORD_PREVENT_SLEEP ignored: use off, always or when-active"
+                ),
+            }
+        }
+    }
+
+    /// Re-read `power` from `settings.json` (after a backup restore wrote it).
+    pub fn reload_power_settings(&mut self) {
+        let file = self.read_persisted();
+        self.load_power_settings(&file);
+    }
+
+    /// Persist the power settings. A mode locked by the environment is not
+    /// written: the file keeps its own.
+    pub fn save_power_settings(&mut self, settings: PowerSettings) -> Result<()> {
+        let settings = settings.clamped();
+        let mut s = self.read_persisted();
+        let mut stored = settings;
+        if self.power_mode_from_env {
+            stored.prevent_sleep = s
+                .power
+                .as_ref()
+                .map(PowerSettings::from_json)
+                .unwrap_or_default()
+                .prevent_sleep;
+        }
+        s.power = Some(serde_json::to_value(stored)?);
+        self.write_persisted(&s)?;
+        self.power = settings;
         Ok(())
     }
 

@@ -51,5 +51,10 @@
   "hub.activity.podcasts.enabled": "Podcasts & news module turned on",
   "hub.activity.podcasts.disabled": "Podcasts & news module turned off",
   "hub.activity.podcasts.sourceAdded": "Podcast source added: {{name}}",
-  "hub.activity.podcasts.sourceRemoved": "Podcast source removed: {{name}}"
+  "hub.activity.podcasts.sourceRemoved": "Podcast source removed: {{name}}",
+  "hub.kind.power": "Power",
+  "hub.activity.power.settings": "Prevent sleep: mode {{mode}}, grace {{graceMinutes}} min",
+  "hub.activity.power.inhibited": "Computer sleep blocked ({{reason}})",
+  "hub.activity.power.released": "Computer sleep allowed again",
+  "hub.activity.power.failed": "Blocking sleep failed ({{code}})"
 }

@@ -773,7 +773,7 @@ panel"*). From another device the panel is read-only, unless remote administrati
 | **Accounts** | Create, rename, export and delete accounts. |
 | **Integrations** | YouTube cookies for yt-dlp and the Discogs token. |
 | **Podcasts & news** | Turn the optional module on or off, the cache lifetime, and the sources (add with a **"Test"** preview, rename, episodes per source, order, remove). See [Podcasts & news](#podcasts--news). |
-| **Network** | **"Local network access"** (addresses and QR codes), **"Access from outside"** (Cloudflare tunnel, public IP) and **"Machine operations"**. |
+| **Network** | **"Local network access"** (addresses and QR codes), **"Access from outside"** (Cloudflare tunnel, public IP), **"Power"** (keep the computer from sleeping) and **"Machine operations"**. |
 
 **Updating the library safely.** "Update (changes only)" re-reads only what changed and
 refuses to drop a large part of the library at once (for example when a disk is not
@@ -787,12 +787,42 @@ operations remotely (local network and tunnel)"** lets the Default account manag
 from any device, and lets any account use Studio. It can only be changed on the hub
 computer. Turn it on only on a network you trust.
 
+**Power: keep the hub computer awake.** A PC that goes to sleep looks switched on but
+answers nobody, on the home network or through the tunnel, until someone touches it.
+**Network › Power › "Prevent sleep"** has three choices:
+
+- **"Never"** (default): the computer follows its own power settings and the hub does
+  nothing at all.
+- **"Always"**: the computer does not go to sleep while the hub is running.
+- **"Only when in use"**: the computer stays awake while the hub is working (music or
+  podcasts playing from it, a Cast transcode, a scan, a download or another job, requests
+  through the Cloudflare tunnel) and for a few minutes after the last activity, 10 by
+  default (**"Minutes after the last activity"**, 1 to 120). The minutes cover the gaps
+  between tracks; after them the computer sleeps as usual.
+
+Only **system sleep** is blocked: the screen can still turn off and lock as usual. The
+status line says whether sleep is blocked right now, why and since when, for example
+"Sleep blocked (in use, playback) since 12:03", or "The computer can go to sleep". A change
+applies at once, without restarting the hub, and is part of the backup.
+
+On Linux, **"Stay awake with the lid closed (laptops)"** also stops a closed lid from
+suspending a laptop. Do not put a closed laptop in a bag with this on: it can get very hot.
+The system may refuse the lid lock (polkit); the status line then says so and sleep stays
+blocked anyway. On Windows and macOS the lid follows the system settings.
+
+How it works: on Linux a systemd-logind inhibitor (`systemd-inhibit --list` shows
+"RE-KORD"), plus GNOME's own inhibitor on a GNOME desktop; on Windows the "system
+required" power request. It ends with the hub, even if the hub crashes. A hub installed as
+a system service needs a polkit rule: see [DEPLOY.md](DEPLOY.md#keeping-the-computer-awake).
+In Docker it is not available.
+
 ## Troubleshooting
 
 | Problem | What to try |
 |---|---|
 | The connect screen says "Nothing answered at this address" | Check that the hub is running, that both devices are on the same network, and that port 7420 is open in the hub's firewall. |
 | "Something answers at this address, but it is not a RE-KORD hub" | Another service uses that address or port, or a captive portal intercepts it. |
+| The hub stops answering until someone wakes the computer | The computer goes to sleep: turn on **Network › Power › "Prevent sleep"** in the admin panel ("Only when in use" or "Always"). |
 | The library is empty | Set the music folder in the admin panel (**Library › Music folder**), then **Update**. If other accounts see music, check your selection in Studio › Discover › Local. |
 | New files do not appear | Use **Sync** in the top bar, or check **Status › Folder watching** in the admin panel. |
 | A track will not play | WMA, AIFF and ALAC need ffmpeg on the hub; **Diagnostics** shows whether it was found. |

@@ -19,6 +19,7 @@ pub mod origin;
 pub mod path_util;
 pub mod perm;
 pub mod podcasts;
+pub mod power;
 pub mod remote_access;
 pub mod scan;
 pub mod selection;
@@ -238,7 +239,8 @@ pub fn build_router(state: AppState, ui: UiDirs) -> Router {
         .merge(diagnostics::routes())
         .merge(jobs::routes())
         .merge(remote_access::routes())
-        .merge(podcasts::api::routes());
+        .merge(podcasts::api::routes())
+        .merge(power::api::routes());
 
     if let Some(dir) = ui.admin.filter(|d| d.is_dir()) {
         info!(path = %dir.display(), "serving admin panel at /admin");
@@ -282,15 +284,19 @@ pub fn build_router(state: AppState, ui: UiDirs) -> Router {
     // Layers wrap every route, nested service and fallback. Outermost last:
     // security headers → request id → trace span (reads the id) → origin
     // guard → CORS → compression → static cache headers → body limit.
-    app.layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT))
-        .layer(axum::middleware::from_fn(static_cache_headers))
-        .layer(compression_layer())
-        .layer(origin::cors_layer())
-        .layer(axum::middleware::from_fn(origin::origin_guard))
-        .layer(TraceLayer::new_for_http().make_span_with(request_span))
-        .layer(axum::middleware::from_fn(request_id_layer))
-        .layer(axum::middleware::from_fn(origin::security_headers))
-        .with_state(state)
+    app.layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        power::api::activity_layer,
+    ))
+    .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT))
+    .layer(axum::middleware::from_fn(static_cache_headers))
+    .layer(compression_layer())
+    .layer(origin::cors_layer())
+    .layer(axum::middleware::from_fn(origin::origin_guard))
+    .layer(TraceLayer::new_for_http().make_span_with(request_span))
+    .layer(axum::middleware::from_fn(request_id_layer))
+    .layer(axum::middleware::from_fn(origin::security_headers))
+    .with_state(state)
 }
 
 /// Options for running a hub in-process (standalone server or desktop shell).
@@ -384,8 +390,9 @@ pub async fn shutdown_signal() {
 }
 
 /// Stop everything that outlives a request: yt-dlp downloads, cancelable
-/// jobs, the Cloudflare tunnel and the library watcher.
+/// jobs, the Cloudflare tunnel, the library watcher and the sleep lock.
 pub async fn stop_background_work(state: &AppState) {
+    state.power.shutdown();
     let downloads: Vec<_> = state
         .active_downloads
         .lock()
@@ -439,6 +446,9 @@ pub async fn serve_with_shutdown(
     let app = build_router(state.clone(), ui);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!(%addr, "RE-KORD server listening");
+    // Only a hub that actually serves may keep the computer awake.
+    let data_dir = state.config.lock().unwrap().data_dir.clone();
+    state.power.start(Some(data_dir));
 
     let (signal_tx, signal_rx) = tokio::sync::oneshot::channel::<()>();
     // Connect info powers the loopback check for machine operations.

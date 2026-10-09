@@ -25,6 +25,10 @@ pub struct AppState {
     pub jobs: crate::jobs::SharedJobs,
     /// Podcasts module runtime (idle unless a client asks for a source).
     pub podcasts: Arc<crate::podcasts::Runtime>,
+    /// "Prevent the computer from sleeping" (holds nothing while off).
+    pub power: crate::power::PowerManager,
+    /// Activity held while a scan runs (sleep prevention, `whenActive`).
+    scan_activity: Arc<Mutex<Option<crate::power::ActivityGuard>>>,
     /// Scan counters used to coalesce "rescan, the library changed" requests.
     scan_generations: Arc<ScanGenerations>,
 }
@@ -51,6 +55,8 @@ impl AppState {
         {
             warn!(error = %e, "legacy server settings import failed");
         }
+        let power = crate::power::PowerManager::for_platform();
+        power.configure(config.power);
         Ok(Self {
             config: Arc::new(Mutex::new(config)),
             db,
@@ -58,8 +64,10 @@ impl AppState {
             scanning: Arc::new(AtomicBool::new(false)),
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             watcher: Arc::new(crate::watcher::WatcherRuntime::new()),
-            jobs: Arc::new(crate::jobs::JobRegistry::new()),
+            jobs: Arc::new(crate::jobs::JobRegistry::with_power(power.clone())),
             podcasts: Arc::new(crate::podcasts::Runtime::new()),
+            power,
+            scan_activity: Arc::new(Mutex::new(None)),
             scan_generations: Arc::new(ScanGenerations::default()),
         })
     }
@@ -76,11 +84,14 @@ impl AppState {
             .is_ok();
         if acquired {
             self.scan_generations.started.fetch_add(1, Ordering::SeqCst);
+            let activity = self.power.begin(crate::power::ActivityKind::Job);
+            *self.scan_activity.lock().unwrap() = Some(activity);
         }
         acquired
     }
 
     pub fn end_scan(&self) {
+        drop(self.scan_activity.lock().unwrap().take());
         let started = self.scan_generations.started.load(Ordering::SeqCst);
         self.scan_generations
             .completed

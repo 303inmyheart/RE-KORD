@@ -32,6 +32,16 @@ export const PODCAST_CODES: ReadonlySet<string> = new Set([
   "ytdlp_failed",
 ]);
 
+/** Hub codes of sleep prevention (`/system/power`), also shown in its status line. */
+export const POWER_CODES: ReadonlySet<string> = new Set([
+  "power_unsupported",
+  "power_refused",
+  "power_failed",
+  "power_locked_by_env",
+  "invalid_prevent_sleep",
+  "settings_save_failed",
+]);
+
 /** Statuses a reverse proxy (Vite dev, Cloudflare) answers for a hub that is down. */
 export function isGatewayStatus(status: number): boolean {
   return status === 500 || status === 502 || status === 503 || status === 504;
@@ -56,6 +66,7 @@ export function hubErrorKey(
 
   // Podcasts module codes (and the yt-dlp / SSRF ones its URLs can hit).
   if (code && PODCAST_CODES.has(code)) return { key: `errors.code.${code}` };
+  if (code && POWER_CODES.has(code)) return { key: `errors.code.${code}` };
 
   if (status === 403) {
     if (text.includes("default")) return { key: "errors.forbiddenDefault" };

@@ -51,5 +51,10 @@
   "hub.activity.podcasts.enabled": "Modul Podcasts & Nachrichten eingeschaltet",
   "hub.activity.podcasts.disabled": "Modul Podcasts & Nachrichten ausgeschaltet",
   "hub.activity.podcasts.sourceAdded": "Podcast-Quelle hinzugefügt: {{name}}",
-  "hub.activity.podcasts.sourceRemoved": "Podcast-Quelle entfernt: {{name}}"
+  "hub.activity.podcasts.sourceRemoved": "Podcast-Quelle entfernt: {{name}}",
+  "hub.kind.power": "Energie",
+  "hub.activity.power.settings": "Ruhezustand verhindern: Modus {{mode}}, Wartezeit {{graceMinutes}} Min.",
+  "hub.activity.power.inhibited": "Ruhezustand des Computers blockiert ({{reason}})",
+  "hub.activity.power.released": "Ruhezustand des Computers wieder erlaubt",
+  "hub.activity.power.failed": "Blockieren des Ruhezustands fehlgeschlagen ({{code}})"
 }

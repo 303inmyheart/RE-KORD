@@ -51,5 +51,10 @@
   "hub.activity.podcasts.enabled": "Modulo Podcast e notizie attivato",
   "hub.activity.podcasts.disabled": "Modulo Podcast e notizie disattivato",
   "hub.activity.podcasts.sourceAdded": "Fonte podcast aggiunta: {{name}}",
-  "hub.activity.podcasts.sourceRemoved": "Fonte podcast rimossa: {{name}}"
+  "hub.activity.podcasts.sourceRemoved": "Fonte podcast rimossa: {{name}}",
+  "hub.kind.power": "Energia",
+  "hub.activity.power.settings": "Blocco della sospensione: modalità {{mode}}, attesa {{graceMinutes}} min",
+  "hub.activity.power.inhibited": "Sospensione del computer bloccata ({{reason}})",
+  "hub.activity.power.released": "Sospensione del computer di nuovo consentita",
+  "hub.activity.power.failed": "Blocco della sospensione non riuscito ({{code}})"
 }

@@ -12,6 +12,7 @@ axum = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
 http-range-header = { workspace = true }
+http-body = "1"
 lofty = { workspace = true }
 mime_guess = { workspace = true }
 rusqlite = { workspace = true }
@@ -38,3 +39,7 @@ libc = "0.2"
 regex = "1"
 sha2 = "0.10"
 if-addrs = "0.13"
+
+[dev-dependencies]
+# Paused time for the sleep-prevention timer tests.
+tokio = { workspace = true, features = ["test-util"] }

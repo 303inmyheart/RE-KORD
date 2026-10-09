@@ -20,6 +20,7 @@ with its environment variable.
 | `--client-ui` | `REKORD_CLIENT_UI` | next to the binary | Built client, served at `/` |
 | `--admin-ui` | `REKORD_ADMIN_UI` | next to the binary | Built admin panel, served at `/admin` |
 | `--modules-manifest` | `REKORD_MODULES_MANIFEST` | `<data dir>/modules.manifest.toml` | Module manifest (see [MODULES.md](MODULES.md)) |
+| `--prevent-sleep` | `REKORD_PREVENT_SLEEP` | admin panel setting (`off`) | Keep the computer from sleeping: `off`, `always`, `when-active`. Locks the mode in the admin panel. See [Keeping the computer awake](#keeping-the-computer-awake). |
 | `--restore-zip <zip>` | `REKORD_RESTORE_ZIP` | | Restore a backup ZIP (v2 legacy or v3) before serving |
 | `--restore-exit` | | | Exit after `--restore-zip` |
 | `--legacy-import` (`--sync-legacy-meta`) | | | Merge data from a legacy `<music root>/.kord` folder before serving; prints the report |
@@ -101,6 +102,9 @@ The unit is hardened (`ProtectSystem=strict`, `ProtectHome=read-only`, `NoNewPri
   you use Studio, cover downloads or deletions.
 - For a library under `/home`, also set `ProtectHome=false`.
 - The service stops with `SIGTERM` and closes the database cleanly (timeout 20 s).
+- To let the service keep the computer awake, install the polkit rule:
+  `sudo cp systemd/50-rekord-power.rules /etc/polkit-1/rules.d/` (see
+  [Keeping the computer awake](#keeping-the-computer-awake)).
 
 Manual installation without the script: the steps are in the header of
 `scripts/linux/rekord-server.service`.
@@ -123,6 +127,9 @@ the pinned versions. `amd64` and `arm64` are supported.
 `REKORD_ALLOW_REMOTE_ADMIN` and `TZ`, read from the environment or from a `.env` file. Other
 variables (`REKORD_ALLOWED_ORIGINS`, `REKORD_PUBLIC_URL`, `REKORD_YTDLP_COOKIES`, ...) are
 listed, commented out, in the compose file.
+
+Sleep prevention is not available inside a container (no systemd-logind); run the hub
+directly on the host if the machine must stay awake.
 
 Inside a container no request is local, so machine operations need either
 `docker exec rekord curl -X POST http://127.0.0.1:7420/api/v1/library/scan`, or
@@ -163,7 +170,45 @@ pnpm dev:client:server-flavor
   `REKORD_CLOUDFLARED_BIN` or `REKORD_FFMPEG` are already set.
 - If port 7420 is taken (a standalone hub is already running), the embedded hub logs the
   error and the window connects to the existing hub.
+- Sleep prevention is set in the admin panel; `REKORD_PREVENT_SLEEP` works here too.
 - Desktop only: the feature and its dependencies do not exist on Android.
+
+## Keeping the computer awake
+
+A hub on a PC that suspends (or idles into sleep) is unreachable until someone wakes it.
+The admin panel's **Network › Power › "Prevent sleep"** (`GET/PUT /api/v1/system/power`)
+blocks **system sleep** only; the display may still turn off and lock.
+
+| Mode | When the lock is held |
+|---|---|
+| `off` (default) | Never. No process, timer or task runs. |
+| `always` | While the hub serves. |
+| `when-active` (`whenActive` in the API) | While a stream (media, transcode, podcast, preview) is sent, a scan / job / download runs, or requests arrive through the Cloudflare tunnel, plus a grace period after the last activity (10 min by default, 1–120). |
+
+For a headless hub, `--prevent-sleep <mode>` or `REKORD_PREVENT_SLEEP=<mode>` sets the
+mode at start-up and locks it in the admin panel (the grace period and the lid option stay
+editable there). Changes from the panel apply at once and are saved in `settings.json`.
+
+How it is done:
+
+- **Linux**: a systemd-logind block inhibitor (`systemd-inhibit --what=sleep:idle`, shown by
+  `systemd-inhibit --list` as "RE-KORD"). The helper reads a pipe from the hub, so it ends
+  with the hub, also when the hub is killed. In a GNOME session the hub also takes GNOME's
+  suspend inhibitor (`gnome-session-inhibit --inhibit suspend`), because GNOME's automatic
+  suspend only looks at its own inhibitors. Without systemd (other init systems, Docker
+  containers) the panel reports "not available".
+  - **Lid** (optional, `keepAwakeLidClosed`): a second inhibitor, `handle-lid-switch`, so
+    closing a laptop lid does not suspend it. A closed laptop in a bag can overheat. If
+    polkit refuses it, sleep stays blocked and the panel shows the refusal.
+  - **System service**: a service has no login session, and logind's default policy
+    refuses its sleep inhibitor. Install `scripts/linux/50-rekord-power.rules` (in the
+    headless package: `systemd/50-rekord-power.rules`) into `/etc/polkit-1/rules.d/`; it
+    allows the inhibitors for the user `rekord` only. Without it the panel shows "the
+    system refused the lock (polkit)".
+- **Windows**: `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)` on a dedicated
+  thread (`powercfg /requests` lists it under SYSTEM). It prevents idle sleep; closing the
+  lid or choosing Sleep still follows the power plan.
+- **macOS** (experimental): `caffeinate -i -w <hub pid>`.
 
 ## Reverse proxy and HTTPS
 

@@ -501,6 +501,44 @@ export type RemoteAccessState = {
   machineAccess?: MachineAccess;
 };
 
+export type PreventSleepMode = "off" | "always" | "whenActive";
+
+/** `GET /api/v1/system/power`: sleep prevention setting and live status. */
+export type PowerState = {
+  preventSleep: PreventSleepMode;
+  graceMinutes: number;
+  keepAwakeLidClosed: boolean;
+  /** `REKORD_PREVENT_SLEEP` / `--prevent-sleep` sets the mode. */
+  lockedByEnv: boolean;
+  platform: string;
+  limits: { minGraceMinutes: number; maxGraceMinutes: number; defaultGraceMinutes: number };
+  status: {
+    inhibiting: boolean;
+    reason: "always" | "active" | null;
+    since: string | null;
+    lastActivity: string | null;
+    lastActivityKind: "stream" | "job" | "remote" | null;
+    activeStreams: number;
+    activeJobs: number;
+    releaseAt: string | null;
+    method: string | null;
+    supported: boolean;
+    lidSupported: boolean;
+    lidInhibited: boolean;
+    errorCode: string | null;
+    error: string | null;
+    lidErrorCode: string | null;
+    lidError: string | null;
+  };
+  machineAccess?: MachineAccess;
+};
+
+export type PowerPatch = {
+  preventSleep?: PreventSleepMode;
+  graceMinutes?: number;
+  keepAwakeLidClosed?: boolean;
+};
+
 export type RestoreReport = {
   version?: number;
   favorites?: number;
@@ -680,6 +718,13 @@ export const api = {
     request<PodcastsAdmin>("/api/v1/podcasts/admin/order", {
       method: "PUT",
       body: JSON.stringify({ ids }),
+    }),
+
+  power: () => request<PowerState>("/api/v1/system/power"),
+  setPower: (patch: PowerPatch) =>
+    request<PowerState>("/api/v1/system/power", {
+      method: "PUT",
+      body: JSON.stringify(patch),
     }),
 
   machineAccess: () => request<MachineAccess>("/api/v1/system/machine-access"),

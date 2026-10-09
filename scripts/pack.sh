@@ -252,7 +252,8 @@ linux_server() {
   cp -a apps/client-ui/dist "$stage/client-ui"
   cp -a apps/server-ui/dist "$stage/admin-ui"
   cp -f modules.manifest.toml "$stage/modules.manifest.toml"
-  cp -f scripts/linux/rekord-server.service scripts/linux/rekord-server.env scripts/linux/install.sh "$stage/systemd/"
+  cp -f scripts/linux/rekord-server.service scripts/linux/rekord-server.env scripts/linux/install.sh \
+    scripts/linux/50-rekord-power.rules "$stage/systemd/"
   stage_headless_tools "$stage"
   echo "$VERSION" > "$stage/VERSION"
   cat > "$stage/run.sh" <<'EOF'

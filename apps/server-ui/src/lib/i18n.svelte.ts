@@ -157,6 +157,18 @@ export function formatDateTime(iso?: string | null): string {
   }).format(d);
 }
 
+/** A clock time ("12:03") today, date and time otherwise. */
+export function formatClock(iso?: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const today = new Date().toDateString() === d.toDateString();
+  return new Intl.DateTimeFormat(
+    i18n.intl,
+    today ? { timeStyle: "short" } : { dateStyle: "short", timeStyle: "short" },
+  ).format(d);
+}
+
 /** Bytes → human size, used for disk and DB figures. */
 export function formatBytes(bytes?: number | null): string {
   if (bytes == null || !Number.isFinite(bytes)) return "—";

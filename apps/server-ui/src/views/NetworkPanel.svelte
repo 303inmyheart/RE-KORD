@@ -2,6 +2,7 @@
   import { ActionRow, Banner, Button, Panel } from "@rekord/ui";
   import { admin, humanTime } from "../lib/admin.svelte";
   import { t } from "../lib/i18n.svelte";
+  import PowerPanel from "./PowerPanel.svelte";
   import UrlEntry from "./UrlEntry.svelte";
 
   const remote = $derived(admin.remote);
@@ -146,6 +147,10 @@
     </ActionRow>
   {/if}
 </Panel>
+
+{#if admin.power}
+  <PowerPanel power={admin.power} />
+{/if}
 
 <Panel title={t("network.machine.title")}>
   <p class="hint">{t("network.machine.hint")}</p>

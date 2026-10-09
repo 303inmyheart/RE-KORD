@@ -364,6 +364,8 @@ pub fn start(state: &AppState, req: StartRequest) -> Result<NdjsonStream, &'stat
 }
 
 async fn run_job(state: AppState, job: Arc<DownloadJob>, req: StartRequest) {
+    // A download keeps the computer awake until it ends (`whenActive`).
+    let _activity = state.power.begin(crate::power::ActivityKind::Job);
     let cfg = state.config.lock().unwrap().clone();
     let toolchain = Toolchain::resolve(&cfg).await;
     let ytdlp_info = crate::tools::peek(

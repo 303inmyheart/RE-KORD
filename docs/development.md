@@ -64,10 +64,16 @@ Run the hub and the UIs with hot reload in separate terminals:
 
 ```bash
 pnpm run server        # hub API on :7420
+pnpm dev:hub           # hub + client UI + admin panel together (no Tauri, no GTK dev packages)
 pnpm dev:client-ui     # client on http://localhost:7422 (proxies /api and /media to :7420)
 pnpm dev:server-ui     # admin panel on http://localhost:7421/admin/
 pnpm dev:client        # the Tauri desktop shell around the client dev server
 ```
+
+`pnpm dev:hub` runs `cargo run -p rekord-server` and both Vite servers with prefixed output; Ctrl+C
+stops all three. Extra arguments go to the hub (`pnpm dev:hub -- --data-dir <dir>`). Without one,
+it uses `REKORD_DATA_DIR`, else on Linux the RE-KORD Server app's data
+(`~/.local/share/app.rekord.server/hub`) when present. It refuses to start if 7420–7422 are taken.
 
 The dev servers' origins are on the hub's allow list, so they work against a local hub
 without extra configuration.

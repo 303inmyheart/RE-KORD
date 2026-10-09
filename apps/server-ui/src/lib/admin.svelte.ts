@@ -10,6 +10,8 @@ import {
   type LibraryProbeReport,
   type LibraryStats,
   type MachineAccess,
+  type PowerPatch,
+  type PowerState,
   type PreferredLayout,
   type RemoteAccessState,
   type ScanMode,
@@ -109,6 +111,8 @@ class AdminSession {
   remote = $state<RemoteAccessState | null>(null);
   publicIp = $state<string | null>(null);
   access = $state<MachineAccess | null>(null);
+  /** Sleep prevention (null on hubs older than 5.1). */
+  power = $state<PowerState | null>(null);
   /** Legacy RE-KORD data next to the music, and the last import. */
   legacy = $state<LegacyImportStatus | null>(null);
   /** Report of the last import or preview started from this panel. */
@@ -267,7 +271,10 @@ class AdminSession {
           this.config = await api.config();
           break;
         case "network":
-          this.remote = await api.remoteAccess();
+          [this.remote, this.power] = await Promise.all([
+            api.remoteAccess(),
+            api.power().catch(() => null),
+          ]);
           break;
         case "backup":
           this.legacy = this.canManage ? await api.legacyImportStatus() : null;
@@ -648,6 +655,23 @@ class AdminSession {
       this.publicIp = r.ip;
       return r.ip ? t("msg.publicIp", { ip: r.ip }) : t("msg.publicIpNone");
     });
+  }
+
+  /** Change sleep prevention; the hub applies it at once. */
+  setPower(patch: PowerPatch) {
+    return this.run(async () => {
+      this.power = await api.setPower(patch);
+      if (patch.preventSleep) return t(`power.msg.${patch.preventSleep}`);
+      return t("power.msg.saved");
+    });
+  }
+
+  async loadPower() {
+    try {
+      this.power = await api.power();
+    } catch (e) {
+      this.fail(e);
+    }
   }
 
   setRemoteAdmin(enabled: boolean) {

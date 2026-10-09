@@ -8,6 +8,24 @@ use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum PreventSleepArg {
+    Off,
+    Always,
+    #[value(alias = "whenActive", alias = "when_active")]
+    WhenActive,
+}
+
+impl PreventSleepArg {
+    fn as_env(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Always => "always",
+            Self::WhenActive => "when-active",
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "rekord-server", about = "RE-KORD server hub")]
 struct Args {
@@ -34,6 +52,13 @@ struct Args {
     /// Directory with built admin UI (served at `/admin`)
     #[arg(long, env = "REKORD_ADMIN_UI")]
     admin_ui: Option<PathBuf>,
+
+    /// Keep the computer from going to sleep: off, always (while the hub
+    /// runs) or when-active (while it streams, scans, downloads or serves the
+    /// tunnel, plus a grace period). Overrides and locks the admin panel's
+    /// setting. The display may still turn off.
+    #[arg(long, env = "REKORD_PREVENT_SLEEP", value_enum)]
+    prevent_sleep: Option<PreventSleepArg>,
 
     /// Restore a backup ZIP (v2/v3) from disk before serving
     #[arg(long, env = "REKORD_RESTORE_ZIP")]
@@ -114,6 +139,11 @@ fn main() -> Result<()> {
     // the runtime starts any thread.
     if let Some(manifest) = &args.modules_manifest {
         std::env::set_var("REKORD_MODULES_MANIFEST", manifest);
+    }
+    // The hub config reads the mode from the environment (the desktop server
+    // flavor has no flags, only the variable).
+    if let Some(mode) = args.prevent_sleep {
+        std::env::set_var("REKORD_PREVENT_SLEEP", mode.as_env());
     }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()

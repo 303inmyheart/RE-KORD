@@ -73,6 +73,8 @@ fn merge_params(into: &mut Map<String, Value>, params: Value) {
 pub struct JobRegistry {
     jobs: Mutex<Vec<Job>>,
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Running jobs keep the computer awake (sleep prevention, `whenActive`).
+    power: Option<crate::power::PowerManager>,
 }
 
 impl Default for JobRegistry {
@@ -86,6 +88,15 @@ impl JobRegistry {
         Self {
             jobs: Mutex::new(Vec::new()),
             cancels: Mutex::new(HashMap::new()),
+            power: None,
+        }
+    }
+
+    /// A registry whose running jobs count as hub activity.
+    pub fn with_power(power: crate::power::PowerManager) -> Self {
+        Self {
+            power: Some(power),
+            ..Self::new()
         }
     }
 
@@ -149,6 +160,11 @@ impl JobRegistry {
             id,
             cancel,
             settled: AtomicBool::new(false),
+            activity: Mutex::new(
+                self.power
+                    .as_ref()
+                    .map(|p| p.begin(crate::power::ActivityKind::Job)),
+            ),
         }
     }
 
@@ -250,9 +266,20 @@ pub struct JobHandle {
     id: String,
     cancel: Arc<AtomicBool>,
     settled: AtomicBool,
+    /// Held until the job settles.
+    activity: Mutex<Option<crate::power::ActivityGuard>>,
 }
 
 impl JobHandle {
+    fn end_activity(&self) {
+        drop(
+            self.activity
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take(),
+        );
+    }
+
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -333,6 +360,7 @@ impl JobHandle {
             job.finished_at = Some(chrono::Utc::now().to_rfc3339());
         });
         self.registry.cancels.lock().unwrap().remove(&self.id);
+        self.end_activity();
     }
 
     pub fn fail(&self, error: impl Into<String>) {
@@ -346,6 +374,7 @@ impl JobHandle {
             job.finished_at = Some(chrono::Utc::now().to_rfc3339());
         });
         self.registry.cancels.lock().unwrap().remove(&self.id);
+        self.end_activity();
     }
 }
 
@@ -364,6 +393,7 @@ impl Drop for JobHandle {
             }
         });
         self.registry.cancels.lock().unwrap().remove(&self.id);
+        self.end_activity();
     }
 }
 

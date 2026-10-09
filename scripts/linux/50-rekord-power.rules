@@ -1,0 +1,15 @@
+// polkit rule for "Prevent the computer from sleeping" (admin panel › Network › Power)
+// when the hub runs as the systemd service user "rekord" (scripts/linux/install.sh).
+// A service has no login session, so logind refuses its sleep inhibitor by default.
+//
+//   sudo cp 50-rekord-power.rules /etc/polkit-1/rules.d/
+//
+// Not needed for the desktop apps or a hub started from your own session.
+polkit.addRule(function (action, subject) {
+    if (subject.user == "rekord" &&
+        (action.id == "org.freedesktop.login1.inhibit-block-sleep" ||
+         action.id == "org.freedesktop.login1.inhibit-block-idle" ||
+         action.id == "org.freedesktop.login1.inhibit-handle-lid-switch")) {
+        return polkit.Result.YES;
+    }
+});

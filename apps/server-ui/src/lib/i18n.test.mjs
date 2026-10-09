@@ -7,7 +7,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { PODCAST_CODES, hubErrorKey } from "./hubErrors.ts";
+import { PODCAST_CODES, POWER_CODES, hubErrorKey } from "./hubErrors.ts";
 import { hubActivityCode, hubActivityText, hubText } from "../../../../packages/ui/src/lib/hubText.ts";
 import { intlTag, interpolate, normalizeLocale, pickLocale } from "./locale.ts";
 
@@ -98,6 +98,11 @@ describe("locale tables", () => {
       "jobs.status": ["running", "done", "failed", "canceled"],
       "network.remote.status": ["stopped", "starting", "running", "error"],
       "scan.mode": ["incremental", "full"],
+      "power.mode": ["off", "always", "whenActive"],
+      "power.mode.hint": ["off", "always", "whenActive"],
+      "power.msg": ["off", "always", "whenActive"],
+      "power.what": ["stream", "job", "remote", "recent"],
+      "errors.code": ["power_unsupported", "power_refused", "power_failed"],
     };
     for (const [prefix, ids] of Object.entries(families)) {
       for (const id of ids) {
@@ -184,6 +189,16 @@ describe("hub errors", () => {
   test("podcast codes have their own text, in every language", () => {
     for (const code of PODCAST_CODES) {
       const k = hubErrorKey(code === "ytdlp_disabled" ? 403 : 422, code, true);
+      assert.deepEqual(k, { key: `errors.code.${code}` });
+      for (const [name, table] of [["it", it], ["en", en], ["de", de]]) {
+        assert.ok(k.key in table, `${name}.json: missing ${k.key}`);
+      }
+    }
+  });
+
+  test("sleep prevention codes have their own text, in every language", () => {
+    for (const code of POWER_CODES) {
+      const k = hubErrorKey(409, code, true);
       assert.deepEqual(k, { key: `errors.code.${code}` });
       for (const [name, table] of [["it", it], ["en", en], ["de", de]]) {
         assert.ok(k.key in table, `${name}.json: missing ${k.key}`);

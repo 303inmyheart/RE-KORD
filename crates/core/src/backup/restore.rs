@@ -240,6 +240,13 @@ pub async fn restore_backup_zip(
             );
         }
         fs::write(&dest, settings.as_bytes())?;
+        // Sleep prevention follows the restored settings at once.
+        let power = {
+            let mut cfg = state.config.lock().unwrap();
+            cfg.reload_power_settings();
+            cfg.power
+        };
+        state.power.configure(power);
     }
     // Legacy v2 machine config: library root fallback plus Discogs token,
     // Cloudflare login and cookies (only filled where this hub has none).

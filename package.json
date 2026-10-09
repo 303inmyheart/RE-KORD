@@ -4,6 +4,7 @@
   "private": true,
   "description": "RE-KORD — modular music hub (server API + client UI)",
   "scripts": {
+    "dev:hub": "node scripts/dev-hub.mjs",
     "dev:server-ui": "pnpm --filter @rekord/server-ui dev",
     "dev:client-ui": "pnpm --filter @rekord/client-ui dev",
     "build:server-ui": "pnpm --filter @rekord/server-ui build",

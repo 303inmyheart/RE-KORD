@@ -45,6 +45,7 @@ Envelope (JSON):
 | GET/DELETE | `/api/v1/diagnostics/errors` | Recent WARN/ERROR ring buffer (`limit`) / clear it |
 | GET | `/api/v1/network/public-ip` | Public IP (best effort, `null` when offline) |
 | GET/PUT | `/api/v1/system/machine-access` | Machine-operation rights; `PUT { "enabled" }` toggles remote admin (local only) |
+| GET/PUT | `/api/v1/system/power` | Sleep prevention setting and live status; `PUT` is a machine operation — see [Sleep prevention](#sleep-prevention) |
 | GET/POST | `/api/v1/favorites` | List / add favorite (`{ "track_id" }`) — per account |
 | DELETE | `/api/v1/favorites/{id}` | Remove favorite — per account |
 | GET/POST | `/api/v1/playlists` | List / create (`{ "name" }`) — per account |
@@ -170,6 +171,7 @@ Two levels (parity legacy `requestAccess.mjs`, where a loopback request could ru
 - backup: `GET …/backup/kord-data` (download) and `POST …/backup/kord-restore` (full restore; a non-admin may only restore a **theme package** up to 32 MiB)
 - jobs and diagnostics: job cancel / clear, `DELETE …/diagnostics/errors`
 - remote access: `POST …/remote-access/start|stop|login|logout`, `PUT …/system/machine-access`
+- sleep prevention: `PUT …/system/power`
 
 Refusals are `403` with `error: "forbidden_remote"` (not on the hub machine and remote admin off) or `error: "forbidden_default_account"` (machine operation from another account).
 
@@ -184,6 +186,53 @@ A request counts as local when the peer address is loopback, `Host` is `localhos
 `GET /api/v1/config` also reports `youtubeCookiesWritable` / `discogsWritable` as `false` when the caller cannot manage the machine.
 
 In **Docker** every request reaches the hub from the Docker network, never from loopback: run machine operations with `docker exec rekord curl -X POST http://127.0.0.1:7420/…`, or set `REKORD_ALLOW_REMOTE_ADMIN=1` on a trusted network. The desktop **server flavor** (hub embedded in the Tauri app) is local: its window talks to `127.0.0.1:7420` from an allowed origin.
+
+### Sleep prevention
+
+"Prevent the computer from sleeping" (`settings.json` → `power`). Only system sleep is
+blocked; the display may still turn off and lock.
+
+`GET /api/v1/system/power` (open, no side effects):
+
+```json
+{ "preventSleep": "whenActive", "graceMinutes": 10, "keepAwakeLidClosed": false,
+  "lockedByEnv": false, "platform": "linux",
+  "limits": { "minGraceMinutes": 1, "maxGraceMinutes": 120, "defaultGraceMinutes": 10 },
+  "status": {
+    "inhibiting": true, "reason": "active", "since": "2026-10-08T12:03:00Z",
+    "lastActivity": "2026-10-08T12:10:41Z", "lastActivityKind": "stream",
+    "activeStreams": 0, "activeJobs": 0, "releaseAt": "2026-10-08T12:20:41Z",
+    "method": "systemd-inhibit + gnome-session-inhibit", "supported": true,
+    "lidSupported": true, "lidInhibited": false,
+    "errorCode": null, "error": null, "lidErrorCode": null, "lidError": null },
+  "machineAccess": { … } }
+```
+
+- `preventSleep`: `off` (default, nothing runs), `always` (while the hub serves), or
+  `whenActive`: while a media / transcode / podcast / preview stream is being sent, a scan,
+  job or download runs, or requests arrive through the Cloudflare tunnel (status probes such
+  as `/health` excluded), plus `graceMinutes` after the last activity.
+- `status.reason`: `always` / `active` while `inhibiting`. `releaseAt`: when the grace
+  period ends (`whenActive`, nothing running). `lastActivityKind`: `stream`, `job` or
+  `remote`.
+- `status.method`: `systemd-inhibit` (Linux, systemd-logind inhibitor `sleep:idle`, plus
+  `handle-lid-switch` with `keepAwakeLidClosed`; plus `gnome-session-inhibit` in a GNOME
+  session), `SetThreadExecutionState` (Windows), `caffeinate` (macOS).
+- `status.errorCode`: `power_unsupported` (no systemd, a container, another OS),
+  `power_refused` (polkit), `power_failed`; `error` is the platform's English detail. After
+  a failure the lock is retried on the next settings change, or on activity 10 minutes later.
+  `lidErrorCode` reports a refused lid lock while sleep itself is blocked.
+- `lockedByEnv`: `REKORD_PREVENT_SLEEP` / `--prevent-sleep` sets the mode.
+
+`PUT /api/v1/system/power` (machine operation) `{ preventSleep?, graceMinutes?,
+keepAwakeLidClosed? }` saves and applies at once (no restart) and answers with the `GET`
+payload. `graceMinutes` is clamped to 1–120; `preventSleep` also accepts `when-active`.
+Errors: 400 `invalid_prevent_sleep`, 409 `power_locked_by_env` (changing a mode locked by
+the environment; the other fields stay writable), 500 `settings_save_failed`.
+
+Taking and releasing the lock is logged at info level, once per transition, and in the
+activity log (`power.inhibited` `{ reason }`, `power.released`, `power.failed` `{ code }`;
+settings changes as `power.settings` `{ mode, graceMinutes, lid }`).
 
 ### CORS
 
@@ -293,4 +342,5 @@ Studio, downloads, tools and permissions answer `{ ok: false, error: "<code>", m
 - remote access (`errorCode` of `GET /remote-access`): `cloudflared_not_found`, `tunnel_start_timeout`, `tunnel_exited_early`, `tunnel_exited`, `tunnel_failed`
 - tools: `ytdlp_update_in_progress`, `ytdlp_platform_unsupported`, `ytdlp_release_lookup_failed`, `ytdlp_asset_missing`, `ytdlp_download_failed`, `ytdlp_checksum_missing`, `ytdlp_checksum_mismatch`, `ytdlp_install_failed`, `cloudflared_not_found`
 - podcasts: `podcasts_disabled` (404), `podcast_invalid_url`, `url_not_allowed`, `invalid_episode_count` (400), `podcast_source_not_found`, `podcast_episode_not_found` (404), `podcast_unsupported_url`, `podcast_hls_unsupported`, `podcast_no_episodes` (422), `podcast_fetch_failed`, `podcast_http_error`, `podcast_too_large`, `podcast_parse_failed`, `podcast_resolve_failed` (502), `podcast_fetch_timeout` (504), `podcast_proxy_busy` (503), `podcast_limit_reached` (409), plus `ytdlp_disabled`, `ytdlp_not_found`, `ytdlp_timeout`, `ytdlp_failed`
+- sleep prevention: `invalid_prevent_sleep` (400), `power_locked_by_env` (409), `settings_save_failed` (500); status `errorCode`: `power_unsupported`, `power_refused`, `power_failed`
 - accounts: `account_create_failed`, `account_update_failed`, `account_delete_failed`, `cannot_delete_default_account`, `last_account`

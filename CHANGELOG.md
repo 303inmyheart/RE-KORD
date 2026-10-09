@@ -24,6 +24,17 @@ one version number covers the hub, the clients and the packages.
   default, conditional requests), never polled; with the module off the hub does nothing
   and clients load none of its code.
 - Database schema v6 (`podcast_sources`).
+- **Prevent the computer from sleeping** (admin panel *Network › Power*), so a hub reached
+  from the LAN, the tunnel or remote desktop does not doze off: **Never** (default),
+  **Always**, or **Only when in use** (playback, transcodes, podcast streams, scans,
+  downloads and jobs, tunnel traffic) plus a grace period (10 min, 1–120). Only system
+  sleep is blocked; the screen still turns off. Linux uses a systemd-logind inhibitor
+  (plus GNOME's session inhibitor on GNOME) that ends with the hub even after a crash,
+  with an optional *keep awake with the lid closed*; Windows uses
+  `SetThreadExecutionState`. Live status in the panel, applied without restart, saved in
+  `settings.json` (and so in backups), `GET/PUT /api/v1/system/power`, and
+  `--prevent-sleep off|always|when-active` / `REKORD_PREVENT_SLEEP` for headless hubs.
+  Event driven: no polling, nothing runs while it is off.
 
 ## 5.0.0 — RE-KORD 5
 
