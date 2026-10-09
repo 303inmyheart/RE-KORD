@@ -77,7 +77,9 @@ async function artFile(url: string): Promise<string> {
   if (known != null) return known;
   artFiles.set(url, "");
   try {
-    const res = await fetch(url, { credentials: "include" });
+    // No credentials: a cross-origin fetch with cookies would need CORS
+    // credentials the hub does not grant (covers are public anyway).
+    const res = await fetch(url);
     if (!res.ok) return "";
     const bytes = new Uint8Array(await res.arrayBuffer());
     const file = await invoke<string>("media_art", bytes, { headers: { "x-art-key": artKey(url) } });
