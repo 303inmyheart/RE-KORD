@@ -23,8 +23,16 @@
   const showLid = $derived(power.status.lidSupported);
 
   let grace = $state(10);
+  /** Saved grace last copied into the field (plain, not reactive). */
+  let syncedGrace: number | null = null;
   $effect.pre(() => {
-    grace = power.graceMinutes;
+    // Only a new saved value replaces the field: a refresh or another
+    // setting must not wipe a value typed and not saved yet.
+    const saved = power.graceMinutes;
+    if (saved !== syncedGrace) {
+      syncedGrace = saved;
+      grace = saved;
+    }
   });
 
   function setMode(value: string) {

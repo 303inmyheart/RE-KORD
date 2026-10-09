@@ -28,9 +28,17 @@ class PodcastsAdminStore {
     }
   }
 
+  /** Saved TTL last copied into the field. */
+  private syncedTtl: number | null = null;
+
   private apply(data: PodcastsAdmin) {
     this.data = data;
-    this.ttl = data.cacheTtlMinutes;
+    // Only a new saved value replaces the field: adding or renaming a source
+    // must not wipe a TTL typed and not saved yet.
+    if (data.cacheTtlMinutes !== this.syncedTtl) {
+      this.syncedTtl = data.cacheTtlMinutes;
+      this.ttl = data.cacheTtlMinutes;
+    }
     if (!this.url) this.count = data.limits.defaultEpisodes;
   }
 
@@ -70,10 +78,13 @@ class PodcastsAdminStore {
     this.formError = "";
     this.preview = null;
     try {
-      this.preview = await api.testPodcastSource(url, this.count);
-      if (!this.name.trim() && this.preview.title) this.name = this.preview.title;
+      const preview = await api.testPodcastSource(url, this.count);
+      // The address was edited meanwhile: this answer is for the old one.
+      if (this.url.trim() !== url) return;
+      this.preview = preview;
+      if (!this.name.trim() && preview.title) this.name = preview.title;
     } catch (e) {
-      this.formError = errorText(e);
+      if (this.url.trim() === url) this.formError = errorText(e);
     } finally {
       this.testing = false;
     }
