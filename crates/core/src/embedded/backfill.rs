@@ -314,21 +314,28 @@ pub fn tag_batch(db: &Db, opts: &EmbeddedOptions, policy: MergePolicy) -> Result
             if std::fs::File::open(&t.file_path).is_err() {
                 return None;
             }
-            let read = read_file(
-                &t.file_path,
-                ReadRequest {
-                    tags: opts.enabled,
-                    picture: false,
-                    properties: false,
-                },
-            );
+            // Reader off: the values go back to what the file name gives,
+            // nothing to parse (that would open every file for nothing).
+            let tags = if opts.enabled {
+                read_file(
+                    &t.file_path,
+                    ReadRequest {
+                        tags: true,
+                        picture: false,
+                        properties: false,
+                    },
+                )
+                .tags
+            } else {
+                Default::default()
+            };
             let stem = t
                 .file_path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("Unknown");
             Some(crate::scan::resolve_meta(
-                read.tags,
+                tags,
                 stem,
                 &t.artist_name,
                 t.duration_ms,
