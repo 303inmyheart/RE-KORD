@@ -20,12 +20,14 @@ pub struct PersistedSettings {
     /// non-loopback clients. Off by default: LAN/tunnel clients stay read-only there.
     pub allow_remote_admin: Option<bool>,
     /// Optional "Podcast e notizie" module (off unless enabled in the admin panel).
-    pub podcasts: Option<PodcastSettings>,
+    /// Kept as raw JSON like `power`: a mistyped value must not void the
+    /// whole file (music root included), only fall back to the defaults.
+    pub podcasts: Option<serde_json::Value>,
     /// "Prevent the computer from sleeping" (`settings.json` → `power`). Kept as
     /// raw JSON and read leniently: a bad value must not void the other keys.
     pub power: Option<serde_json::Value>,
     /// "Leggi metadati e copertine incorporati" and its priority.
-    pub embedded_metadata: Option<crate::embedded::EmbeddedSettings>,
+    pub embedded_metadata: Option<serde_json::Value>,
 }
 
 /// When the hub keeps the computer from going to sleep.
@@ -122,6 +124,12 @@ impl PowerSettings {
         }
         .clamped()
     }
+}
+
+/// A settings section from its raw JSON; defaults when missing or mistyped.
+fn lenient<T: serde::de::DeserializeOwned + Default>(v: Option<&serde_json::Value>) -> T {
+    v.and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default()
 }
 
 /// Hub settings of the podcasts module (`settings.json` → `podcasts`).
@@ -357,8 +365,8 @@ impl AppConfig {
             Some(v) => matches!(v.as_str(), "1" | "true" | "on"),
             None => file.allow_remote_admin.unwrap_or(false),
         };
-        self.podcasts = file.podcasts.unwrap_or_default().clamped();
-        self.embedded = file.embedded_metadata.unwrap_or_default();
+        self.podcasts = lenient::<PodcastSettings>(file.podcasts.as_ref()).clamped();
+        self.embedded = lenient(file.embedded_metadata.as_ref());
         self.load_power_settings(&file);
 
         Ok(())
@@ -433,7 +441,7 @@ impl AppConfig {
     ) -> Result<()> {
         self.embedded = settings;
         let mut s = self.read_persisted();
-        s.embedded_metadata = Some(settings);
+        s.embedded_metadata = Some(serde_json::to_value(settings)?);
         self.write_persisted(&s)
     }
 
@@ -441,7 +449,7 @@ impl AppConfig {
         let settings = settings.clamped();
         self.podcasts = settings;
         let mut s = self.read_persisted();
-        s.podcasts = Some(settings);
+        s.podcasts = Some(serde_json::to_value(settings)?);
         self.write_persisted(&s)
     }
 
@@ -577,4 +585,37 @@ fn is_netscape_cookies(path: &Path) -> bool {
             let t = l.trim();
             !t.is_empty() && !t.starts_with('#') && t.split('\t').count() >= 6
         })
+}
+
+#[cfg(test)]
+mod lenient_tests {
+    use super::*;
+
+    #[test]
+    fn a_mistyped_section_does_not_void_the_settings_file() {
+        let dir = std::env::temp_dir().join(format!("rekord-cfg-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut cfg = AppConfig::resolve(Some(dir.clone()), "127.0.0.1:0".parse().unwrap(), None);
+        fs::write(
+            cfg.settings_path(),
+            r#"{"music_root":"/music","embedded_metadata":{"enabled":"true","priority":"tags"},
+               "podcasts":{"enabled":"yes"}}"#,
+        )
+        .unwrap();
+        cfg.load_persisted_settings().unwrap();
+        assert_eq!(cfg.music_root, Some(PathBuf::from("/music")));
+        assert_eq!(cfg.embedded, crate::embedded::EmbeddedSettings::default());
+        assert!(!cfg.podcasts.enabled);
+        // Saving one section keeps the others.
+        cfg.save_podcast_settings(PodcastSettings {
+            enabled: true,
+            ..cfg.podcasts
+        })
+        .unwrap();
+        let mut again = AppConfig::resolve(Some(dir.clone()), "127.0.0.1:0".parse().unwrap(), None);
+        again.load_persisted_settings().unwrap();
+        assert_eq!(again.music_root, Some(PathBuf::from("/music")));
+        assert!(again.podcasts.enabled);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
