@@ -82,6 +82,7 @@
           lyrics: lyricsKind(session.current.lyrics),
           duration: durationLabel,
           plays: currentExternal ? null : playCount,
+          external: currentExternal,
         })
       : [],
   );

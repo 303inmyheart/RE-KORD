@@ -113,6 +113,10 @@
   const moods = $derived(moodsProp ?? trackRowStats.moods(track));
   /** Podcast episode / live stream: no library actions (favourite, playlist, edit, exclude). */
   const external = $derived(isExternalTrack(track));
+  /** "Artist · Album"; an episode / live stream shows its show once. */
+  const metaText = $derived(
+    inAlbum || external ? track.artist_name : `${track.artist_name} · ${track.album_name}`,
+  );
   const live = $derived(isLiveTrack(track));
   /** Active row: EQ in static pose (never animated in rows: WebKitGTK cost). */
   const showStudio = $derived(active);
@@ -291,9 +295,9 @@
     <span class="track-row__meta">
       <span
         class="track-row__meta-text"
-        title={inAlbum ? track.artist_name : `${track.artist_name} · ${track.album_name}`}
+        title={metaText}
       >
-        {inAlbum ? track.artist_name : `${track.artist_name} · ${track.album_name}`}
+        {metaText}
       </span>
       <TrackLyricsIcon kind={trackLyricsKind} class="track-row__lyrics-inline--meta" />
     </span>

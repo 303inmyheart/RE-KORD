@@ -16,12 +16,14 @@ export function listenMetaParts(input: {
   duration?: string | null;
   /** `null` hides the play count (external items such as podcast episodes). */
   plays: number | null;
+  /** A podcast episode / live stream (no album of its own). */
+  external?: boolean;
 }): ListenMetaPart[] {
   const parts: ListenMetaPart[] = [];
-  const names = [input.artist, input.album]
-    .map((s) => (s ?? "").trim())
-    .filter(Boolean)
-    .join(" · ");
+  const artist = (input.artist ?? "").trim();
+  // Episodes and live streams carry the show as both: shown once.
+  const album = input.external ? "" : (input.album ?? "").trim();
+  const names = [artist, album].filter(Boolean).join(" · ");
   if (names) parts.push({ kind: "names", text: names });
   if (input.lyrics !== "off") parts.push({ kind: "lyrics", lyrics: input.lyrics });
   const duration = (input.duration ?? "").trim();

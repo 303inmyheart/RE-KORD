@@ -51,3 +51,16 @@ test("external item without names or duration: only what exists", () => {
     ["lyrics", "plays"],
   );
 });
+
+test("an episode (show as artist and album) names the show once", () => {
+  assert.equal(
+    listenMetaParts({ artist: "Il Mondo", album: "LIVE", lyrics: "off", plays: null, external: true })[0]
+      .text,
+    "Il Mondo",
+  );
+  // A self-titled album keeps both names.
+  assert.equal(
+    listenMetaParts({ artist: "Salmo", album: "Salmo", lyrics: "off", plays: 0 })[0].text,
+    "Salmo · Salmo",
+  );
+});
