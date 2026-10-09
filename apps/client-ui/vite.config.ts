@@ -20,8 +20,13 @@ function hubProxy(target: string): ProxyOptions {
   };
 }
 
-/** Sources of optional modules, whose chunks are never precached. */
-const OPTIONAL_MODULE_RE = /[\\/](podcasts)[\\/]|PodcastsView\.svelte|podcastModel\.ts/;
+/**
+ * Sources of optional modules, whose chunks are never precached. Source
+ * folders only: `src/locales/podcasts/*.json` is loaded for every English
+ * and German user (module on or off) and must stay precached.
+ */
+const OPTIONAL_MODULE_RE =
+  /[\\/]src[\\/](?:components|lib)[\\/]podcasts[\\/]|PodcastsView\.svelte|podcastModel\.ts/;
 
 /** Above this size a file does not go into the service worker's initial cache. */
 const SW_PRECACHE_MAX_BYTES = 2 * 1024 * 1024;
@@ -39,18 +44,17 @@ function rekordServiceWorker(): Plugin {
     generateBundle(_options, bundle) {
       // Optional modules (Podcast e notizie) stay out of the install-time
       // cache: a hub with the module off never downloads its code.
-      const moduleChunkNames = new Set(
-        Object.values(bundle)
-          .filter(
-            (item) =>
-              item.type === "chunk" &&
-              Object.keys(item.modules).length > 0 &&
-              Object.keys(item.modules).every((id) => OPTIONAL_MODULE_RE.test(id)),
-          )
-          .map((item) => item.fileName.replace(/-[\w-]+\.js$/, "")),
-      );
-      const isModuleFile = (fileName: string) =>
-        [...moduleChunkNames].some((base) => fileName.startsWith(`${base}-`));
+      // Exact file names (a name prefix like "assets/en" also matched every
+      // other English locale chunk), plus the CSS those chunks import.
+      const moduleFiles = new Set<string>();
+      for (const item of Object.values(bundle)) {
+        if (item.type !== "chunk") continue;
+        const ids = Object.keys(item.modules);
+        if (!ids.length || !ids.every((id) => OPTIONAL_MODULE_RE.test(id))) continue;
+        moduleFiles.add(item.fileName);
+        for (const css of item.viteMetadata?.importedCss ?? []) moduleFiles.add(css);
+      }
+      const isModuleFile = (fileName: string) => moduleFiles.has(fileName);
       const files = Object.values(bundle)
         .filter((item) => !item.fileName.endsWith(".map"))
         .filter((item) => !isModuleFile(item.fileName))
