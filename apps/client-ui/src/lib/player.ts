@@ -892,10 +892,13 @@ class PlayerController {
     const wants = this.wantsPlay();
     pushNativeIntent(wants, this.playing ? "" : this.pauseReason);
     if (typeof window === "undefined") return;
-    if (wants && !this.watchTimer) {
+    // The stall check has nothing to do while casting or waiting for the hub
+    // (`checkPlayback` returns at once): no timer for those, possibly hours.
+    const watch = wants && !this.remote && !this.outage;
+    if (watch && !this.watchTimer) {
       this.watch.reset(Date.now());
       this.watchTimer = window.setInterval(() => this.checkPlayback("timer"), WATCH_TICK_MS);
-    } else if (!wants && this.watchTimer) {
+    } else if (!watch && this.watchTimer) {
       window.clearInterval(this.watchTimer);
       this.watchTimer = 0;
       this.watch.reset(Date.now());
@@ -2678,6 +2681,10 @@ class PlayerController {
       // Nothing to play until the hub is back: remember the intent instead.
       this.outage.play = !this.outage.play;
       if (this.outage.play) toasts.info(t("core.player.waitingHub"), { key: "player-waiting-hub" });
+      else this.pauseReason = "user";
+      // The Android shell keeps CPU and network awake only while this wants to play.
+      this.syncNativeIntent();
+      this.emitPlayState();
       return;
     }
     if (this.crossfadeBusy) {

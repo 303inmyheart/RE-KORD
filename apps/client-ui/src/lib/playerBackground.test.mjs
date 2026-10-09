@@ -526,3 +526,24 @@ test("while the shell reports another app's audio, the watch does not fight for 
   await tick(200);
   assert.equal(player.playing, true, "retried once it is over");
 });
+
+test("pause while waiting for the hub: the shell is told, no idle watch timer", async () => {
+  const a = await start();
+  await advance(a, 12);
+  hubUp = false;
+  a.error = { code: 2 };
+  a.fire("error");
+  await tick(500);
+  assert.equal(player.waitingForHub, true);
+  assert.equal(lastUpdate().wantsPlay, true);
+  await player.toggle();
+  await tick(200);
+  assert.equal(lastUpdate().wantsPlay, false, "a pause during the outage reaches the shell");
+  await player.toggle();
+  await tick(200);
+  assert.equal(lastUpdate().wantsPlay, true, "and so does play");
+  hubUp = true;
+  player.resumeAfterOutage();
+  await tick(500);
+  assert.equal(player.playing, true);
+});
