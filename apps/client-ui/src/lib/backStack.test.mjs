@@ -2,7 +2,10 @@
  * Back stack: dialoghi chiusi da codice non devono lasciare voci morte nella
  * cronologia (il Back successivo sembrerebbe non fare niente).
  * Il modulo vive in @rekord/ui; history e popstate sono simulati qui, con la
- * navigazione asincrona come nei browser.
+ * navigazione asincrona come nei browser, ma senza timer veri: ogni
+ * `history.back()` mette in coda il suo `popstate` e `settle()` li consegna
+ * uno alla volta finche' la coda e' vuota (niente attese a tempo, che sotto
+ * carico non bastavano e facevano fallire i test a caso).
  */
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
@@ -11,6 +14,8 @@ function installFakeHistory() {
   const bus = new EventTarget();
   const entries = [{ state: null }];
   let index = 0;
+  /** Traversals requested and not delivered yet. */
+  const pending = [];
   globalThis.window = {
     addEventListener: (type, fn) => bus.addEventListener(type, fn),
     removeEventListener: (type, fn) => bus.removeEventListener(type, fn),
@@ -29,16 +34,17 @@ function installFakeHistory() {
     },
     back() {
       // Like browsers: the traversal (and `history.state`) changes later.
-      setTimeout(() => {
+      pending.push(() => {
         if (index === 0) return;
         index -= 1;
         const ev = new Event("popstate");
         ev.state = entries[index].state;
         bus.dispatchEvent(ev);
-      }, 0);
+      });
     },
   };
   return {
+    pending,
     get index() {
       return index;
     },
@@ -48,7 +54,16 @@ function installFakeHistory() {
   };
 }
 
-const settle = () => new Promise((r) => setTimeout(r, 20));
+/** Deliver every pending traversal (and those they cause), in order. */
+async function settle() {
+  for (let i = 0; i < 100; i++) {
+    await Promise.resolve();
+    const next = fake.pending.shift();
+    if (!next) return;
+    next();
+  }
+  throw new Error("history never settled");
+}
 
 const { enableBackStack, onHistoryPop, pushBackLayer, backLayerCount } = await import(
   "../../../../packages/ui/src/lib/backStack.ts"

@@ -123,6 +123,9 @@ export function enableBackStack(): () => void {
     popHandlers.clear();
     queued = [];
     silentPops = 0;
+    // A fallback timer left running would fire into the next enable.
+    if (silentTimer) clearTimeout(silentTimer);
+    silentTimer = null;
   };
 }
 
