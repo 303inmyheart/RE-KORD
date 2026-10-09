@@ -291,7 +291,19 @@ to once a minute after five silent minutes), the CPU sleeps as soon as no audio 
 - **Locks.** While the page plays or means to play: a partial wake lock (10 min timeout,
   re-armed every 10 s) and a `WIFI_MODE_FULL_HIGH_PERF` Wi-Fi lock (`LOW_LATENCY` only
   applies with the screen on and the app in front). Released on pause, and after 10 minutes
-  of wanting to play with nothing playing (hub gone for good).
+  of wanting to play with nothing playing (hub gone for good). Not held while casting: no
+  audio goes through the phone, and a session can last hours. `RekordCast` takes a 10 s
+  wake lock instead on each event the page must answer (a player-state change such as
+  the track finishing, session events, load results), not on the 1 Hz position ticks.
+- **WebView back to sleep.** When the service leaves the foreground 10 minutes after a
+  pause, or a Cast session ends with nothing playing, and the activity is not in front,
+  the WebView is paused again (`RekordMediaBridge.sleepIfHidden`), as `WryActivity` would
+  have done. Every command from the notification resumes it first.
+- **A pause always wins.** Every pause (app, notification, headset, car, sleep timer)
+  bumps a counter; a load, reconnect or `play()` retry started before it checks the
+  counter after each wait and does not play. The player button pauses while a reconnect
+  is loading (the deck is silent but the player still plays), and is a no-op while a
+  tapped track is still loading to play.
 - **Watchdog.** Every 10 s while the locks are held the service dispatches
   `rekord:playback-watchdog` in the page (`evaluateJavascript` is not throttled) and logs
   a page that says "playing" without a position update for 25 s. The event carries
@@ -398,7 +410,9 @@ hidden in the app. The shell carries a native sender instead, ported from the le
   MediaSession to remote volume, so the volume keys move the Chromecast's volume with the
   screen off. With the app open, `MainActivity.dispatchKeyEvent` does the same. The WebView
   stays awake in the background for as long as a session is connected, because the page is
-  what moves the queue forward when a track ends.
+  what moves the queue forward when a track ends. The CPU is not held for the whole
+  session: a 10 s wake lock covers each state change the page must answer (see
+  [Screen off, network, car](#screen-off-network-car)).
 - **Ending**: disconnecting from the button ends the session and stops the receiver. The
   player resumes locally at the last reported position. If the app is killed while
   casting, the receiver finishes the current track. The SDK resumes the saved session on
