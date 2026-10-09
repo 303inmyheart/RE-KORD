@@ -11,10 +11,11 @@ const calls = [];
 const bridge = {
   update: (json) => calls.push(["update", JSON.parse(json)]),
   stop: () => calls.push(["stop", null]),
+  log: (m) => calls.push(["log", m]),
 };
 globalThis.window = { RekordMediaNative: bridge };
 
-const { pushNativeMetadata, pushNativePlaybackState, pushNativePosition } =
+const { nativeLog, pushNativeIntent, pushNativeMetadata, pushNativePlaybackState, pushNativePosition } =
   await import("./nativeMedia.ts");
 
 /** Il ponte accumula per 80 ms: si aspetta che si svuoti. */
@@ -93,4 +94,37 @@ test("la posizione non scavalca la durata", async () => {
   pushNativePosition(100, 140);
   await settle();
   assert.equal(calls.at(-1)[1].positionMs, 100000);
+});
+
+test("l'intenzione di suonare e il motivo della pausa passano, una volta sola", async () => {
+  calls.length = 0;
+  pushNativeIntent(true, "");
+  await settle();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][1].wantsPlay, true);
+  calls.length = 0;
+  pushNativeIntent(true, "");
+  await settle();
+  assert.equal(calls.length, 0, "invariata: niente ponte");
+  pushNativePlaybackState("paused");
+  pushNativeIntent(false, "external");
+  await settle();
+  const state = calls.at(-1)[1];
+  assert.equal(state.playing, false);
+  assert.equal(state.wantsPlay, false);
+  assert.equal(state.pauseReason, "external");
+});
+
+test("il brano nuovo eredita l'intenzione corrente", async () => {
+  calls.length = 0;
+  pushNativeIntent(true, "");
+  pushNativeMetadata({ title: "Kyoto", artist: "Skrillex", album: "Bangarang EP" }, "");
+  await settle();
+  assert.equal(calls.at(-1)[1].wantsPlay, true);
+});
+
+test("i messaggi diagnostici arrivano al logcat", () => {
+  calls.length = 0;
+  nativeLog("watch: reconnecting");
+  assert.deepEqual(calls, [["log", "watch: reconnecting"]]);
 });

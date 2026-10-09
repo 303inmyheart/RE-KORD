@@ -36,6 +36,8 @@ import {
   shuffleTailFromCurrent,
 } from "./smartShuffle";
 import { PlaybackGuards } from "./playbackGuards";
+import { PlaybackWatch } from "./playbackWatch";
+import { nativeLog, pushNativeIntent } from "./nativeMedia";
 import {
   countsTowardStats,
   isExternalTrack,
@@ -106,8 +108,21 @@ const MAX_CONSECUTIVE_TRACK_ERRORS = 3;
 const MEDIA_ERROR_PROBE_MS = 4000;
 /** Hub-synced cursor (index + position) while playing: at most this often. */
 const CURSOR_SYNC_MIN_MS = 60_000;
-/** Gapless warm-up window when crossfade is off (seconds before the end). */
-const GAPLESS_PREFETCH_SEC = 12;
+/**
+ * Gapless warm-up window when crossfade is off (seconds before the end). Wide
+ * enough for a slow link (tunnel, mobile data) to have the next track buffered:
+ * with the phone's screen off a cold request at the boundary is where it stalled.
+ */
+const GAPLESS_PREFETCH_SEC = 20;
+/** Extra warm-up before a crossfade's window. */
+const CROSSFADE_PREFETCH_LEAD_SEC = 15;
+/** Coarse stall check while the player means to play (see PlaybackWatch). */
+const WATCH_TICK_MS = 5000;
+/** Reconnects of the same track after network errors, in a short span. */
+const MAX_NETWORK_RELOADS = 3;
+const NETWORK_RELOAD_WINDOW_MS = 60_000;
+/** A heartbeat saying "other audio" holds the watch this long (beats are 10 s apart). */
+const OTHER_AUDIO_HOLD_MS = 15_000;
 /** The OS extrapolates position between updates; this only corrects drift. */
 const MEDIA_POSITION_REFRESH_MS = 5000;
 /**
@@ -460,6 +475,24 @@ class PlayerController {
   private outage: { relPath: string; time: number; play: boolean } | null = null;
   private outageListener: (() => void) | null = null;
   private mediaErrorBusy = false;
+  /** Stall supervision of the active deck (see playbackWatch.ts). */
+  private watch = new PlaybackWatch();
+  private watchTimer = 0;
+  /** A `play()` refused in the background: the watch tries again. */
+  private playRetry = false;
+  /** Loads in flight that end in `play()`: the player already means to play. */
+  private autoplayLoads = 0;
+  /** Reason carried by the active deck's next `pause` event (null: not asked for). */
+  private expectedPause: string | null = null;
+  /**
+   * Why playback is paused, for the Android shell: `external` (the engine paused
+   * on its own: another app took the audio) may be resumed by the shell.
+   */
+  private pauseReason = "";
+  /** Until when the Android shell says another app (or a call) has the audio. */
+  private otherAudioUntil = 0;
+  /** Network-error reconnects of the current track (see onTrackFailed). */
+  private networkReloads = { relPath: "", count: 0, at: 0 };
   /** Hold / seek lock / crossfade override laid over the player (Plectr). */
   private guards = new PlaybackGuards();
   /** Set when a held track reached its end (cleared by the next load / play). */
@@ -494,6 +527,21 @@ class PlayerController {
       });
       // Registered once: the OS keeps the same handlers across track changes.
       registerMediaSessionActions(() => this.mediaBridge());
+      // Stall checks that do not depend on the page's own (throttled) timers:
+      // the connection is back, the Android shell's heartbeat, a network change.
+      window.addEventListener("online", () => this.checkPlayback("online", true));
+      window.addEventListener("rekord:playback-watchdog", (event) => {
+        const detail = (event as CustomEvent<{ otherAudio?: boolean }>).detail;
+        // A call or another app has the audio: no play() / reload until it is over
+        // (the shell resumes an interrupted track itself, see RekordInterruption.kt).
+        this.otherAudioUntil = detail?.otherAudio ? Date.now() + OTHER_AUDIO_HOLD_MS : 0;
+        this.checkPlayback("heartbeat");
+      });
+      window.addEventListener("rekord:network", (event) => {
+        const detail = (event as CustomEvent<{ available?: boolean; transport?: string }>).detail;
+        if (!detail?.available) return;
+        this.checkPlayback(`network ${detail.transport ?? ""}`.trim(), true);
+      });
     }
   }
 
@@ -508,7 +556,14 @@ class PlayerController {
         if (!this.playing) void this.toggle();
       },
       pause: () => {
+        // From the notification, the headset or the car: a user pause even when
+        // the track is already silent (interrupted, waiting for the hub), so the
+        // shell never resumes it on its own.
+        this.pauseReason = "user";
+        this.playRetry = false;
+        if (this.outage) this.outage.play = false;
         if (this.playing) this.pause();
+        else this.syncNativeIntent();
       },
       next: () => void this.next(),
       prev: () => void this.prev(),
@@ -563,7 +618,11 @@ class PlayerController {
       // A seek is queued for the next frame: the element still reports the
       // old position and would make the timeline jump back for one tick.
       if (this.pendingSeek != null) return;
+      // A reload waiting for its metadata reports 0 until the restore seek: the
+      // timeline (and the notification) keep the position it will resume at.
+      if (this.restorePosition && this.restorePosition.relPath === this.current?.rel_path) return;
       this.currentTime = audio.currentTime;
+      if (this.watchTimer) this.watch.observe(Date.now(), audio.currentTime);
       this.prefetchNextDeck();
       this.maybeStartCrossfade();
       this.maybeCountHalfListen();
@@ -596,6 +655,8 @@ class PlayerController {
       if (this.remote) return;
       if (this.crossfadeBusy) {
         if (this.crossfadeInIx === ix || this.crossfadeOutIx === ix) {
+          this.expectedPause = null;
+          this.pauseReason = "";
           this.playing = true;
           this.syncMediaPlaybackState();
           this.emit();
@@ -603,6 +664,8 @@ class PlayerController {
         return;
       }
       if (ix !== this.active) return;
+      this.expectedPause = null;
+      this.pauseReason = "";
       if (this.playing) return;
       this.playing = true;
       this.syncMediaPlaybackState();
@@ -615,6 +678,12 @@ class PlayerController {
       // `ended` also pauses: the advance that follows is the real change.
       if (audio.ended) return;
       if (!this.playing) return;
+      // Not asked for by the player: the engine paused it (audio focus taken by a
+      // call, a video, another music app). The Android shell may resume it.
+      const reason = this.expectedPause ?? "external";
+      this.expectedPause = null;
+      this.pauseReason = reason;
+      if (reason === "external") nativeLog("paused by the system (another app took the audio)");
       this.playing = false;
       this.syncMediaPlaybackState();
       // Position saved now; the hub cursor sync (JSON of the whole synced
@@ -640,11 +709,26 @@ class PlayerController {
       // A track really plays: the failure streak and any outage are over.
       this.consecutiveErrors = 0;
       this.outage = null;
+      if (this.playRetry) {
+        this.playRetry = false;
+        nativeLog("playing again after a refused play()");
+        this.syncNativeIntent();
+      }
       if (this.errorNoticeId != null) {
         toasts.dismiss(this.errorNoticeId);
         this.errorNoticeId = null;
       }
     });
+    // Diagnostics only: the watch decides from the clock whether it is a stall.
+    for (const type of ["waiting", "stalled"]) {
+      on(type, () => {
+        if (this.remote || ix !== this.active || !this.playing) return;
+        // Every track start buffers for a moment: only mid-track waits are news.
+        if (audio.currentTime < 1) return;
+        nativeLog(`deck ${type} at ${Math.round(audio.currentTime)}s (ready ${audio.readyState}, network ${audio.networkState})`);
+        this.checkPlayback(type);
+      });
+    }
     on("error", () => {
       if (this.remote) return;
       const src = audio.getAttribute("src");
@@ -658,7 +742,9 @@ class PlayerController {
         return;
       }
       // The incoming deck of a load is handled by `loadCurrentDecks` itself.
-      void this.onTrackFailed(cur, this.playing, this.currentTime, audio.error?.code);
+      // `wantsPlay`, not `playing`: a reconnect still loading has not played yet,
+      // and its failure must not turn "waiting for the hub" into "paused".
+      void this.onTrackFailed(cur, this.wantsPlay(), this.resumePoint(), audio.error?.code);
     });
   }
 
@@ -672,28 +758,24 @@ class PlayerController {
    */
   private async onTrackFailed(track: Track, wantPlay: boolean, at = 0, errorCode?: number) {
     if (this.mediaErrorBusy || this.remote) return;
-    // "Format not supported" (e.g. WMA/AIFF/ALAC in WebKitGTK or Chromium): try
-    // the hub's transcoded stream once before calling the file broken.
-    if (
-      errorCode === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED &&
-      markNeedsTranscode(track.rel_path)
-    ) {
-      this.cancelPendingLoad();
-      this.abortCrossfade();
-      await this.loadCurrent(wantPlay);
-      return;
-    }
     this.mediaErrorBusy = true;
     const gen = this.loadGen;
     let skipTo: number | null = null;
+    let reconnectAt: number | null = null;
+    let transcode = false;
     try {
+      // Asked first: a refused or dropped connection also surfaces as "format
+      // not supported" (nothing was read to know the format), and must not
+      // send the track to the transcoder for the rest of the session.
       const reachable = await this.hubReachable();
       // The user moved on meanwhile: that load decides for itself.
       if (gen !== this.loadGen || this.current?.rel_path !== track.rel_path) return;
       if (!reachable) {
+        nativeLog(`media error ${errorCode ?? "?"} at ${Math.round(at)}s, hub unreachable: waiting for it`);
         this.outage = { relPath: track.rel_path, time: Math.max(0, at), play: wantPlay };
         // The previous track may still be draining its buffer on the other
         // deck: the user asked for this one, so silence until it can play.
+        this.expectPause("outage");
         this.deck0.pause();
         this.deck1.pause();
         this.playing = false;
@@ -702,9 +784,29 @@ class PlayerController {
         this.outageListener?.();
         return;
       }
+      // "Format not supported" (e.g. WMA/AIFF/ALAC in WebKitGTK or Chromium): try
+      // the hub's transcoded stream once before calling the file broken.
+      if (
+        errorCode === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED &&
+        markNeedsTranscode(track.rel_path)
+      ) {
+        transcode = true;
+        return;
+      }
+      // The connection broke (network switch, a tunnel hiccup) but the hub
+      // answers: the file is fine, reconnect where it stopped instead of skipping.
+      if (errorCode === MediaError.MEDIA_ERR_NETWORK && this.allowNetworkReload(track.rel_path)) {
+        nativeLog(`network error at ${Math.round(at)}s, hub reachable: reconnecting`);
+        // Started in `finally`, once this handler no longer counts as busy.
+        reconnectAt = isLiveTrack(track) ? 0 : Math.max(0, at);
+        return;
+      }
       this.consecutiveErrors += 1;
       if (this.consecutiveErrors >= MAX_CONSECUTIVE_TRACK_ERRORS) {
         this.consecutiveErrors = 0;
+        nativeLog(`${MAX_CONSECUTIVE_TRACK_ERRORS} tracks in a row failed: stopping`);
+        this.expectPause("error");
+        this.playRetry = false;
         this.deck0.pause();
         this.deck1.pause();
         this.playing = false;
@@ -729,6 +831,12 @@ class PlayerController {
       }
     } finally {
       this.mediaErrorBusy = false;
+      if (reconnectAt != null) void this.reloadCurrentAt(reconnectAt, wantPlay);
+      if (transcode) {
+        this.cancelPendingLoad();
+        this.abortCrossfade();
+        void this.loadCurrent(wantPlay);
+      }
     }
     if (skipTo != null) {
       this.cancelPendingLoad();
@@ -736,6 +844,154 @@ class PlayerController {
       this.index = skipTo;
       await this.loadCurrent(wantPlay);
     }
+  }
+
+  /** A few network reconnects per track and minute; past that, the old skip. */
+  private allowNetworkReload(relPath: string): boolean {
+    const now = Date.now();
+    const r = this.networkReloads;
+    if (r.relPath !== relPath || now - r.at > NETWORK_RELOAD_WINDOW_MS) {
+      this.networkReloads = { relPath, count: 1, at: now };
+      return true;
+    }
+    if (r.count >= MAX_NETWORK_RELOADS) return false;
+    r.count += 1;
+    r.at = now;
+    return true;
+  }
+
+  /** The next `pause` event of the active deck comes from the player, for `reason`. */
+  private expectPause(reason: string) {
+    this.pauseReason = reason;
+    if (!this.activeAudio().paused) this.expectedPause = reason;
+  }
+
+  /**
+   * Where a reconnect should resume. A reload still waiting for its metadata
+   * holds the position in `restorePosition` while the element (and its
+   * `timeupdate`) already says 0: a second reconnect must not start over.
+   */
+  private resumePoint(): number {
+    const cur = this.current;
+    if (!cur || isLiveTrack(cur)) return 0;
+    const pending = this.restorePosition;
+    return pending && pending.relPath === cur.rel_path ? pending.time : this.currentTime;
+  }
+
+  /** Does the player mean to play (even with nothing sounding yet)? */
+  private wantsPlay(): boolean {
+    if (this.remote) return this.playing;
+    return this.playing || this.playRetry || this.autoplayLoads > 0 || this.outage?.play === true;
+  }
+
+  /**
+   * Tell the Android shell what the player means to do (it keeps CPU and
+   * network awake for it) and run the stall check while it means to play.
+   */
+  private syncNativeIntent() {
+    const wants = this.wantsPlay();
+    pushNativeIntent(wants, this.playing ? "" : this.pauseReason);
+    if (typeof window === "undefined") return;
+    if (wants && !this.watchTimer) {
+      this.watch.reset(Date.now());
+      this.watchTimer = window.setInterval(() => this.checkPlayback("timer"), WATCH_TICK_MS);
+    } else if (!wants && this.watchTimer) {
+      window.clearInterval(this.watchTimer);
+      this.watchTimer = 0;
+      this.watch.reset(Date.now());
+    }
+  }
+
+  /**
+   * Is the active deck doing what the player thinks? Called from timers, media
+   * events, `online` and the Android heartbeat; PlaybackWatch decides from the
+   * clock, so a late call is harmless. `urgent`: the network just came back.
+   */
+  private checkPlayback(source: string, urgent = false) {
+    if (this.remote || !this.current) return;
+    if (this.outage || Date.now() < this.otherAudioUntil) {
+      // Hub unreachable: the session probes it (the heartbeat speeds that up) and
+      // `resumeAfterOutage` reloads. A reload from here would only fail again.
+      // Another app's audio: a play() would take the focus back from it.
+      this.watch.reset(Date.now());
+      return;
+    }
+    const a = this.activeAudio();
+    const action = this.watch.check(
+      Date.now(),
+      {
+        wantsPlay: this.wantsPlay(),
+        busy:
+          this.deckOpsInFlight > 0 ||
+          this.crossfadeBusy ||
+          this.mediaErrorBusy ||
+          this.pendingSeek != null ||
+          a.seeking,
+        paused: a.paused,
+        ended: a.ended,
+        currentTime: a.currentTime,
+        error: a.error != null,
+      },
+      urgent,
+    );
+    if (action.kind === "none") return;
+    const stuck = Math.round(action.stuckMs / 1000);
+    switch (action.kind) {
+      case "play":
+        nativeLog(`watch (${source}): silent for ${stuck}s, play() attempt ${action.attempt}`);
+        void this.retryPlay(a);
+        return;
+      case "reload": {
+        const at = this.resumePoint();
+        const err = a.error ? `, error ${a.error.code}` : "";
+        nativeLog(`watch (${source}): no progress for ${stuck}s${err}, reconnecting at ${Math.round(at)}s (attempt ${action.attempt})`);
+        void this.reloadCurrentAt(at, true);
+        return;
+      }
+      case "advance":
+        nativeLog(`watch (${source}): track ended ${stuck}s ago without advancing, moving on`);
+        void this.onEnded();
+        return;
+      case "giveUp":
+        nativeLog(`watch (${source}): nothing played for ${stuck}s despite retries, giving up`);
+        this.playRetry = false;
+        this.pauseLocalDecks();
+        this.pauseReason = "error";
+        this.playing = false;
+        this.syncMediaPlaybackState();
+        this.emitPlayState();
+        toasts.error(t("core.player.playFailed"), { key: "player-play-failed" });
+        return;
+    }
+  }
+
+  private async retryPlay(a: HTMLAudioElement) {
+    try {
+      const resume = this.resumeGraphForPlay();
+      if (resume) await resume;
+      await a.play();
+    } catch (e) {
+      nativeLog(`play() refused again: ${e instanceof DOMException ? e.name : String(e)}`);
+    }
+  }
+
+  /**
+   * A `play()` that was not the user's (next track, reconnect) failed. In the
+   * background (screen off) the watch keeps trying; in front the user sees why.
+   */
+  private onAutoplayFailed(e: unknown) {
+    const name = e instanceof DOMException ? e.name : "";
+    if (name === "AbortError") return;
+    const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    if (hidden && name !== "NotSupportedError") {
+      nativeLog(`play() refused in the background (${name || String(e)}): will retry`);
+      this.playRetry = true;
+      this.syncNativeIntent();
+      // The stall clock starts now, on this deck (a new track's position).
+      this.watch.observe(Date.now(), this.activeAudio().currentTime, true);
+      return;
+    }
+    this.reportPlayFailure(e);
   }
 
   /** Next index when skipping a broken track (repeat-one would loop on it). */
@@ -783,8 +1039,9 @@ class PlayerController {
       el.error != null ||
       (this.playing && el.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && !el.seeking);
     if (!o && !broken) return false;
-    const time = o && o.relPath === cur.rel_path ? o.time : this.currentTime;
+    const time = o && o.relPath === cur.rel_path ? o.time : this.resumePoint();
     const play = o ? o.play : this.playing;
+    nativeLog(`hub back: reloading at ${Math.round(time)}s${play ? ", playing" : ""}`);
     this.outage = null;
     void this.reloadCurrentAt(time, play);
     return true;
@@ -795,12 +1052,17 @@ class PlayerController {
     const cur = this.current;
     if (!cur) return;
     this.deckOpsInFlight += 1;
+    if (play) {
+      this.autoplayLoads += 1;
+      this.syncNativeIntent();
+    }
     try {
       const gen = ++this.loadGen;
       this.abortCrossfade();
       this.cancelPendingSeek();
       const a = this.activeAudio();
       this.prefetchedRelPath = null;
+      if (!a.paused) this.expectedPause = "reload";
       a.loop = this.repeat === "one";
       this.restorePosition = time >= 1 ? { relPath: cur.rel_path, time } : null;
       this.currentTime = time;
@@ -823,11 +1085,15 @@ class PlayerController {
       } catch (e) {
         if (gen !== this.loadGen) return;
         this.playing = false;
-        this.reportPlayFailure(e);
+        this.onAutoplayFailed(e);
       }
       this.emit();
     } finally {
       this.deckOpsInFlight -= 1;
+      if (play) {
+        this.autoplayLoads -= 1;
+        this.syncNativeIntent();
+      }
       this.maybeDropGraph();
     }
   }
@@ -1293,6 +1559,8 @@ class PlayerController {
       this.abortCrossfade();
       this.cancelPendingSeek();
       this.manualQueuedPaths.clear();
+      this.expectPause("user");
+      this.playRetry = false;
       this.deck0.pause();
       this.deck1.pause();
       for (const el of [this.deck0, this.deck1]) {
@@ -1384,6 +1652,7 @@ class PlayerController {
 
   private finishHeldTrack() {
     this.heldEndedFlag = true;
+    this.pauseReason = "ended";
     this.playing = false;
     if (this.duration > 0) this.currentTime = this.duration;
     this.syncMediaPlaybackState();
@@ -2475,6 +2744,11 @@ class PlayerController {
   private pauseLocalDecks() {
     const a = this.activeAudio();
     const wasSilent = a.paused;
+    this.expectPause("user");
+    if (this.playRetry) {
+      this.playRetry = false;
+      this.syncNativeIntent();
+    }
     const other = this.inactiveDeck();
     if (!other.paused) other.pause();
     a.pause();
@@ -2490,6 +2764,8 @@ class PlayerController {
     // Queue emptied while casting: the receiver must stop too — the dock (and
     // its Cast button) goes away with the queue.
     this.remote?.pause();
+    this.expectPause("user");
+    this.playRetry = false;
     this.deck0.pause();
     this.deck1.pause();
     this.playing = false;
@@ -2756,7 +3032,7 @@ class PlayerController {
     const remain = d - out.currentTime;
     // Warm the next deck a bit before the fade window.
     const fade = this.effectiveCrossfadeSec;
-    const lead = fade ? fade + 10 : GAPLESS_PREFETCH_SEC;
+    const lead = fade ? fade + CROSSFADE_PREFETCH_LEAD_SEC : GAPLESS_PREFETCH_SEC;
     if (remain > lead || remain < 0.2) return;
     const path = nextTr.rel_path;
     const inEl = this.inactiveDeck();
@@ -3000,10 +3276,20 @@ class PlayerController {
   private async loadCurrent(autoplay: boolean) {
     // Holds deck references across awaits: no deck may be swapped meanwhile.
     this.deckOpsInFlight += 1;
+    if (autoplay) {
+      // Means to play from now on: with the screen locked right after a tap the
+      // Android shell must not let the WebView sleep before the first sound.
+      this.autoplayLoads += 1;
+      this.syncNativeIntent();
+    }
     try {
       await this.loadCurrentDecks(autoplay);
     } finally {
       this.deckOpsInFlight -= 1;
+      if (autoplay) {
+        this.autoplayLoads -= 1;
+        this.syncNativeIntent();
+      }
       this.maybeDropGraph();
     }
   }
@@ -3041,9 +3327,11 @@ class PlayerController {
     const path = track.rel_path;
 
     this.heldEndedFlag = false;
+    this.playRetry = false;
     if (!autoplay) {
       // Prepared paused: nothing of the previous track may keep sounding
       // while the new one buffers.
+      this.expectPause("user");
       outEl.pause();
       if (this.playing) {
         this.playing = false;
@@ -3094,7 +3382,7 @@ class PlayerController {
             this.pushRecentDeferred(track);
           } catch (e) {
             this.playing = false;
-            if (gen === this.loadGen) this.reportPlayFailure(e);
+            if (gen === this.loadGen) this.onAutoplayFailed(e);
           }
         }
         this.emit();
@@ -3140,7 +3428,7 @@ class PlayerController {
       } catch (e) {
         if (gen !== this.loadGen) return;
         this.playing = false;
-        this.reportPlayFailure(e);
+        this.onAutoplayFailed(e);
       }
     } else {
       outEl.pause();
@@ -3219,7 +3507,9 @@ class PlayerController {
     if (this.index < this.queue.length - 1 || this.repeat === "all") {
       await this.next();
     } else {
+      this.pauseReason = "ended";
       this.playing = false;
+      this.syncMediaPlaybackState();
       this.emit();
     }
   }
@@ -3269,6 +3559,7 @@ class PlayerController {
   }
 
   private syncMediaPlaybackState() {
+    this.syncNativeIntent();
     if (!this.current) {
       setMediaSessionPlaybackState("none");
       return;

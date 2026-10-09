@@ -20,11 +20,20 @@ type NativeSnapshot = {
   playing: boolean;
   durationMs: number;
   positionMs: number;
+  /**
+   * The player means to play even while nothing sounds yet (loading, retrying,
+   * reconnecting): the shell keeps its foreground service, CPU and Wi-Fi awake.
+   */
+  wantsPlay: boolean;
+  /** Why it is paused: `external` (another app took the audio), `user`, `""`. */
+  pauseReason: string;
 };
 
 type NativeMediaBridge = {
   update: (json: string) => void;
   stop: () => void;
+  /** Diagnostics into the shell's logcat (`RekordMedia` tag). Older shells lack it. */
+  log?: (message: string) => void;
 };
 
 /**
@@ -42,6 +51,8 @@ function bridge(): NativeMediaBridge | null {
 }
 
 let snapshot: NativeSnapshot | null = null;
+/** Last intent, kept for the snapshot that the next track's metadata starts. */
+const intent = { wantsPlay: false, pauseReason: "" };
 let pending: ReturnType<typeof setTimeout> | null = null;
 let lastSent = "";
 
@@ -99,6 +110,8 @@ export function pushNativeMetadata(
     playing: snapshot?.playing ?? false,
     durationMs: 0,
     positionMs: 0,
+    wantsPlay: intent.wantsPlay,
+    pauseReason: intent.pauseReason,
   };
   schedule();
 }
@@ -115,6 +128,35 @@ export function pushNativePlaybackState(
   if (!snapshot) return;
   snapshot = { ...snapshot, playing: state === "playing" };
   schedule();
+}
+
+/**
+ * What the player means to do, beyond what it does: see `wantsPlay` and
+ * `pauseReason` in NativeSnapshot. Crosses the bridge only when it changes.
+ */
+export function pushNativeIntent(wantsPlay: boolean, pauseReason: string): void {
+  if (!bridge()) return;
+  intent.wantsPlay = wantsPlay;
+  intent.pauseReason = pauseReason;
+  if (!snapshot) return;
+  if (snapshot.wantsPlay === wantsPlay && snapshot.pauseReason === pauseReason) return;
+  snapshot = { ...snapshot, wantsPlay, pauseReason };
+  schedule();
+}
+
+/**
+ * Playback diagnostics (stalls, retries, reconnects) into the Android logcat,
+ * next to the shell's own lines: `adb logcat -s RekordMedia`. Elsewhere a no-op,
+ * so callers need not check the platform; keep it to transitions, never per frame.
+ */
+export function nativeLog(message: string): void {
+  const target = bridge();
+  if (!target || typeof target.log !== "function") return;
+  try {
+    target.log(message);
+  } catch {
+    /* */
+  }
 }
 
 export function pushNativePosition(duration: number, position: number): void {

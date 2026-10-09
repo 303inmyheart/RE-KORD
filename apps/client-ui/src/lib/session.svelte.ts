@@ -397,6 +397,22 @@ class ClientSession {
     });
     player.setOutageListener(() => this.markHubUnreachable());
     player.setQueueSync((change) => this.onQueueChange(change));
+    if (typeof window !== "undefined") {
+      // The network came back (browser `online`, Android shell's network callback):
+      // probe at once instead of waiting out the backoff. While a track waits for
+      // the hub, the Android heartbeat also probes: with the screen off the page's
+      // own timers are throttled, the backoff timer can be minutes late.
+      const probeNow = () => {
+        if (this.hubDown) this.retryHubNow();
+      };
+      window.addEventListener("online", probeNow);
+      window.addEventListener("rekord:network", (event) => {
+        if ((event as CustomEvent<{ available?: boolean }>).detail?.available) probeNow();
+      });
+      window.addEventListener("rekord:playback-watchdog", () => {
+        if (player.waitingForHub) probeNow();
+      });
+    }
   }
 
   // ---- Hub reachability ------------------------------------------------------
