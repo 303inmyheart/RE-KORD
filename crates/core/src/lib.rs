@@ -8,6 +8,7 @@ pub mod db;
 pub mod diagnostics;
 pub mod disk_space;
 pub mod downloads;
+pub mod embedded;
 pub mod entity_info;
 pub mod errors;
 pub mod jobs;
@@ -442,6 +443,7 @@ pub async fn serve_with_shutdown(
     tools::spawn_warmup(&state.config.lock().unwrap().clone());
     watcher::start(&state);
     thumbs::spawn_backfill(&state);
+    embedded::backfill::spawn_if_needed(&state);
 
     let app = build_router(state.clone(), ui);
     let listener = tokio::net::TcpListener::bind(addr).await?;

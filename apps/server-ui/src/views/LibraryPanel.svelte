@@ -8,7 +8,7 @@
     Select,
     TextInput,
   } from "@rekord/ui";
-  import type { PreferredLayout } from "../api";
+  import type { EmbeddedPriority, PreferredLayout } from "../api";
   import { admin, humanTime, LAYOUT_IDS, layoutLabel } from "../lib/admin.svelte";
   import { formatNumber, formatPercent, t } from "../lib/i18n.svelte";
   import ScanReportCard from "./ScanReportCard.svelte";
@@ -28,6 +28,11 @@
   const layout = $derived(admin.layout);
   const watcher = $derived(admin.watcher);
   const probe = $derived(admin.probe);
+  const embedded = $derived(admin.embedded);
+  const priorityOptions = $derived([
+    { value: "studio", label: t("library.embedded.priorityStudio") },
+    { value: "embedded", label: t("library.embedded.priorityEmbedded") },
+  ]);
   const locked = $derived(busy || !admin.canManage);
 </script>
 
@@ -168,6 +173,40 @@
   {/if}
 </Panel>
 
+{#if embedded}
+  <Panel title={t("library.embedded.title")}>
+    <label class="check">
+      <input
+        type="checkbox"
+        checked={embedded.enabled}
+        disabled={locked}
+        onchange={(e) => void admin.setEmbedded({ enabled: e.currentTarget.checked })}
+      />
+      <span>{t("library.embedded.toggle")}</span>
+    </label>
+    <Field label={t("library.embedded.priority")}>
+      <Select
+        options={priorityOptions}
+        value={embedded.priority}
+        disabled={locked || !embedded.enabled}
+        onchange={(e) =>
+          void admin.setEmbedded({
+            priority: (e.currentTarget as HTMLSelectElement).value as EmbeddedPriority,
+          })}
+      />
+    </Field>
+    <p class="hint">{t("library.embedded.hint")}</p>
+    {#if embedded.running || embedded.pendingTracks > 0 || embedded.pendingAlbums > 0}
+      <p class="hint">
+        {t(embedded.running ? "library.embedded.running" : "library.embedded.pending", {
+          tracks: formatNumber(embedded.pendingTracks),
+          albums: formatNumber(embedded.pendingAlbums),
+        })}
+      </p>
+    {/if}
+  </Panel>
+{/if}
+
 <Panel title={t("library.maint.title")}>
   <ActionRow>
     <Button
@@ -180,8 +219,29 @@
     <Button variant="ghost" disabled={locked} onclick={() => void admin.syncLegacyMeta()}>
       {t("library.maint.legacy")}
     </Button>
+    {#if embedded}
+      <Button
+        variant="secondary"
+        disabled={locked || !embedded.enabled}
+        onclick={() => void admin.rereadEmbedded()}
+      >
+        {t("library.maint.reread")}
+      </Button>
+      {#if embedded.priority === "embedded"}
+        <Button
+          variant="ghost"
+          disabled={locked || !embedded.enabled}
+          onclick={() => void admin.rereadEmbedded(true)}
+        >
+          {t("library.maint.rereadOverride")}
+        </Button>
+      {/if}
+    {/if}
   </ActionRow>
   <p class="hint">{t("library.maint.thumbsHint")}</p>
+  {#if embedded}
+    <p class="hint">{t("library.maint.rereadHint")}</p>
+  {/if}
   <p class="hint">{t("legacy.hint")}</p>
 </Panel>
 

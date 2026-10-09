@@ -4,6 +4,7 @@
   import SettingsFieldsGrid from "../SettingsFieldsGrid.svelte";
   import ShortcutList from "../ShortcutList.svelte";
   import ThemePicker from "../ThemePicker.svelte";
+  import LayoutWidthFields from "./LayoutWidthFields.svelte";
   import UiIcon from "../icons/UiIcon.svelte";
   import { api } from "../../lib/api";
   import { i18n, t } from "../../lib/i18n.svelte";
@@ -372,6 +373,7 @@
         <span>{t("settings.glassSurfaces")}</span>
       </label>
     </div>
+    <LayoutWidthFields />
   </SettingsFieldsGrid>
 </Panel>
 <Panel title={t("settings.panel.player")} class="settings-player-section">

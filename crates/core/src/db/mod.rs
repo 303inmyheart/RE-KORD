@@ -10,6 +10,7 @@
 
 mod catalog;
 mod curated;
+mod embedded;
 mod genres;
 mod migrations;
 pub mod text;
@@ -17,6 +18,7 @@ mod user_data;
 
 pub use catalog::{CatalogBatch, Mp3SeekHeaderRow, PruneOutcome, TrackRow};
 pub use curated::{CuratedAlbumMeta, CuratedTrackMeta, CuratedWrite};
+pub use embedded::{PendingCoverAlbum, PendingTrack};
 pub use genres::{count_genres, GenreCount};
 
 pub use migrations::SCHEMA_VERSION;
@@ -100,12 +102,25 @@ pub fn should_replace_genre(current: Option<&str>, incoming: Option<&str>) -> bo
 /// `edited_fields`: the value is curated (sidecar, legacy library, Studio,
 /// metadata fetch) and a scan keeps it instead of the tag value.
 /// `user_fields`: a person typed it; fetches and imports keep it too.
+///
+/// `embedded_fields` (tracks, albums) uses the same bits plus the ones only
+/// tags provide: the value came from the file's own tags (see `embedded`).
 pub mod field {
     pub const TITLE: i64 = 1;
     pub const RELEASE_DATE: i64 = 2;
     pub const GENRE: i64 = 4;
     pub const TRACK_NUMBER: i64 = 8;
     pub const DISC_NUMBER: i64 = 16;
+    /// Curated once a fetch, a sidecar or a person stored them (5.1).
+    pub const LYRICS: i64 = 32;
+    pub const BPM: i64 = 64;
+    /// Only ever from the tags (`embedded_fields`).
+    pub const ALBUM: i64 = 128;
+    pub const ARTIST: i64 = 256;
+    pub const ALBUM_ARTIST: i64 = 512;
+    pub const TRACK_TOTAL: i64 = 1024;
+    pub const DISC_TOTAL: i64 = 2048;
+    pub const MUSICBRAINZ: i64 = 4096;
 
     /// API names of the bits set in `mask`.
     pub fn names(mask: i64) -> Vec<&'static str> {
@@ -115,6 +130,14 @@ pub mod field {
             (GENRE, "genre"),
             (TRACK_NUMBER, "track_number"),
             (DISC_NUMBER, "disc_number"),
+            (LYRICS, "lyrics"),
+            (BPM, "bpm"),
+            (ALBUM, "album"),
+            (ARTIST, "artist"),
+            (ALBUM_ARTIST, "album_artist"),
+            (TRACK_TOTAL, "track_total"),
+            (DISC_TOTAL, "disc_total"),
+            (MUSICBRAINZ, "musicbrainz"),
         ]
         .iter()
         .filter(|(bit, _)| mask & bit != 0)
@@ -123,9 +146,17 @@ pub mod field {
     }
 }
 
+fn non_empty(v: Option<String>) -> Option<String> {
+    v.filter(|s| !s.trim().is_empty())
+}
+
 #[derive(Clone)]
 pub struct Db {
     conn: Arc<Mutex<Connection>>,
+    /// Embedded priority "embedded" (see `embedded::EmbeddedPriority`):
+    /// values taken from the tags are not replaced by sidecar fills, and
+    /// album values derived from the tracks replace curated ones nobody typed.
+    prefer_embedded: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +220,34 @@ pub struct LibraryTrack {
     /// Fields whose curated value wins over the file tags.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub curated_fields: Vec<String>,
+    /// Fields whose value came from the file's embedded tags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedded_fields: Vec<String>,
+    /// Track artist(s) as tagged (`artist_name` is the library artist).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_artist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album_artist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_total: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disc_total: Option<i64>,
+    /// MusicBrainz ids from the tags.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub musicbrainz: Option<MusicBrainzIds>,
+}
+
+/// MusicBrainz identifiers found in a file's tags.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MusicBrainzIds {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_group_id: Option<String>,
 }
 
 impl AsRef<Track> for LibraryTrack {
@@ -251,6 +310,17 @@ pub struct Album {
     pub user_edited: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub curated_fields: Vec<String>,
+    /// Values derived from the tracks' embedded tags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedded_fields: Vec<String>,
+    /// Where the cover comes from: `folder`, `legacy` or `embedded`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover_source: Option<String>,
+    /// Album artist the tracks' tags agree on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album_artist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub musicbrainz_release_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -384,7 +454,20 @@ impl Db {
         migrations::run(&mut conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            prefer_embedded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
+    }
+
+    /// See [`Db::prefers_embedded`].
+    pub fn set_prefer_embedded(&self, prefer: bool) {
+        self.prefer_embedded
+            .store(prefer, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The hub's embedded priority is "embedded > Studio".
+    pub fn prefers_embedded(&self) -> bool {
+        self.prefer_embedded
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Fold the WAL back into the main database file (and refresh planner
@@ -565,7 +648,9 @@ impl Db {
     fn rich_cols() -> String {
         format!(
             "{}, t.disc_number, t.genres, t.added_at, t.updated_at, t.edited_fields, \
-             t.user_fields, COALESCE(a.has_cover, 0), a.cover_version",
+             t.user_fields, COALESCE(a.has_cover, 0), a.cover_version, t.embedded_fields, \
+             t.tag_artist, t.tag_album_artist, t.track_total, t.disc_total, \
+             t.mb_recording_id, t.mb_release_id, t.mb_artist_id, t.mb_release_group_id",
             Self::TRACK_COLS_T
         )
     }
@@ -597,6 +682,23 @@ impl Db {
                 .map(str::to_string)
                 .collect(),
             user_edited: row.get::<_, i64>(20)? != 0,
+            embedded_fields: field::names(row.get::<_, i64>(23)?)
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            track_artist: non_empty(row.get(24)?),
+            album_artist: non_empty(row.get(25)?),
+            track_total: row.get(26)?,
+            disc_total: row.get(27)?,
+            musicbrainz: {
+                let ids = MusicBrainzIds {
+                    recording_id: non_empty(row.get(28)?),
+                    release_id: non_empty(row.get(29)?),
+                    artist_id: non_empty(row.get(30)?),
+                    release_group_id: non_empty(row.get(31)?),
+                };
+                (ids != MusicBrainzIds::default()).then_some(ids)
+            },
             track,
         })
     }
@@ -697,6 +799,13 @@ impl Db {
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
+            embedded_fields: field::names(row.get::<_, i64>(22)?)
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            cover_source: non_empty(row.get(23)?),
+            album_artist: non_empty(row.get(24)?),
+            musicbrainz_release_id: non_empty(row.get(25)?),
         })
         .map(|mut a: Album| {
             a.folder_name = a
@@ -707,6 +816,7 @@ impl Db {
                 .to_string();
             if !a.has_cover {
                 a.cover_version = None;
+                a.cover_source = None;
             }
             a
         })
@@ -715,7 +825,22 @@ impl Db {
     const ALBUM_COLS: &'static str = "id, name, artist_name, track_count, artist_id, folder_key, \
          has_cover, loose, has_album_meta, genre, release_date, label, country, expected_track_count, \
          discogs_release_id, discogs_extra_json, edited_fields, user_fields, added_at, updated_at, \
-         genres, cover_version";
+         genres, cover_version, embedded_fields, cover_source, tag_album_artist, \
+         musicbrainz_release_id";
+
+    /// `embedded_cover_from` of an album (`None`: no such album, or never
+    /// checked; `Some("")`: checked, no picture).
+    pub fn album_embedded_cover_from(&self, folder_key: &str) -> Result<Option<String>> {
+        let conn = self.lock();
+        Ok(conn
+            .query_row(
+                "SELECT embedded_cover_from FROM albums WHERE folder_key = ?1",
+                params![folder_key],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
 
     pub fn album_cover_path(&self, album_id: i64) -> Result<Option<PathBuf>> {
         let conn = self.lock();
@@ -1587,7 +1712,8 @@ impl Db {
         let version = catalog::cover_version_of(cover);
         conn.execute(
             r#"
-            UPDATE albums SET cover_path = ?2, has_cover = 1, cover_version = ?3
+            UPDATE albums SET cover_path = ?2, has_cover = 1, cover_version = ?3,
+              cover_source = 'folder'
             WHERE folder_key = ?1
             "#,
             params![folder_key, cover_s, version],

@@ -1,5 +1,6 @@
 /** Theme catalog for picker previews (parity with legacy themeCatalog). */
 
+import { customTextTokens } from "./themeText";
 import {
   isCustomThemeBgImageExt,
   normalizeCustomThemeBgImageFit,
@@ -17,6 +18,11 @@ export type CustomThemeSettings = {
   section: string;
   accent: string;
   accent2: string;
+  /**
+   * Main text colour. Unset = automatic (derived from the section colour);
+   * the muted text colours are always derived from it.
+   */
+  text?: string | null;
   /** Solid color vs stored account background image. */
   bgMode?: CustomThemeBgMode;
   /** File extension of stored theme-bg (jpg/png/webp/gif). */
@@ -228,6 +234,8 @@ export function normalizeCustomTheme(
     accent2: normalizeHexColor(src.accent2, DEFAULT_CUSTOM_THEME.accent2),
     accentWash: src.accentWash === true,
   };
+  const text = normalizeHexColor(src.text, "");
+  if (text) out.text = text;
   const bgImage =
     typeof src.bgImage === "string" && src.bgImage.trim()
       ? src.bgImage.trim().toLowerCase().replace(/^jpeg$/, "jpg")
@@ -349,22 +357,22 @@ export function applyCustomThemeCss(
   root.style.setProperty("--rk-art-empty-2", rgbaFromHex(accent2, 0.12));
   root.style.setProperty("--rk-badge-1", rgbaFromHex(accent, 0.26));
   root.style.setProperty("--rk-badge-2", rgbaFromHex(accent2, 0.18));
+  const text = customTextTokens(theme);
+  root.style.setProperty("--rk-ink", text.ink);
+  root.style.setProperty("--rk-muted", text.muted);
+  root.style.setProperty("--rk-muted-strong", text.mutedStrong);
   root.style.setProperty(
     "--rk-sidebar-bg",
     `color-mix(in srgb, ${rgbaFromHex(section, 0.94)} 95%, ${bg} 5%)`,
   );
 
   if (light) {
-    const ink = mixHex(section, "#0f172a", 0.78);
     root.style.setProperty("--rk-surface", rgbaFromHex(mixHex(bg, section, 0.52), 0.9));
     root.style.setProperty("--rk-surface-2", rgbaFromHex(section, 0.93));
     root.style.setProperty(
       "--rk-surface-3",
       rgbaFromHex(mixHex(section, accent2, 0.12), 0.96),
     );
-    root.style.setProperty("--rk-ink", ink);
-    root.style.setProperty("--rk-muted", mixHex(section, "#475569", 0.52));
-    root.style.setProperty("--rk-muted-strong", mixHex(section, "#0f172a", 0.68));
     root.style.setProperty(
       "--rk-line",
       rgbaFromHex(mixHex(accent2, "#1e293b", 0.38), 0.18),
@@ -404,9 +412,6 @@ export function applyCustomThemeCss(
       "--rk-surface-3",
       rgbaFromHex(mixHex(section, accent2, 0.1), 0.96),
     );
-    root.style.setProperty("--rk-ink", mixHex(section, "#f8fafc", 0.92));
-    root.style.setProperty("--rk-muted", mixHex(section, "#94a3b8", 0.55));
-    root.style.setProperty("--rk-muted-strong", mixHex(section, "#e2e8f0", 0.72));
     root.style.setProperty("--rk-line", rgbaFromHex(mixHex(accent2, "#94a3b8", 0.4), 0.2));
     root.style.setProperty(
       "--rk-line-strong",

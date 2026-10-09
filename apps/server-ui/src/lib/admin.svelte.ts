@@ -3,6 +3,8 @@ import {
   type Account,
   type ActivityEntry,
   type Diagnostics,
+  type EmbeddedPriority,
+  type EmbeddedStatus,
   type Health,
   type HubConfig,
   type JobEntry,
@@ -100,6 +102,8 @@ class AdminSession {
   layout = $state<LibraryLayoutConfig | null>(null);
   probe = $state<LibraryProbeReport | null>(null);
   watcher = $state<WatcherStatus | null>(null);
+  /** Embedded tags / covers (null on hubs older than 5.1). */
+  embedded = $state<EmbeddedStatus | null>(null);
   activity = $state<ActivityEntry[]>([]);
   activityDay = $state(today());
   activityScope = $state("all");
@@ -248,10 +252,11 @@ class AdminSession {
           if (section === "status") await this.loadScanActivity();
           break;
         case "library":
-          [this.layout, this.watcher, this.diagnostics] = await Promise.all([
+          [this.layout, this.watcher, this.diagnostics, this.embedded] = await Promise.all([
             api.getLayout(),
             api.watch(),
             api.diagnostics(),
+            api.embedded().catch(() => null),
           ]);
           await this.loadScanActivity();
           break;
@@ -347,7 +352,12 @@ class AdminSession {
       this.stats = await api.stats();
       this.diagnostics = await api.diagnostics();
       if (this.section === "jobs") this.jobs = await api.jobs();
-      if (this.section === "library") this.watcher = await api.watch();
+      if (this.section === "library") {
+        [this.watcher, this.embedded] = await Promise.all([
+          api.watch(),
+          api.embedded().catch(() => null),
+        ]);
+      }
       const active = (this.diagnostics?.jobs.active ?? 0) > 0;
       if (!this.scanning && !active) {
         this.stopPolling();
@@ -460,6 +470,26 @@ class AdminSession {
     return this.run(async () => {
       this.watcher = await api.setWatch(enabled);
       return enabled ? t("msg.watchOn") : t("msg.watchOff");
+    });
+  }
+
+  setEmbedded(next: { enabled?: boolean; priority?: EmbeddedPriority }) {
+    return this.run(async () => {
+      this.embedded = await api.setEmbedded(next);
+      this.startPolling();
+      return t("msg.embeddedSaved");
+    });
+  }
+
+  /** "Rileggi metadati incorporati"; `overrideStudio` asks for confirmation. */
+  rereadEmbedded(overrideStudio = false) {
+    if (overrideStudio && !window.confirm(t("library.embedded.overrideConfirm"))) {
+      return Promise.resolve();
+    }
+    return this.run(async () => {
+      this.embedded = await api.rereadEmbedded(overrideStudio);
+      this.startPolling();
+      return t("msg.embeddedReread");
     });
   }
 

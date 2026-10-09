@@ -46,6 +46,11 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/api/v1/library/watch", get(get_watch).put(set_watch))
         .route("/api/v1/library/thumbnails", post(run_thumbnail_backfill))
+        .route(
+            "/api/v1/library/embedded",
+            get(get_embedded).put(set_embedded),
+        )
+        .route("/api/v1/library/embedded/reread", post(reread_embedded))
         .route("/api/v1/network/public-ip", get(get_public_ip))
         .route("/api/network/public-ip", get(get_public_ip))
         .route(
@@ -988,6 +993,105 @@ async fn run_thumbnail_backfill(
         }
     });
     ok(json!({ "started": true })).into_response()
+}
+
+async fn get_embedded(State(state): State<AppState>) -> Response {
+    match crate::embedded::backfill::status(&state) {
+        Ok(s) => ok(s).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EmbeddedBody {
+    enabled: Option<bool>,
+    priority: Option<String>,
+}
+
+/// "Leggi metadati e copertine incorporati" and its priority. A change
+/// re-reads the library in the background (the backfill job).
+async fn set_embedded(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    PeerAddr(peer): PeerAddr,
+    Json(body): Json<EmbeddedBody>,
+) -> Response {
+    let _op = machine_op_or_err!(&state, &headers, peer);
+    let current = state.config.lock().unwrap().embedded;
+    let mut next = current;
+    if let Some(enabled) = body.enabled {
+        next.enabled = enabled;
+    }
+    if let Some(raw) = body.priority.as_deref() {
+        match crate::embedded::EmbeddedPriority::parse(raw) {
+            Some(p) => next.priority = p,
+            None => return err(StatusCode::BAD_REQUEST, "invalid_embedded_priority"),
+        }
+    }
+    if next != current {
+        if let Err(e) = state.config.lock().unwrap().save_embedded_settings(next) {
+            tracing::warn!(error = %e, "could not save embedded metadata settings");
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "settings_save_failed");
+        }
+        state.db.set_prefer_embedded(
+            next.enabled && next.priority == crate::embedded::EmbeddedPriority::Embedded,
+        );
+        if let Err(e) = crate::embedded::backfill::request_reread(&state, false) {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+        crate::diagnostics::log_activity(
+            &data_dir(&state),
+            crate::diagnostics::ActivityEvent::new(
+                "library",
+                "embeddedSettings",
+                format!(
+                    "metadati incorporati: {}, priorità {}",
+                    if next.enabled { "attivi" } else { "spenti" },
+                    next.priority.as_str()
+                ),
+            )
+            .params(json!({ "enabled": next.enabled, "priority": next.priority.as_str() })),
+        );
+    }
+    get_embedded(State(state)).await
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct RereadBody {
+    /// With the embedded priority: tag values also replace typed values.
+    #[serde(default)]
+    override_studio: bool,
+}
+
+/// "Rileggi metadati incorporati": refresh every value that came from the
+/// tags (and embedded covers) as a background job.
+async fn reread_embedded(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    PeerAddr(peer): PeerAddr,
+    body: Option<Json<RereadBody>>,
+) -> Response {
+    let _op = machine_op_or_err!(&state, &headers, peer);
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let settings = state.config.lock().unwrap().embedded;
+    let override_studio = body.override_studio
+        && settings.enabled
+        && settings.priority == crate::embedded::EmbeddedPriority::Embedded;
+    if let Err(e) = crate::embedded::backfill::request_reread(&state, override_studio) {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+    crate::diagnostics::log_activity(
+        &data_dir(&state),
+        crate::diagnostics::ActivityEvent::new(
+            "library",
+            "embeddedReread",
+            "rilettura dei metadati incorporati avviata",
+        )
+        .params(json!({ "overrideStudio": override_studio })),
+    );
+    get_embedded(State(state)).await
 }
 
 /// What the caller is allowed to do with host-level settings.

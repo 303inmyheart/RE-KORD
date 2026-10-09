@@ -31,6 +31,8 @@ pub struct AppState {
     scan_activity: Arc<Mutex<Option<crate::power::ActivityGuard>>>,
     /// Scan counters used to coalesce "rescan, the library changed" requests.
     scan_generations: Arc<ScanGenerations>,
+    /// The embedded-tags backfill job is running (one at a time).
+    pub embedded_backfill: Arc<AtomicBool>,
 }
 
 /// `started` is bumped when a scan takes the lock, `completed` catches up when
@@ -57,6 +59,10 @@ impl AppState {
         }
         let power = crate::power::PowerManager::for_platform();
         power.configure(config.power);
+        db.set_prefer_embedded(
+            config.embedded.enabled
+                && config.embedded.priority == crate::embedded::EmbeddedPriority::Embedded,
+        );
         Ok(Self {
             config: Arc::new(Mutex::new(config)),
             db,
@@ -69,7 +75,13 @@ impl AppState {
             power,
             scan_activity: Arc::new(Mutex::new(None)),
             scan_generations: Arc::new(ScanGenerations::default()),
+            embedded_backfill: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Embedded tags / covers as the hub settings say.
+    pub fn embedded_options(&self) -> crate::embedded::EmbeddedOptions {
+        crate::embedded::EmbeddedOptions::from_config(&self.config.lock().unwrap())
     }
 
     pub fn is_scanning(&self) -> bool {
@@ -115,6 +127,7 @@ impl AppState {
                     .run_scan(scan::ScanOptions {
                         mode: scan::ScanMode::Incremental,
                         trigger: scan::ScanTrigger::Automatic,
+                        ..Default::default()
                     })
                     .await
                 {
@@ -190,6 +203,7 @@ impl AppState {
         self.run_scan(scan::ScanOptions {
             mode: scan::ScanMode::Incremental,
             trigger: scan::ScanTrigger::Automatic,
+            ..Default::default()
         })
         .await
     }
@@ -199,12 +213,15 @@ impl AppState {
         self.run_scan(scan::ScanOptions {
             mode,
             trigger: scan::ScanTrigger::Manual,
+            ..Default::default()
         })
         .await
     }
 
-    pub async fn run_scan(&self, opts: scan::ScanOptions) -> anyhow::Result<scan::ScanReport> {
+    /// Run a scan; `opts.embedded` is always taken from the hub settings.
+    pub async fn run_scan(&self, mut opts: scan::ScanOptions) -> anyhow::Result<scan::ScanReport> {
         let mode = opts.mode;
+        opts.embedded = self.embedded_options();
         if !self.try_begin_scan() {
             anyhow::bail!(SCAN_BUSY);
         }
@@ -308,8 +325,9 @@ impl AppState {
         let db = self.db.clone();
         let data_dir = self.config.lock().unwrap().data_dir.clone();
         let rel = rel_dir.to_string();
+        let embedded = self.embedded_options();
         let result = tokio::task::spawn_blocking(move || {
-            let report = scan::scan_subtree(&db, &root, &rel)?;
+            let report = scan::scan_subtree(&db, &root, &rel, &embedded)?;
             post_scan_metadata(&db, &data_dir, &root);
             Ok::<_, anyhow::Error>(report.index_epoch)
         })

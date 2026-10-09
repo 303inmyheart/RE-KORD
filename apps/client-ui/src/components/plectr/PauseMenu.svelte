@@ -1,7 +1,8 @@
 <script lang="ts">
   /**
    * The song is paused (from here, the dock or media keys) or Plectr opened on
-   * a paused song: a card over the lanes. Resume plays the song again at once.
+   * a paused song: a card over the lanes. Resume plays the song again at once;
+   * Exit leaves Plectr (the music keeps its state).
    */
   import UiIcon from "../icons/UiIcon.svelte";
   import { t } from "../../lib/i18n.svelte";
@@ -11,14 +12,12 @@
     reason = "user",
     onresume,
     onrestart,
-    onchange,
     onsettings,
     onexit,
   }: {
     reason?: PauseReason;
     onresume: () => void;
     onrestart: () => void;
-    onchange: () => void;
     onsettings: () => void;
     onexit: () => void;
   } = $props();
@@ -37,27 +36,21 @@
     {/if}
     <button bind:this={resumeBtn} type="button" class="rk-btn rk-btn--primary plectr-pause__main" onclick={onresume}>
       <UiIcon name="play" />
-      {reason === "idle" ? t("plectr.pick.play") : t("plectr.resume")}
+      {reason === "idle" ? t("plectr.play") : t("plectr.resume")}
     </button>
     <div class="plectr-pause__row">
       <button type="button" class="rk-btn rk-btn--secondary" onclick={onrestart}>
         <UiIcon name="repeat" />
         {t("plectr.restart")}
       </button>
-      <button type="button" class="rk-btn rk-btn--secondary" onclick={onchange}>
-        <UiIcon name="queueMusic" />
-        {t("plectr.changeTrack")}
-      </button>
-    </div>
-    <div class="plectr-pause__row">
-      <button type="button" class="rk-btn rk-btn--ghost" onclick={onsettings}>
+      <button type="button" class="rk-btn rk-btn--secondary" onclick={onsettings}>
         <UiIcon name="settings" />
         {t("plectr.settings.open")}
       </button>
-      <button type="button" class="rk-btn rk-btn--ghost" onclick={onexit}>
-        <UiIcon name="close" />
-        {t("plectr.exit")}
-      </button>
     </div>
+    <button type="button" class="rk-btn rk-btn--ghost plectr-pause__exit" onclick={onexit}>
+      <UiIcon name="close" />
+      {t("plectr.exit")}
+    </button>
   </div>
 </div>

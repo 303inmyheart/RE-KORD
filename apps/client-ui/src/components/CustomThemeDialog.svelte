@@ -6,8 +6,9 @@
     customThemeBgImageCss,
     objectFitForBgImageFit,
   } from "../lib/customThemeBgFit";
+  import { fetchCustomThemeBgBlob } from "../lib/customThemeBgBlob";
   import { customThemeBgImageUrl } from "../lib/customThemeBgUrl";
-  import { extractThemeColorsFromImageUrl } from "../lib/extractThemeColorsFromImage";
+  import { extractThemeColorsFromBlob } from "../lib/extractThemeColorsFromImage";
   import { t } from "../lib/i18n.svelte";
   import {
     DEFAULT_CUSTOM_THEME,
@@ -21,6 +22,11 @@
     themeBgAcceptAttribute,
     validateThemeBgFile,
   } from "../lib/themeBgFile";
+  import {
+    customTextContrast,
+    customTextTokens,
+    WCAG_AA_TEXT,
+  } from "../lib/themeText";
 
   let {
     open = false,
@@ -56,6 +62,11 @@
       ? (["bg", "section", "accent", "accent2"] as const)
       : (["section", "accent", "accent2"] as const),
   );
+
+  /** Text colour: the chosen one, or the automatic ink when unset. */
+  const textTokens = $derived(customTextTokens(theme));
+  const textContrast = $derived(customTextContrast(theme));
+  const textContrastLow = $derived(textContrast < WCAG_AA_TEXT);
 
   /** Escape stacking contexts (glass panels / settings cards) — legacy createPortal. */
   function portal(node: HTMLElement) {
@@ -146,9 +157,12 @@
     paletteBusy = true;
     paletteErr = null;
     try {
-      const colors = await extractThemeColorsFromImageUrl(storedBgImageUrl);
+      const blob = await fetchCustomThemeBgBlob(theme.bgImageRev);
+      const colors = await extractThemeColorsFromBlob(blob);
+      // `theme` is read again after the awaits: keeps edits made meanwhile.
       onchange(normalizeCustomTheme({ ...theme, ...colors }));
-    } catch {
+    } catch (e) {
+      console.warn("[custom theme] palette extraction failed", e);
       paletteErr = t("themePicker.customBgExtractErr");
     } finally {
       paletteBusy = false;
@@ -482,6 +496,60 @@
               </button>
             {/each}
           </div>
+        </div>
+
+        <div class="custom-theme-dialog__section">
+          <span class="custom-theme-dialog__section-label">
+            {t("themePicker.customTextHeading")}
+          </span>
+          <div class="custom-theme-dialog__text-row">
+            <button
+              type="button"
+              class="custom-theme-dialog__swatch custom-theme-dialog__swatch--text"
+              onclick={(e) =>
+                (e.currentTarget.querySelector("input") as HTMLInputElement | null)?.click()}
+              aria-label={t("themePicker.custom.text")}
+            >
+              <span
+                class="custom-theme-dialog__swatch-chip custom-theme-dialog__text-sample"
+                style:background={theme.section}
+                aria-hidden="true"
+              >
+                <span style:color={textTokens.ink}>Aa</span>
+                <span style:color={textTokens.muted}>{t("themePicker.customTextSampleMuted")}</span>
+              </span>
+              <span class="custom-theme-dialog__swatch-label"
+                >{t("themePicker.custom.text")}</span
+              >
+              <span class="custom-theme-dialog__swatch-hex" aria-hidden="true">
+                {theme.text
+                  ? textTokens.ink.toUpperCase()
+                  : `${t("themePicker.customTextAuto")} · ${textTokens.ink.toUpperCase()}`}
+                · {textContrast.toFixed(1)}:1
+              </span>
+              <input
+                class="custom-theme-dialog__swatch-input"
+                type="color"
+                value={textTokens.ink}
+                tabindex={-1}
+                aria-hidden="true"
+                oninput={(e) => patch({ text: (e.currentTarget as HTMLInputElement).value })}
+              />
+            </button>
+            {#if theme.text}
+              <Button variant="ghost" onclick={() => patch({ text: null })}>
+                {t("themePicker.customTextReset")}
+              </Button>
+            {/if}
+          </div>
+          {#if textContrastLow}
+            <p class="custom-theme-dialog__warn" role="status">
+              {t("themePicker.customTextContrastLow", {
+                ratio: textContrast.toFixed(1),
+                min: WCAG_AA_TEXT,
+              })}
+            </p>
+          {/if}
         </div>
 
         <div class="custom-theme-dialog__section">
@@ -854,6 +922,42 @@
     height: 1px;
     opacity: 0;
     pointer-events: none;
+  }
+
+  .custom-theme-dialog__text-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+  }
+
+  .custom-theme-dialog__swatch--text {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .custom-theme-dialog__text-sample {
+    display: flex;
+    align-items: baseline;
+    gap: 0.55rem;
+    padding: 0 0.65rem;
+    line-height: 2.25rem;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--rk-fs-sm);
+  }
+
+  .custom-theme-dialog__text-sample > span:first-child {
+    font-size: var(--rk-fs-lg, 1.1rem);
+    font-weight: 800;
+  }
+
+  .custom-theme-dialog__warn {
+    margin: 0;
+    font-size: var(--rk-fs-2xs);
+    line-height: var(--rk-lh-snug);
+    color: var(--rk-warning);
   }
 
   .custom-theme-dialog__err {

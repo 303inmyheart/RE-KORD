@@ -35,6 +35,95 @@ one version number covers the hub, the clients and the packages.
   `settings.json` (and so in backups), `GET/PUT /api/v1/system/power`, and
   `--prevent-sleep off|always|when-active` / `REKORD_PREVENT_SLEEP` for headless hubs.
   Event driven: no polling, nothing runs while it is off.
+- **Custom theme text color**: a *Text color* picker in the custom theme (main text; the
+  secondary text colors follow it automatically). *Automatic* keeps the previous
+  behavior. A warning appears when text on the sections falls below the WCAG AA contrast
+  (4.5:1). Included in theme export / import; *Extract colors from image* now also picks a
+  readable text color.
+- **Desktop widths** (*Settings › Interface*, saved per device): *Content width* (default
+  1360 px as before, *Full*, 1200 / 1440 / 1680 / 1920 px or a custom 960–2560 px slider
+  with live preview; the header follows the content) and *Player bar width* (default as
+  before, *Full*, *Match content*, presets or custom). The content and the bar stay
+  centered; phones and narrow windows keep the adaptive layout.
+
+- **Embedded metadata and covers for every format** (GitHub issue #97): tags stored in
+  FLAC, Ogg Vorbis and Opus (Vorbis comments, also multi-value and `4/11` numbers), MP3
+  (ID3v2, ID3v1, APE), M4A / AAC / ALAC (MP4 atoms), WAV (ID3v2, RIFF INFO), AIFF, and,
+  through ffmpeg, WMA and WebM: title, artist, album artist, album, track / disc number
+  and totals, date, genres, BPM, lyrics and MusicBrainz ids. Read on the first scan of a
+  file and when it changes, filling only what Studio (or a sidecar, a fetch, the previous
+  version) did not curate; typed values are never overwritten. Each value records where
+  it came from (`embedded_fields` / `curated_fields` in the API).
+- **Embedded covers**: albums without an image in their folder get the front cover stored
+  in one of their files (else its first picture), scaled to 1500 px at most and kept in
+  `<data dir>/covers/embedded/`, with the usual thumbnails and cache busting. Studio covers
+  and folder images keep winning; the music folder is never written by a scan. Broken
+  pictures are skipped (logged once per album).
+- Admin panel **Library › Embedded metadata**: *Read embedded metadata and covers* (on by
+  default) and the priority *Studio > embedded > file name* (default) or *Embedded >
+  Studio* (filling only); **Maintenance › Re-read embedded metadata** (optionally also
+  replacing values typed in Studio, with the embedded priority). `GET/PUT
+  /api/v1/library/embedded`, `POST /api/v1/library/embedded/reread`.
+- Libraries indexed by 5.0 are completed once by a background job (*Reading embedded
+  metadata*: throttled, paused during scans, resumable, with progress in **Jobs**).
+  Database schema v7.
+
+### Changed
+
+- **Scans are lighter**: pictures stored in the files are no longer loaded for every file,
+  only for a few tracks of an album that needs a cover.
+- **Plectr has no track picker any more.** The game plays on the song in the player
+  (playing or paused), chosen in the library like everywhere else. With nothing in the
+  player the stage shows *"Start a song from the library to play"* with **Open the
+  library** and **Shuffle play**; "Change song" is gone from the stage, the pause menu,
+  the results and the side panel. Records stay (▶ plays that song).
+- **Plectr on phones keeps the player bar** at the bottom, as in 5.0: the pads sit above
+  it, higher and easier to reach, behind a guard strip. Presses that start on the lanes
+  never reach the bar and a bar tap right after a pad press is ignored; pausing or
+  skipping from the bar drives the game as before.
+- The Plectr **"Cover" stage backdrop was removed**; saved settings move to the default,
+  the visualizer (the light stage, automatic on WebKitGTK and weak devices, still turns
+  it off).
+- **Phones: tighter, consistent spacing** (issue #97). Below the desktop breakpoint the
+  spacing scale is one notch smaller (page gutter 12px instead of 16px, 8px between cards,
+  slimmer card, tile and track-row padding), so more of each screen is content: the album
+  page puts the cover beside the title and actions as in 5.x (the first tracks are on the
+  first screen), artist / album / genre tiles use a 56px cover, track rows are closer
+  together, and the player bar shows the times beside the seek bar instead of on a line
+  of their own (one row shorter). The bottom nav is 54px. Touch targets stay at least
+  44px (dense chips and sort options get an invisible hit area instead of padding). The
+  desktop layout is unchanged.
+- **No scrollbars on touch screens**: pages, sheets and lists still scroll (touch,
+  momentum, jump-to-track) but no longer draw a scrollbar or reserve its gutter. With a
+  mouse they are unchanged.
+
+### Fixed
+
+- **FLACs showed no metadata** when their tags were not in the primary tag (for example an
+  ID3v2 block in front of the FLAC stream, or numbers written as `4/11`), and only the first
+  of several `GENRE` / `ARTIST` values was kept: every tag of a file is now read and
+  merged, and a file whose pictures cannot be read still gets its tags.
+- **"Extract colors from image" always failed in the desktop app** (and in any client not
+  served by the hub itself): the image was fetched with browser credentials, which the
+  hub's CORS answer does not allow, so the browser blocked it. It now goes through the
+  normal hub connection; JPEG, PNG, WebP, large images and animated GIFs all work.
+- **Long titles and artists stretched the desktop player bar**: they are now cut with "…"
+  on one line (full text in the tooltip), like on phones. Same for artist · album in the
+  Studio › Listen header, with tooltips on track rows and library tiles.
+- The desktop header row now lines up exactly with the page content (it was offset by
+  half a scrollbar).
+- **Plectr could not be closed on phones**: ✕ during a run only paused the game and then
+  ignored further taps. ✕, *Exit* in the pause menu and the results, and Back (first
+  press pauses, second exits) now always leave Plectr and restore the app's bars.
+- **Adding a genre to an album could crash the album page** (issue #97, phones and
+  desktop alike; changing page brought it back): genres with two spellings of one name
+  in the library, such as "Rhythm & Blues" next to "R&B" or "Drum & Bass" next to
+  "Drum and Bass", put the same entry twice in *Aggiungi genere*, which the page cannot
+  render. Aliases are now one chip and one menu entry, removing a genre removes its
+  aliases too, and the menu closes as soon as a genre is picked (a second tap during the
+  save could start a concurrent edit).
+- **Phones: the end of a page was hidden behind the bottom nav** when nothing was in the
+  player; it now always clears the nav and the home indicator.
 
 ## 5.0.0 — RE-KORD 5
 

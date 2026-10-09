@@ -31,8 +31,36 @@
   --rk-rail-w: calc(var(--rk-side-w) + env(safe-area-inset-left, 0px));
 }
 
+/* Phone and tablet chrome (bottom nav): a tighter spacing scale. Every gap and
+   padding written with the --rk-space-* rungs shrinks with it, so the views keep
+   their proportions and only the wasted air goes (issue #97: "too much empty
+   space on mobile"). Touch targets do not depend on these rungs: they keep
+   --rk-tap-min / --rk-tap-row (touch.css), so a control can lose visual padding
+   without losing its 44px hit area.
+
+     rung   desktop   phone
+     3xs    2.4px     2px      hairline gaps (icon ↔ label)
+     2xs    4px       3px
+     xs     5.6px     4px      list rows: row ↔ row
+     sm     7.2px     6px      inside a row / tile
+     md     8.8px     8px      card padding (vertical), cards ↔ cards
+     lg     12px      10px     card padding (horizontal)
+     xl     16px      12px     page gutter
+     2xl    24px      18px
+
+   Page gutter: 12px (was 16px), or the safe-area inset when it is larger. */
 @media (max-width: 999.98px) {
   :root {
+    --rk-space-3xs: 0.125rem;
+    --rk-space-2xs: 0.1875rem;
+    --rk-space-xs: 0.25rem;
+    --rk-space-sm: 0.375rem;
+    --rk-space-md: 0.5rem;
+    --rk-space-lg: 0.625rem;
+    --rk-space-xl: 0.75rem;
+    --rk-space-2xl: 1.125rem;
+    --rk-section-gap: var(--rk-space-md);
     --rk-page-pad-x: var(--rk-space-xl);
+    --rk-page-pad-y: var(--rk-space-md);
   }
 }

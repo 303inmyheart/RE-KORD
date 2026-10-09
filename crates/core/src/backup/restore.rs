@@ -611,7 +611,12 @@ pub async fn restore_backup_zip(
     }
     let db = state.db.clone();
     let root = music_root.clone();
-    let scan_result = tokio::task::spawn_blocking(move || scan::scan_library(&db, &root)).await;
+    let scan_opts = scan::ScanOptions {
+        embedded: state.embedded_options(),
+        ..Default::default()
+    };
+    let scan_result =
+        tokio::task::spawn_blocking(move || scan::scan_library_opts(&db, &root, scan_opts)).await;
     state.end_scan();
     let report = match scan_result {
         Ok(Ok(r)) => r,

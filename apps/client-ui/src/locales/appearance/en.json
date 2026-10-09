@@ -1,0 +1,17 @@
+{
+  "themePicker.custom.text": "Text color",
+  "themePicker.customTextHeading": "Text",
+  "themePicker.customTextAuto": "Auto",
+  "themePicker.customTextReset": "Automatic",
+  "themePicker.customTextSampleMuted": "Secondary text",
+  "themePicker.customTextContrastLow": "Low contrast ({{ratio}}:1): text may be hard to read. Readability (WCAG AA) needs at least {{min}}:1.",
+  "appearance.width.content": "Content width",
+  "appearance.width.dock": "Player bar width",
+  "appearance.width.default": "Default ({{px}} px)",
+  "appearance.width.full": "Full",
+  "appearance.width.matchContent": "Match content",
+  "appearance.width.custom": "Custom…",
+  "appearance.width.contentCustomAria": "Maximum content width in pixels",
+  "appearance.width.dockCustomAria": "Maximum player bar width in pixels",
+  "appearance.width.hint": "Desktop only, saved on this device. Beyond the chosen width the content stays centered; narrow windows and phones keep the adaptive layout."
+}

@@ -27,10 +27,11 @@ const MIGRATIONS: &[(i64, &str, Step)] = &[
     ),
     (5, "recount mp3 durations", v5_recount_mp3_durations),
     (6, "podcast sources", v6_podcast_sources),
+    (7, "embedded tags and covers", v7_embedded_tags),
 ];
 
 /// Schema version this build writes.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 pub fn user_version(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
@@ -580,6 +581,55 @@ fn v6_podcast_sources(tx: &Transaction<'_>) -> Result<()> {
           error_at INTEGER,
           episodes_json TEXT NOT NULL DEFAULT '[]'
         );
+        "#,
+    )?;
+    Ok(())
+}
+
+/// Embedded tags and covers (5.1):
+/// - tracks: track artist / album artist, track and disc totals, MusicBrainz
+///   ids from the tags; `embedded_fields` (`db::field` bits whose value came
+///   from the file's own tags); `tags_version` (version of the tag reader that
+///   last read the file, 0 = never: the embedded-tags backfill job reads it);
+/// - albums: `cover_source` (`folder`, `legacy`, `embedded`), the track an
+///   embedded cover came from (`embedded_cover_from`: NULL never checked, ''
+///   none found), the album artist and `embedded_fields` of the values derived
+///   from the tracks' tags.
+///
+/// Nothing is marked stale: the existing rows keep their values and the
+/// backfill job (throttled, resumable) fills what the tags add. Lyrics
+/// already stored count as curated until the backfill finds the same text
+/// in the file (they may come from a lyrics fetch).
+fn v7_embedded_tags(tx: &Transaction<'_>) -> Result<()> {
+    for (table, col, decl) in [
+        ("tracks", "tag_artist", "TEXT"),
+        ("tracks", "tag_album_artist", "TEXT"),
+        ("tracks", "track_total", "INTEGER"),
+        ("tracks", "disc_total", "INTEGER"),
+        ("tracks", "mb_recording_id", "TEXT"),
+        ("tracks", "mb_release_id", "TEXT"),
+        ("tracks", "mb_artist_id", "TEXT"),
+        ("tracks", "mb_release_group_id", "TEXT"),
+        ("tracks", "embedded_fields", "INTEGER NOT NULL DEFAULT 0"),
+        ("tracks", "tags_version", "INTEGER NOT NULL DEFAULT 0"),
+        ("albums", "cover_source", "TEXT"),
+        ("albums", "embedded_cover_from", "TEXT"),
+        ("albums", "tag_album_artist", "TEXT"),
+        ("albums", "embedded_fields", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        if !has_column(tx, table, col)? {
+            tx.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"), [])?;
+        }
+    }
+    tx.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_tracks_tags_version ON tracks(tags_version);
+        UPDATE albums SET cover_source = CASE
+            WHEN replace(cover_path, '\', '/') LIKE '%/.kord/artwork/%' THEN 'legacy'
+            ELSE 'folder' END
+          WHERE has_cover = 1 AND cover_path IS NOT NULL AND cover_source IS NULL;
+        UPDATE tracks SET edited_fields = edited_fields | 32
+          WHERE lyrics IS NOT NULL AND trim(lyrics) != '';
         "#,
     )?;
     Ok(())

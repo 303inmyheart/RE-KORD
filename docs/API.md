@@ -39,7 +39,9 @@ Envelope (JSON):
 | GET/PUT | `/api/v1/library/layout` | Read / write `music_root/.kord/library-layout.json` |
 | GET/PUT | `/api/v1/library/watch` | Filesystem watcher status / enable-disable (debounced incremental scan) |
 | POST | `/api/v1/library/thumbnails` | Start the cover thumbnail backfill as a job |
-| GET/DELETE | `/api/v1/jobs` | Background jobs (scan, thumbnails, restore, sync-legacy) with progress / drop finished entries |
+| GET/PUT | `/api/v1/library/embedded` | Embedded tags and covers → `{ enabled, priority: "studio"\|"embedded", pendingTracks, pendingAlbums, running, overrideStudio }`. PUT `{ enabled?, priority? }` (machine operation) saves `settings.json` → `embedded_metadata` and, when something changed, re-reads the library in the background (job `embeddedTags`). 400 `invalid_embedded_priority`, 500 `settings_save_failed` |
+| POST | `/api/v1/library/embedded/reread` | "Re-read embedded metadata" (machine operation): every track's tags and every album without a folder cover are read again by the `embeddedTags` job. Values from the tags are refreshed, curated ones kept. Body `{ overrideStudio?: true }` also replaces typed values, only with the `embedded` priority (`overrideStudio` in the answer says whether it applies). Returns the status above |
+| GET/DELETE | `/api/v1/jobs` | Background jobs (scan, thumbnails, embeddedTags, restore, sync-legacy) with progress / drop finished entries |
 | GET | `/api/v1/jobs/{id}` | One job → `{ "ok": true, "data": Job }`, 404 when unknown |
 | POST | `/api/v1/jobs/{id}/cancel` | Cancel a cancellable job |
 | GET/DELETE | `/api/v1/diagnostics/errors` | Recent WARN/ERROR ring buffer (`limit`) / clear it |
@@ -61,7 +63,7 @@ Envelope (JSON):
 | GET | `/api/v1/modules` | Optional module registry (manifest modules plus `podcasts`, enabled from the admin panel) |
 | GET | `/api/v1/podcasts`, `/podcasts/sources/{id}`, `/podcasts/play/{id}/{key}`, `/podcasts/art/{id}/{key}` | Podcasts & news (optional module, 404 `podcasts_disabled` while off) — see [Podcasts & news](#podcasts--news-optional-module) |
 | GET/PUT/POST/DELETE | `/api/v1/podcasts/admin…` | Podcasts & news settings and sources (writes: machine operation) |
-| GET | `/api/v1/covers/album/{id}` | Album cover image (folder cover.jpg…, else the legacy `.kord/artwork` registry). `?size=128\|256` serves a cached thumbnail; `?v=<cover_version>` is ignored server-side (cache busting) and makes the response `immutable` for a year, otherwise `max-age=300`. `ETag` + `If-None-Match` → 304. Missing cover → 404 with `Cache-Control: public, max-age=3600` |
+| GET | `/api/v1/covers/album/{id}` | Album cover image (folder cover.jpg…, else the legacy `.kord/artwork` registry, else the picture embedded in its files, stored in `<data_dir>/covers/embedded`). `?size=128\|256` serves a cached thumbnail; `?v=<cover_version>` is ignored server-side (cache busting) and makes the response `immutable` for a year, otherwise `max-age=300`. `ETag` + `If-None-Match` → 304. Missing cover → 404 with `Cache-Control: public, max-age=3600` |
 | GET | `/api/v1/covers/artist/{id}` | Artist cover (first album with cover), same `?size=` |
 | GET | `/api/v1/backup/kord-data` | Download hub backup ZIP (`kordBackup: 3`) |
 | POST | `/api/v1/backup/kord-restore` | Restore ZIP (`multipart` field `file`; v2/v3; body limit 512 MiB) |
@@ -104,7 +106,8 @@ Track/Album JSON may include `genre`, `release_date`, `lyrics` (tracks) and `gen
 
 **Display model** (all additive, existing fields keep their names):
 
-- Tracks (`/library`, `tracks-page`, `search`, `changes`, album / playlist / favorite tracks, `tracks/{id}`): `title` is the display title (tag title; when missing or just the file name, the file name cleaned like legacy `sanitizeLocalTrackTitleDisplay`: no `01 - ` prefix, no `[…]` / `(Official Video)` / `(Remaster)` cruft; musical versions such as `(Remix)`, `(Live)`, `(Acoustic)`, `(feat. …)` stay). `track_number` falls back to the file name (`07 - x`, `1-07 x`). New: `file_name`, `disc_number`, `genres` (array of canonical labels: `genre` split on `;` `/` `,` `|`, numeric / stub tokens dropped, one label per case/space/hyphen-insensitive key, e.g. `["Hip Hop", "Pop Rap"]`), `has_cover` / `cover_version` (of the album; skip cover requests when `has_cover` is false, append `?v=cover_version`), `added_at`, `updated_at` (RFC3339), `user_edited` (a person edited it), `curated_fields` (fields whose curated value wins over tags: `title`, `release_date`, `genre`, `track_number`, `disc_number`).
+- Tracks (`/library`, `tracks-page`, `search`, `changes`, album / playlist / favorite tracks, `tracks/{id}`): `title` is the display title (tag title; when missing or just the file name, the file name cleaned like legacy `sanitizeLocalTrackTitleDisplay`: no `01 - ` prefix, no `[…]` / `(Official Video)` / `(Remaster)` cruft; musical versions such as `(Remix)`, `(Live)`, `(Acoustic)`, `(feat. …)` stay). `track_number` falls back to the file name (`07 - x`, `1-07 x`). New: `file_name`, `disc_number`, `genres` (array of canonical labels: `genre` split on `;` `/` `,` `|`, numeric / stub tokens dropped, one label per case/space/hyphen-insensitive key, e.g. `["Hip Hop", "Pop Rap"]`), `has_cover` / `cover_version` (of the album; skip cover requests when `has_cover` is false, append `?v=cover_version`), `added_at`, `updated_at` (RFC3339), `user_edited` (a person edited it), `curated_fields` (fields whose curated value wins over tags: `title`, `release_date`, `genre`, `track_number`, `disc_number`, `lyrics`). 5.1: `embedded_fields` (values taken from the file's tags: the fields above plus `bpm`, `album`, `artist`, `album_artist`, `track_total`, `disc_total`, `musicbrainz`), `track_artist` (artist tag; `artist_name` stays the library artist), `album_artist`, `track_total`, `disc_total`, `musicbrainz: { recording_id, release_id, artist_id, release_group_id }` (only the ids present; omitted when none). See [supported-formats.md](supported-formats.md#tags).
+- Albums (5.1): `cover_source` (`folder`, `legacy`, `embedded`; omitted without a cover), `album_artist` (the tracks' album-artist tag), `musicbrainz_release_id`, `embedded_fields` (`genre` / `release_date` derived from the tracks' tags, `album_artist`, `musicbrainz`).
 - Albums: `name` is the display title (curated title, else the most common album tag, else the folder name; full-width `？` `：` → `?` `:`, `Album - ` prefix dropped). New: `folder_name` (on disk), `genres`, `cover_version`, `added_at`, `updated_at` (title / dates / genre / cover / track list changed: order "recently updated" by it), `user_edited`, `curated_fields`.
 - Dates are stored as precise as the source: `YYYY-MM-DD`, `YYYY-MM` or `YYYY` (`YYYYMMDD` and timestamps are normalised). A curated date (sidecar, legacy, Studio) wins over tag dates (e.g. yt-dlp upload dates); a bare curated year never replaces a full tag date of the same year.
 - Curated values: sidecars (`kord-albuminfo.json` / `kord-trackinfo.json`), the legacy library DB, Studio saves and metadata fetches. Rescans never replace them with tag values; values a person typed (`user_edited`) are not replaced by fetches or imports either.
@@ -164,7 +167,7 @@ Two levels (parity legacy `requestAccess.mjs`, where a loopback request could ru
 
 **Machine operations** — act on the host itself. They require the **Default** account *and* a local client (or `allow_remote_admin`).
 
-- library: `PUT …/library/path`, `POST …/library/scan|thumbnails|sync-legacy-meta`, `PUT …/library/layout|watch`
+- library: `PUT …/library/path`, `POST …/library/scan|thumbnails|sync-legacy-meta|embedded/reread`, `PUT …/library/layout|watch|embedded`
 - integrations: `POST/DELETE …/config/youtube-cookies`, `PUT/DELETE …/config/discogs-token`
 - podcasts: `PUT …/podcasts/admin/settings|order|sources/{id}`, `POST …/podcasts/admin/test|sources`, `DELETE …/podcasts/admin/sources/{id}`
 - tools: `POST …/tools/ytdlp/update`
@@ -315,7 +318,7 @@ Probes run off the async workers and are cached for 10 minutes (an update invali
 - `GET /api/v1/download/active` lists this hub's running and finished (kept 15 min) downloads: `{ downloadId, kind, outputDir, accountId, background, status: running|indexing|done|failed|cancelled, startedAt, finishedAt, progress, counts, items, logTail (last 80 lines), canCancel, attachedStreams, cancelReason, done }`. `?downloadId=…` returns one; with `&stream=1` the response is an NDJSON stream starting with `{ type: "snapshot", download: {…} }` followed by live events up to `done` (immediately when already finished) — a client returning to the pane re-attaches this way (or polls).
 - Start errors: 403 `ytdlp_disabled`, 400 `url_not_allowed` / `invalid_download_id` / `invalid_output_dir` / `music_root_not_set`, 409 `download_id_active`.
 
-Library scan is **folder-first**: `Music/Artist/Album/track` (other layouts are detected, see [supported-formats.md](supported-formats.md#library-layout)). Embedded tags supply title, album name, genres, dates, track/disc numbers, BPM and lyrics; curated values always win over them.
+Library scan is **folder-first**: `Music/Artist/Album/track` (other layouts are detected, see [supported-formats.md](supported-formats.md#library-layout)). Embedded tags supply title, artist, album artist, album name, genres, dates, track/disc numbers and totals, BPM, lyrics and MusicBrainz ids; curated values win over them (see [supported-formats.md](supported-formats.md#precedence) for the priority setting).
 
 ### Backup / restore
 

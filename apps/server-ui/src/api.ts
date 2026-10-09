@@ -354,6 +354,18 @@ export type LibraryProbeReport = {
   currentLayout: LibraryLayoutConfig;
 };
 
+export type EmbeddedPriority = "studio" | "embedded";
+
+/** `GET /api/v1/library/embedded`: embedded tags / covers and the backfill. */
+export type EmbeddedStatus = {
+  enabled: boolean;
+  priority: EmbeddedPriority;
+  pendingTracks: number;
+  pendingAlbums: number;
+  running: boolean;
+  overrideStudio: boolean;
+};
+
 export type WatcherStatus = {
   enabled: boolean;
   running: boolean;
@@ -589,6 +601,18 @@ export const api = {
 
   rebuildThumbnails: () =>
     request<{ started: boolean }>("/api/v1/library/thumbnails", { method: "POST" }),
+
+  embedded: () => request<EmbeddedStatus>("/api/v1/library/embedded"),
+  setEmbedded: (next: { enabled?: boolean; priority?: EmbeddedPriority }) =>
+    request<EmbeddedStatus>("/api/v1/library/embedded", {
+      method: "PUT",
+      body: JSON.stringify(next),
+    }),
+  rereadEmbedded: (overrideStudio = false) =>
+    request<EmbeddedStatus>("/api/v1/library/embedded/reread", {
+      method: "POST",
+      body: JSON.stringify({ overrideStudio }),
+    }),
 
   legacyImportStatus: () => request<LegacyImportStatus>("/api/v1/legacy-import"),
   legacyImport: (opts: { dryRun?: boolean; force?: boolean } = {}) => {

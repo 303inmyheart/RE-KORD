@@ -166,4 +166,11 @@
     /* Rows pick inline actions vs overflow menu from this width (track-row.css). */
     container: track-list / inline-size;
   }
+
+  /* Phone: framed rows need less air between them than on a desktop list. */
+  @media (max-width: 999.98px) {
+    .list {
+      gap: var(--rk-space-sm);
+    }
+  }
 </style>

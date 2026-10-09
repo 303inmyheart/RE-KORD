@@ -348,6 +348,19 @@
 .listen-stage__sub-lead {
   flex: 0 1 auto;
   min-width: 0;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0 0.25em;
+  white-space: nowrap;
+}
+
+/* Artist · album on one line, cut with "…" (full text in the tooltip): long
+   names used to wrap over three lines. Duration and lyrics stay visible. */
+.listen-stage__sub-names {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .listen-stage__sub-sep,

@@ -13,7 +13,13 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-/// One track row as written by the scanner.
+/// One track row as written by the scanner (and the embedded-tags backfill).
+///
+/// The metadata fields hold what this read of the file found: tag values,
+/// with the file / folder name as fallback. [`upsert_track`] merges them with
+/// the stored row: curated values (`edited_fields`) and typed ones
+/// (`user_fields`) are kept according to `policy`, `embedded_mask` says
+/// which of the values came from the tags.
 #[derive(Debug, Clone)]
 pub struct TrackRow<'a> {
     pub rel_path: &'a str,
@@ -34,6 +40,22 @@ pub struct TrackRow<'a> {
     pub disc_number: Option<i64>,
     /// Album title from the file's tags (the album row picks the most common).
     pub tag_album: Option<&'a str>,
+    pub tag_artist: Option<&'a str>,
+    pub tag_album_artist: Option<&'a str>,
+    pub track_total: Option<i64>,
+    pub disc_total: Option<i64>,
+    pub mb_recording_id: Option<&'a str>,
+    pub mb_release_id: Option<&'a str>,
+    pub mb_artist_id: Option<&'a str>,
+    pub mb_release_group_id: Option<&'a str>,
+    /// `db::field` bits of the values above that came from the tags.
+    pub embedded_mask: i64,
+    /// Version of the tag reader that produced the values; `None` for writes
+    /// that did not read the file (they only fill gaps).
+    pub tags_version: Option<i64>,
+    pub policy: crate::embedded::MergePolicy,
+    /// Record size / mtime in `files` (the scan); the backfill leaves them.
+    pub write_file_state: bool,
 }
 
 /// Catalog writes sharing one transaction; see [`Db::write_batch`].
@@ -42,6 +64,10 @@ pub struct CatalogBatch<'a> {
 }
 
 impl CatalogBatch<'_> {
+    pub(super) fn conn(&self) -> &Connection {
+        self.conn
+    }
+
     /// Store (or, with `None`, drop) the synthetic Xing frame `/media`
     /// splices into an MP3 at `insert_at`; valid while size and mtime match.
     pub fn set_mp3_seek_header(
@@ -142,8 +168,24 @@ impl CatalogBatch<'_> {
         )
     }
 
-    pub fn backfill_album_meta_from_tracks(&self, album_id: i64) -> Result<()> {
-        backfill_album_meta_from_tracks(self.conn, album_id)
+    pub fn backfill_album_meta_from_tracks(
+        &self,
+        album_id: i64,
+        prefer_embedded: bool,
+    ) -> Result<()> {
+        backfill_album_meta_from_tracks(self.conn, album_id, prefer_embedded)
+    }
+
+    /// Record the cover's origin; `embedded_from`: `Some(None)` = never
+    /// checked, `Some(Some(""))` = no picture found, `Some(Some(rel))` = the
+    /// track it came from; `None` leaves it as it is.
+    pub fn set_album_cover_info(
+        &self,
+        album_id: i64,
+        source: Option<&str>,
+        embedded_from: Option<Option<&str>>,
+    ) -> Result<()> {
+        set_album_cover_info(self.conn, album_id, source, embedded_from)
     }
 }
 
@@ -218,56 +260,319 @@ pub(super) fn upsert_album(
     Ok(id)
 }
 
+/// What the stored row holds for the merged fields.
+#[derive(Debug, Default)]
+struct StoredTrack {
+    title: Option<String>,
+    genre: Option<String>,
+    release_date: Option<String>,
+    track_number: Option<i64>,
+    disc_number: Option<i64>,
+    lyrics: Option<String>,
+    bpm: Option<f64>,
+    tag_album: Option<String>,
+    tag_artist: Option<String>,
+    tag_album_artist: Option<String>,
+    track_total: Option<i64>,
+    disc_total: Option<i64>,
+    mb: [Option<String>; 4],
+    edited: i64,
+    user: i64,
+    embedded: i64,
+    tags_version: i64,
+}
+
+fn stored_track(conn: &Connection, rel_path: &str) -> Result<Option<StoredTrack>> {
+    Ok(conn
+        .query_row(
+            r#"
+            SELECT title, genre, release_date, track_number, disc_number, lyrics, bpm,
+                   tag_album, tag_artist, tag_album_artist, track_total, disc_total,
+                   mb_recording_id, mb_release_id, mb_artist_id, mb_release_group_id,
+                   edited_fields, user_fields, embedded_fields, tags_version
+            FROM tracks WHERE rel_path = ?1
+            "#,
+            params![rel_path],
+            |r| {
+                Ok(StoredTrack {
+                    title: r.get(0)?,
+                    genre: r.get(1)?,
+                    release_date: r.get(2)?,
+                    track_number: r.get(3)?,
+                    disc_number: r.get(4)?,
+                    lyrics: r.get(5)?,
+                    bpm: r.get(6)?,
+                    tag_album: r.get(7)?,
+                    tag_artist: r.get(8)?,
+                    tag_album_artist: r.get(9)?,
+                    track_total: r.get(10)?,
+                    disc_total: r.get(11)?,
+                    mb: [r.get(12)?, r.get(13)?, r.get(14)?, r.get(15)?],
+                    edited: r.get(16)?,
+                    user: r.get(17)?,
+                    embedded: r.get(18)?,
+                    tags_version: r.get(19)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Field masks while merging one row.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Masks {
+    pub edited: i64,
+    pub user: i64,
+    pub embedded: i64,
+}
+
+/// One field of a fresh read meets the stored value.
+///
+/// - typed by a person: kept, unless `override_user` and the tag has a value;
+/// - curated: kept, unless `prefer_embedded` and the tag has a value;
+/// - otherwise the tag value; without one, the file-name fallback replaces a
+///   value that came from the tags (the tag was removed) and only fills an
+///   empty field otherwise.
+///
+/// `fresh` is false for writes that did not read the file: they only fill.
+pub(crate) fn merge_field<T: Clone>(
+    bit: i64,
+    incoming: Option<T>,
+    stored: Option<T>,
+    from_tag: bool,
+    masks: &mut Masks,
+    policy: crate::embedded::MergePolicy,
+    fresh: bool,
+) -> Option<T> {
+    let tag_value = from_tag && incoming.is_some();
+    let typed = masks.user & bit != 0;
+    let curated = masks.edited & bit != 0;
+    if typed || curated {
+        let replace =
+            tag_value && (policy.override_user || (policy.prefer_embedded && !typed)) && fresh;
+        if replace {
+            masks.edited &= !bit;
+            masks.user &= !bit;
+            masks.embedded |= bit;
+            return incoming;
+        }
+        if fresh {
+            masks.embedded &= !bit;
+        }
+        return stored;
+    }
+    if !fresh {
+        return incoming.or(stored);
+    }
+    if tag_value {
+        masks.embedded |= bit;
+        return incoming;
+    }
+    let was_embedded = masks.embedded & bit != 0;
+    masks.embedded &= !bit;
+    if was_embedded {
+        incoming
+    } else {
+        incoming.or(stored)
+    }
+}
+
+/// Bits of `embedded_fields` that only the tags provide (no curated value).
+const TAG_ONLY_BITS: i64 = super::field::ALBUM
+    | super::field::ARTIST
+    | super::field::ALBUM_ARTIST
+    | super::field::TRACK_TOTAL
+    | super::field::DISC_TOTAL
+    | super::field::MUSICBRAINZ;
+
 pub(super) fn upsert_track(conn: &Connection, row: &TrackRow<'_>) -> Result<i64> {
-    // Curated fields (`edited_fields`, see `db::field`) keep their value: a
-    // re-read of the tags never replaces a sidecar, legacy or Studio value.
+    use super::field;
+    let stored = stored_track(conn, row.rel_path)?.unwrap_or_default();
+    let fresh = row.tags_version.is_some();
+    let mut m = Masks {
+        edited: stored.edited,
+        user: stored.user,
+        embedded: stored.embedded,
+    };
+    let from = |bit: i64| row.embedded_mask & bit != 0;
+    let p = row.policy;
+    let s = |v: Option<&str>| v.map(str::to_string);
+
+    // Lyrics stored before 5.1 count as curated (they may come from a
+    // fetch) until the file turns out to hold the very same text.
+    if fresh && m.edited & field::LYRICS != 0 && m.user & field::LYRICS == 0 && from(field::LYRICS)
+    {
+        let same = matches!((row.lyrics, stored.lyrics.as_deref()),
+            (Some(a), Some(b)) if a.trim() == b.trim());
+        if same {
+            m.edited &= !field::LYRICS;
+        }
+    }
+
+    let title = merge_field(
+        field::TITLE,
+        s(Some(row.title)),
+        stored.title.clone(),
+        from(field::TITLE),
+        &mut m,
+        p,
+        fresh,
+    )
+    .unwrap_or_else(|| row.title.to_string());
+    let release_date = merge_field(
+        field::RELEASE_DATE,
+        s(row.release_date),
+        stored.release_date.clone(),
+        from(field::RELEASE_DATE),
+        &mut m,
+        p,
+        fresh,
+    );
+    let genre = merge_field(
+        field::GENRE,
+        s(row.genre),
+        stored.genre.clone(),
+        from(field::GENRE),
+        &mut m,
+        p,
+        fresh,
+    );
+    let track_number = merge_field(
+        field::TRACK_NUMBER,
+        row.track_number,
+        stored.track_number,
+        from(field::TRACK_NUMBER),
+        &mut m,
+        p,
+        fresh,
+    );
+    let disc_number = merge_field(
+        field::DISC_NUMBER,
+        row.disc_number,
+        stored.disc_number,
+        from(field::DISC_NUMBER),
+        &mut m,
+        p,
+        fresh,
+    );
+    let lyrics = merge_field(
+        field::LYRICS,
+        s(row.lyrics),
+        stored.lyrics.clone(),
+        from(field::LYRICS),
+        &mut m,
+        p,
+        fresh,
+    );
+    let bpm = merge_field(
+        field::BPM,
+        row.bpm,
+        stored.bpm,
+        from(field::BPM),
+        &mut m,
+        p,
+        fresh,
+    );
+
+    // Values only the tags provide: a fresh read replaces them.
+    let tag_only = |incoming: Option<String>, stored: Option<String>| {
+        if fresh {
+            incoming
+        } else {
+            incoming.or(stored)
+        }
+    };
+    let tag_album = tag_only(s(row.tag_album), stored.tag_album);
+    let tag_artist = tag_only(s(row.tag_artist), stored.tag_artist);
+    let tag_album_artist = tag_only(s(row.tag_album_artist), stored.tag_album_artist);
+    let [mb0, mb1, mb2, mb3] = stored.mb;
+    let mb_recording_id = tag_only(s(row.mb_recording_id), mb0);
+    let mb_release_id = tag_only(s(row.mb_release_id), mb1);
+    let mb_artist_id = tag_only(s(row.mb_artist_id), mb2);
+    let mb_release_group_id = tag_only(s(row.mb_release_group_id), mb3);
+    let (track_total, disc_total) = if fresh {
+        (row.track_total, row.disc_total)
+    } else {
+        (
+            row.track_total.or(stored.track_total),
+            row.disc_total.or(stored.disc_total),
+        )
+    };
+    if fresh {
+        m.embedded = (m.embedded & !TAG_ONLY_BITS) | (row.embedded_mask & TAG_ONLY_BITS);
+    }
+    let tags_version = row.tags_version.unwrap_or(stored.tags_version);
+
     conn.execute(
         r#"
         INSERT INTO tracks(
           rel_path, file_path, album_id, artist_id, title, artist_name, album_name,
           duration_ms, track_number, size, mtime, genre, release_date, lyrics, bpm,
-          disc_number, tag_album
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+          disc_number, tag_album, tag_artist, tag_album_artist, track_total, disc_total,
+          mb_recording_id, mb_release_id, mb_artist_id, mb_release_group_id,
+          edited_fields, user_fields, embedded_fields, tags_version
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,
+                  ?21,?22,?23,?24,?25,?26,?27,?28,?29)
         ON CONFLICT(rel_path) DO UPDATE SET
           file_path=excluded.file_path,
           album_id=excluded.album_id,
           artist_id=excluded.artist_id,
-          title=CASE WHEN tracks.edited_fields & 1 THEN tracks.title ELSE excluded.title END,
+          title=excluded.title,
           artist_name=excluded.artist_name,
           album_name=excluded.album_name,
           duration_ms=excluded.duration_ms,
-          track_number=CASE WHEN tracks.edited_fields & 8 THEN tracks.track_number
-            ELSE COALESCE(excluded.track_number, tracks.track_number) END,
-          disc_number=CASE WHEN tracks.edited_fields & 16 THEN tracks.disc_number
-            ELSE COALESCE(excluded.disc_number, tracks.disc_number) END,
+          track_number=excluded.track_number,
+          disc_number=excluded.disc_number,
           size=excluded.size,
           mtime=excluded.mtime,
-          genre=CASE WHEN tracks.edited_fields & 4 THEN tracks.genre
-            ELSE COALESCE(excluded.genre, tracks.genre) END,
-          release_date=CASE WHEN tracks.edited_fields & 2 THEN tracks.release_date
-            ELSE COALESCE(excluded.release_date, tracks.release_date) END,
-          lyrics=COALESCE(excluded.lyrics, tracks.lyrics),
-          bpm=COALESCE(excluded.bpm, tracks.bpm),
-          tag_album=excluded.tag_album
+          genre=excluded.genre,
+          release_date=excluded.release_date,
+          lyrics=excluded.lyrics,
+          bpm=excluded.bpm,
+          tag_album=excluded.tag_album,
+          tag_artist=excluded.tag_artist,
+          tag_album_artist=excluded.tag_album_artist,
+          track_total=excluded.track_total,
+          disc_total=excluded.disc_total,
+          mb_recording_id=excluded.mb_recording_id,
+          mb_release_id=excluded.mb_release_id,
+          mb_artist_id=excluded.mb_artist_id,
+          mb_release_group_id=excluded.mb_release_group_id,
+          edited_fields=excluded.edited_fields,
+          user_fields=excluded.user_fields,
+          embedded_fields=excluded.embedded_fields,
+          tags_version=excluded.tags_version
         "#,
         params![
             row.rel_path,
             row.file_path.to_string_lossy().as_ref(),
             row.album_id,
             row.artist_id,
-            row.title,
+            title,
             row.artist_name,
             row.album_name,
             row.duration_ms,
-            row.track_number,
+            track_number,
             row.size as i64,
             row.mtime,
-            row.genre,
-            row.release_date,
-            row.lyrics,
-            row.bpm,
-            row.disc_number,
-            row.tag_album
+            genre,
+            release_date,
+            lyrics,
+            bpm,
+            disc_number,
+            tag_album,
+            tag_artist,
+            tag_album_artist,
+            track_total,
+            disc_total,
+            mb_recording_id,
+            mb_release_id,
+            mb_artist_id,
+            mb_release_group_id,
+            m.edited,
+            m.user,
+            m.embedded,
+            tags_version
         ],
     )?;
     let id: i64 = conn.query_row(
@@ -275,11 +580,13 @@ pub(super) fn upsert_track(conn: &Connection, row: &TrackRow<'_>) -> Result<i64>
         params![row.rel_path],
         |r| r.get(0),
     )?;
-    conn.execute(
-        "INSERT INTO files(rel_path, size, mtime) VALUES (?1,?2,?3)
-         ON CONFLICT(rel_path) DO UPDATE SET size=excluded.size, mtime=excluded.mtime",
-        params![row.rel_path, row.size as i64, row.mtime],
-    )?;
+    if row.write_file_state {
+        conn.execute(
+            "INSERT INTO files(rel_path, size, mtime) VALUES (?1,?2,?3)
+             ON CONFLICT(rel_path) DO UPDATE SET size=excluded.size, mtime=excluded.mtime",
+            params![row.rel_path, row.size as i64, row.mtime],
+        )?;
+    }
     Ok(id)
 }
 
@@ -379,22 +686,63 @@ fn best_track_date(dates: &[String]) -> Option<String> {
         .map(|(d, _)| d.to_string())
 }
 
+/// Most common non-empty value of a track column in an album.
+fn most_common_track_value(conn: &Connection, album_id: i64, col: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT trim({col}) FROM tracks WHERE album_id = ?1 AND {col} IS NOT NULL \
+                 AND trim({col}) != '' GROUP BY trim({col}) ORDER BY COUNT(*) DESC, trim({col}) LIMIT 1"
+            ),
+            params![album_id],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 /// Album genre / release date from its tracks when the album has none of its
-/// own (curated values are never touched). A more precise track date of the
-/// same year replaces a bare year.
-pub(super) fn backfill_album_meta_from_tracks(conn: &Connection, album_id: i64) -> Result<()> {
+/// own (curated values are kept; with `prefer_embedded` only typed ones). A
+/// more precise track date of the same year replaces a bare year. Also the
+/// album artist and MusicBrainz release id the tracks' tags agree on.
+pub(super) fn backfill_album_meta_from_tracks(
+    conn: &Connection,
+    album_id: i64,
+    prefer_embedded: bool,
+) -> Result<()> {
     use super::field;
-    let (edited, cur_date, cur_genre): (i64, Option<String>, Option<String>) = conn.query_row(
-        "SELECT edited_fields, release_date, genre FROM albums WHERE id = ?1",
+    let (edited, user, embedded, cur_date, cur_genre, cur_mb): (
+        i64,
+        i64,
+        i64,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = conn.query_row(
+        "SELECT edited_fields, user_fields, embedded_fields, release_date, genre, \
+         musicbrainz_release_id FROM albums WHERE id = ?1",
         params![album_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        },
     )?;
     let mut stmt = conn.prepare("SELECT release_date, genre FROM tracks WHERE album_id = ?1")?;
     let rows: Vec<(Option<String>, Option<String>)> = stmt
         .query_map(params![album_id], |r| Ok((r.get(0)?, r.get(1)?)))?
         .flatten()
         .collect();
-    if edited & field::RELEASE_DATE == 0 {
+    // Curated album values stay, unless the embedded priority lets the
+    // tracks' values replace the ones nobody typed.
+    let open = |bit: i64| edited & bit == 0 || (prefer_embedded && user & bit == 0);
+    let mut new_edited = edited;
+    let mut new_embedded = embedded;
+    if open(field::RELEASE_DATE) {
         let dates: Vec<String> = rows
             .iter()
             .filter_map(|(d, _)| d.as_deref().map(str::trim))
@@ -403,7 +751,9 @@ pub(super) fn backfill_album_meta_from_tracks(conn: &Connection, album_id: i64) 
             .collect();
         if let Some(best) = best_track_date(&dates) {
             let cur = cur_date.as_deref().map(str::trim).unwrap_or("");
+            let curated = edited & field::RELEASE_DATE != 0;
             let replace = cur.is_empty()
+                || curated
                 || (super::text::date_precision(cur) < super::text::date_precision(&best)
                     && best.starts_with(cur));
             if replace && cur != best {
@@ -411,10 +761,13 @@ pub(super) fn backfill_album_meta_from_tracks(conn: &Connection, album_id: i64) 
                     "UPDATE albums SET release_date = ?2 WHERE id = ?1",
                     params![album_id, best],
                 )?;
+                new_edited &= !field::RELEASE_DATE;
+                new_embedded |= field::RELEASE_DATE;
             }
         }
     }
-    if edited & field::GENRE == 0 && cur_genre.as_deref().map(str::trim).unwrap_or("").is_empty() {
+    let genre_empty = cur_genre.as_deref().map(str::trim).unwrap_or("").is_empty();
+    if open(field::GENRE) && (genre_empty || edited & field::GENRE != 0) {
         let mut counts: HashMap<&str, usize> = HashMap::new();
         for g in rows
             .iter()
@@ -427,12 +780,58 @@ pub(super) fn backfill_album_meta_from_tracks(conn: &Connection, album_id: i64) 
             .into_iter()
             .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
         {
-            conn.execute(
-                "UPDATE albums SET genre = ?2 WHERE id = ?1",
-                params![album_id, g],
-            )?;
+            if cur_genre.as_deref().map(str::trim) != Some(g) {
+                conn.execute(
+                    "UPDATE albums SET genre = ?2 WHERE id = ?1",
+                    params![album_id, g],
+                )?;
+                new_edited &= !field::GENRE;
+                new_embedded |= field::GENRE;
+            }
         }
     }
+    let album_artist = most_common_track_value(conn, album_id, "tag_album_artist")?;
+    if cur_mb.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        if let Some(mb) = most_common_track_value(conn, album_id, "mb_release_id")? {
+            conn.execute(
+                "UPDATE albums SET musicbrainz_release_id = ?2 WHERE id = ?1",
+                params![album_id, mb],
+            )?;
+            new_embedded |= field::MUSICBRAINZ;
+        }
+    }
+    if album_artist.is_some() {
+        new_embedded |= field::ALBUM_ARTIST;
+    } else {
+        new_embedded &= !field::ALBUM_ARTIST;
+    }
+    conn.execute(
+        "UPDATE albums SET tag_album_artist = ?2, edited_fields = ?3, embedded_fields = ?4 \
+         WHERE id = ?1 AND (tag_album_artist IS NOT ?2 OR edited_fields IS NOT ?3 \
+         OR embedded_fields IS NOT ?4)",
+        params![album_id, album_artist, new_edited, new_embedded],
+    )?;
+    Ok(())
+}
+
+/// Where an album's cover comes from (see `embedded::cover`).
+pub(super) fn set_album_cover_info(
+    conn: &Connection,
+    album_id: i64,
+    source: Option<&str>,
+    embedded_from: Option<Option<&str>>,
+) -> Result<()> {
+    match embedded_from {
+        Some(from) => conn.execute(
+            "UPDATE albums SET cover_source = ?2, embedded_cover_from = ?3 WHERE id = ?1 \
+             AND (cover_source IS NOT ?2 OR embedded_cover_from IS NOT ?3)",
+            params![album_id, source, from],
+        )?,
+        None => conn.execute(
+            "UPDATE albums SET cover_source = ?2 WHERE id = ?1 AND cover_source IS NOT ?2",
+            params![album_id, source],
+        )?,
+    };
     Ok(())
 }
 
@@ -907,6 +1306,18 @@ impl Db {
                 bpm: None,
                 disc_number: None,
                 tag_album: None,
+                tag_artist: None,
+                tag_album_artist: None,
+                track_total: None,
+                disc_total: None,
+                mb_recording_id: None,
+                mb_release_id: None,
+                mb_artist_id: None,
+                mb_release_group_id: None,
+                embedded_mask: 0,
+                tags_version: None,
+                policy: Default::default(),
+                write_file_state: true,
             },
         )
     }
@@ -944,6 +1355,7 @@ impl Db {
 
     /// Fill album genre/release_date from track tags when album meta is empty.
     pub fn backfill_album_meta_from_tracks(&self, album_id: i64) -> Result<()> {
-        backfill_album_meta_from_tracks(&self.lock(), album_id)
+        let prefer = self.prefers_embedded();
+        backfill_album_meta_from_tracks(&self.lock(), album_id, prefer)
     }
 }

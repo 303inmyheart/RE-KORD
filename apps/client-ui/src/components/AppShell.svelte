@@ -377,6 +377,13 @@
     min-width: 0;
   }
 
+  /* Desktop: the width chosen in Settings › Interface for this device. */
+  @media (min-width: 1000px) {
+    .inner {
+      max-width: var(--rk-user-content-max, var(--rk-content-max));
+    }
+  }
+
   /* Vertical rhythm only from --rk-section-gap: no extra margin between blocks. */
   .inner > :global(.rk-surface-card),
   .inner > :global(.rk-panel),
@@ -392,6 +399,17 @@
     .shell {
       grid-template-columns: 1fr;
       grid-template-rows: 1fr auto;
+    }
+
+    /* The bottom nav is fixed: without a dock the end of the page must still
+       clear it (and the home indicator). */
+    .content {
+      padding-bottom: calc(
+        env(safe-area-inset-bottom, 0px) + var(--rk-mobile-nav-h) + var(--rk-page-pad-x)
+      );
+      scroll-padding-bottom: calc(
+        env(safe-area-inset-bottom, 0px) + var(--rk-mobile-nav-h) + var(--rk-page-pad-x)
+      );
     }
 
     .shell.has-dock .content {

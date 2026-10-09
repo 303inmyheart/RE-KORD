@@ -1,3 +1,5 @@
+import { pickReadableText } from "./themeText";
+
 export type Rgb = { r: number; g: number; b: number };
 
 export type ExtractedThemeColors = {
@@ -5,6 +7,8 @@ export type ExtractedThemeColors = {
   section: string;
   accent: string;
   accent2: string;
+  /** Main text colour, readable (WCAG AA) on the section and panel surfaces. */
+  text: string;
 };
 
 type Hsl = { h: number; s: number; l: number };
@@ -235,11 +239,14 @@ export function extractThemeColorsFromPixels(
   }
   const accent2Rgb = ensureContrastOnSection(accent2Seed, sectionRgb, 3);
 
+  const bg = rgbToHex(bgRgb);
+  const section = rgbToHex(sectionRgb);
   return {
-    bg: rgbToHex(bgRgb),
-    section: rgbToHex(sectionRgb),
+    bg,
+    section,
     accent: rgbToHex(accentRgb),
     accent2: rgbToHex(accent2Rgb),
+    text: pickReadableText(section, bg),
   };
 }
 
@@ -358,20 +365,25 @@ async function sampleStaticPixels(blob: Blob): Promise<Rgb[]> {
   }
 }
 
-/** Analyses a photo or GIF (multi-frame when possible) and returns the four
- *  custom theme colours. */
-export async function extractThemeColorsFromImageUrl(
-  imageUrl: string,
-): Promise<ExtractedThemeColors> {
-  const response = await fetch(imageUrl, {
-    credentials: "include",
-    cache: "no-store",
-  });
-  if (!response.ok) throw new Error("IMAGE_LOAD_FAILED");
-  const blob = await response.blob();
+/** Sniffs the real format from the first bytes (the hub's content type or
+ *  the stored extension may not match the file). */
+async function isGifBlob(blob: Blob): Promise<boolean> {
+  if (blob.type === "image/gif") return true;
+  try {
+    const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+    return head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x38;
+  } catch {
+    return false;
+  }
+}
 
+/** Analyses a photo or GIF (multi-frame when possible) and returns the
+ *  custom theme colours. */
+export async function extractThemeColorsFromBlob(
+  blob: Blob,
+): Promise<ExtractedThemeColors> {
   let pixels: Rgb[] = [];
-  if (blob.type === "image/gif") {
+  if (await isGifBlob(blob)) {
     pixels = await sampleGifPixels(blob);
   }
   if (pixels.length === 0) {

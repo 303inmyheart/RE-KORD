@@ -122,7 +122,8 @@
   --rk-lh: 1.45;
   /* Player dock bar height — measured at runtime; fallback until first paint */
   --rk-dock-h: 7.5rem;
-  --rk-mobile-nav-h: 58px;
+  /* Phone bottom nav: icon + label over a 44px+ target (legacy 5.x: 52px). */
+  --rk-mobile-nav-h: 54px;
   --rk-side-w: 56px;
   --rk-header-h: 56px;
   --rk-content-max: 1360px;

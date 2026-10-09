@@ -200,7 +200,12 @@
         </button>
         <div class="meta">
           {#if current}
-            <button type="button" class="title-hit" onclick={openStudioListen}>
+            <button
+              type="button"
+              class="title-hit"
+              title={current.title}
+              onclick={openStudioListen}
+            >
               <strong>{current.title}</strong>
             </button>
             <div class="byline">
@@ -477,7 +482,10 @@
     align-items: center;
     gap: 0.9rem;
     min-width: 0;
-    justify-self: start;
+    /* Fills its column instead of sizing to its content: long titles and
+       artists are cut with "…" (full text in the tooltip) and never widen
+       the column or push the transport off centre. */
+    justify-self: stretch;
   }
 
   .art-hit {
@@ -537,11 +545,13 @@
     text-overflow: ellipsis;
   }
 
+  /* Artist and album on one line, cut with "…": wrapping made the bar grow. */
   .byline {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
-    gap: 0.15rem 0.35rem;
+    min-width: 0;
+    gap: 0 0.35rem;
     font-size: var(--rk-fs-2);
     font-weight: 600;
     color: color-mix(in srgb, var(--rk-ink) 72%, var(--rk-muted) 28%);
@@ -561,6 +571,32 @@
     font: inherit;
     font-weight: 600;
     color: color-mix(in srgb, var(--rk-accent-2) 82%, var(--rk-ink) 18%);
+  }
+
+  .crumb {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The album gives way first (it shrinks 6 times faster), the artist keeps
+     the larger share. */
+  .crumb--artist {
+    flex: 0 1 auto;
+  }
+
+  .crumb--album {
+    flex: 0 6 auto;
+    min-width: 3rem;
+  }
+
+  .sep {
+    flex: 0 0 auto;
+  }
+
+  .cast-badge {
+    flex: 0 1 auto;
   }
 
   .crumb:hover {
@@ -681,7 +717,8 @@
 
     .bar {
       pointer-events: auto;
-      max-width: 72rem;
+      /* Settings › Interface, per device ("default" keeps 72rem). */
+      max-width: var(--rk-user-dock-max, 72rem);
       margin-inline: auto;
       border: 1px solid var(--rk-line-strong);
       border-radius: var(--rk-radius-sheet);
@@ -732,9 +769,6 @@
 
     .identity {
       gap: var(--rk-space-sm);
-      /* Fills the column instead of sizing to its content: only this way do
-         long names get truncated instead of ending up under play and menu. */
-      justify-self: stretch;
     }
 
     /* A tap on the row opens Listen: text selection would get in the way. */
@@ -742,42 +776,8 @@
       user-select: none;
     }
 
-    /* Artist and album on a single line: if they wrap the dock grows by 20px. */
-    .byline {
-      flex-wrap: nowrap;
-      min-width: 0;
-    }
-
-    .crumb {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    /* The album gives way first (it shrinks 6 times faster), the artist
-       keeps at least a third of the row: «Bring Me the Horizon · Album - Lo…»
-       instead of «Bring Me the … · Album - Lo-…». */
     .byline {
       gap: 0 0.3rem;
-    }
-
-    .crumb--artist {
-      flex: 0 1 auto;
-    }
-
-    .crumb--album {
-      flex: 0 6 auto;
-      min-width: 3rem;
-    }
-
-    .sep {
-      flex: 0 0 auto;
-    }
-
-    .cast-badge {
-      flex: 0 1 auto;
-      min-width: 0;
     }
   }
 </style>

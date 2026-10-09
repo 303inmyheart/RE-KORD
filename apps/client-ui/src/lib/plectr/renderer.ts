@@ -5,7 +5,7 @@
  * rounded lane-coloured notes, dashed hold trails that fill while held.
  *
  * Built for WebKitGTK (Tauri on Linux, every canvas op on the CPU): the
- * static part (stage colour, cover, visualizer, lane tints, edges, hit band)
+ * static part (stage colour, album glow, visualizer, lane tints, edges, hit band)
  * is composed into one device-pixel canvas and blitted 1:1 each frame; notes
  * are pre-rendered sprites (glow baked once, never `shadowBlur` per frame);
  * no gradients, filters or allocations in the frame path.
@@ -30,13 +30,6 @@ export type DrawContext = {
   light: boolean;
   /** A visualizer is composed under the lanes (lanes and receptors dimmer). */
   vizUnderlay: boolean;
-};
-
-export type StageArt = {
-  /** Small (already blurred) cover image, drawn stretched and dimmed. */
-  image: CanvasImageSource | null;
-  /** Album dominant colour "#rrggbb" for a faint glow at the bottom. */
-  tint: string | null;
 };
 
 /** Hit line: ~83.5% of the canvas, 28-52 px from the bottom edge (legacy dock). */
@@ -95,7 +88,7 @@ function releaseCanvas(c: HTMLCanvasElement | null): void {
 
 /**
  * Everything that does not move with the notes, in device pixels: stage
- * colour (+ dimmed cover, album glow), an optional visualizer frame under the
+ * colour (+ album glow), an optional visualizer frame under the
  * lanes, lane tints, lane edges and the hit band. Rebuilt on resize / look
  * change; the visualizer part is recomposed only when a new viz frame comes
  * (~25 fps), so a game frame starts with a single unscaled `drawImage`.
@@ -110,9 +103,9 @@ export class StageLayer {
   private height = 0;
   private dpr = 1;
 
-  /** Re-bakes when the size, the art or the viz mode changes. */
-  configure(width: number, height: number, dpr: number, hitY: number, art: StageArt, viz: boolean): void {
-    const key = `${width}x${height}@${dpr}:${hitY}:${art.image ? 1 : 0}:${art.tint ?? ""}:${viz ? 1 : 0}`;
+  /** Re-bakes when the size, the album tint ("#rrggbb") or the viz mode changes. */
+  configure(width: number, height: number, dpr: number, hitY: number, tint: string | null, viz: boolean): void {
+    const key = `${width}x${height}@${dpr}:${hitY}:${tint ?? ""}:${viz ? 1 : 0}`;
     if (key === this.key && this.full) return;
     this.key = key;
     this.width = width;
@@ -129,26 +122,14 @@ export class StageLayer {
     const lctx = this.lanes?.getContext("2d");
     if (!bctx || !lctx) return;
 
-    // Base: stage colour, dimmed cover, album glow at the bottom.
+    // Base: stage colour, album glow at the bottom.
     bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     bctx.fillStyle = STAGE_BG;
     bctx.fillRect(0, 0, width, height);
-    if (art.image && !viz) {
-      bctx.globalAlpha = 0.22;
-      const side = Math.max(width, height);
-      bctx.drawImage(art.image, (width - side) / 2, (height - side) / 2, side, side);
-      bctx.globalAlpha = 1;
-      const veil = bctx.createLinearGradient(0, 0, 0, height);
-      veil.addColorStop(0, rgba(STAGE_BG, 0.55));
-      veil.addColorStop(0.6, rgba(STAGE_BG, 0.7));
-      veil.addColorStop(1, rgba(STAGE_BG, 0.9));
-      bctx.fillStyle = veil;
-      bctx.fillRect(0, 0, width, height);
-    }
-    if (art.tint && /^#[0-9a-f]{6}$/i.test(art.tint) && !viz) {
+    if (tint && /^#[0-9a-f]{6}$/i.test(tint) && !viz) {
       const glow = bctx.createLinearGradient(0, height, 0, height * 0.55);
-      glow.addColorStop(0, rgba(art.tint, 0.14));
-      glow.addColorStop(1, rgba(art.tint, 0));
+      glow.addColorStop(0, rgba(tint, 0.14));
+      glow.addColorStop(1, rgba(tint, 0));
       bctx.fillStyle = glow;
       bctx.fillRect(0, height * 0.55, width, height * 0.45);
     }

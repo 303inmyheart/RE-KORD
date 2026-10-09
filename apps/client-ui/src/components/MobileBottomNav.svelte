@@ -165,10 +165,10 @@
       display: grid;
       align-content: center;
       justify-items: center;
-      gap: 0.2rem;
+      gap: var(--rk-space-3xs);
       min-width: 0;
       min-height: var(--rk-mobile-nav-h);
-      padding: 0.5rem 0.1rem 0.4rem;
+      padding: var(--rk-space-sm) var(--rk-space-3xs) var(--rk-space-xs);
       border: 0;
       background: transparent;
       color: var(--rk-muted);

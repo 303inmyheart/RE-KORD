@@ -4,17 +4,11 @@
   import { DIFFICULTY_IDS } from "../../lib/plectr/config";
   import type { DifficultyBests } from "../../lib/plectr/records";
 
-  let {
-    bests,
-    compact = false,
-  }: {
-    bests: DifficultyBests | null | undefined;
-    compact?: boolean;
-  } = $props();
+  let { bests }: { bests: DifficultyBests | null | undefined } = $props();
 </script>
 
 {#if bests && Object.keys(bests).length}
-<span class="plectr-chips" class:is-compact={compact}>
+<span class="plectr-chips">
   {#each DIFFICULTY_IDS as id (id)}
     {@const best = bests?.[id]}
     <span

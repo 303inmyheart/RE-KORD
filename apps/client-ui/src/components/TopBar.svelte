@@ -71,7 +71,9 @@
 
 </script>
 
-<header class="top rekord-context-header">
+<!-- rk-scroll: same (thin) scrollbar metrics as main.content, so the reserved
+     gutter on desktop matches the page scrollbar exactly. -->
+<header class="top rekord-context-header rk-scroll">
   <div class="row">
     <div class="start">
       <div class="brand-mobile">
@@ -149,6 +151,20 @@
     max-width: var(--rk-content-max);
     margin: 0 auto;
     padding: max(0.5rem, env(safe-area-inset-top)) 0 0.5rem;
+  }
+
+  /* Desktop: aligned with the page content width chosen for this device.
+     `scrollbar-gutter` on .top only reserves the page scrollbar's width when
+     the box clips (overflow other than visible): without it the row sat half
+     a scrollbar to the right of the content. Nothing in the bar pops out. */
+  @media (min-width: 1000px) {
+    .top {
+      overflow: hidden;
+    }
+
+    .row {
+      max-width: var(--rk-user-content-max, var(--rk-content-max));
+    }
   }
 
   .start {

@@ -24,6 +24,8 @@ pub struct PersistedSettings {
     /// "Prevent the computer from sleeping" (`settings.json` → `power`). Kept as
     /// raw JSON and read leniently: a bad value must not void the other keys.
     pub power: Option<serde_json::Value>,
+    /// "Leggi metadati e copertine incorporati" and its priority.
+    pub embedded_metadata: Option<crate::embedded::EmbeddedSettings>,
 }
 
 /// When the hub keeps the computer from going to sleep.
@@ -184,6 +186,9 @@ pub struct AppConfig {
     /// `power.prevent_sleep` comes from `REKORD_PREVENT_SLEEP` / `--prevent-sleep`.
     #[serde(skip)]
     pub power_mode_from_env: bool,
+    /// Embedded tags and covers (persisted).
+    #[serde(default)]
+    pub embedded: crate::embedded::EmbeddedSettings,
 }
 
 fn default_watch_library() -> bool {
@@ -215,6 +220,7 @@ impl AppConfig {
             podcasts: PodcastSettings::default(),
             power: PowerSettings::default(),
             power_mode_from_env: false,
+            embedded: crate::embedded::EmbeddedSettings::default(),
         }
     }
 
@@ -352,6 +358,7 @@ impl AppConfig {
             None => file.allow_remote_admin.unwrap_or(false),
         };
         self.podcasts = file.podcasts.unwrap_or_default().clamped();
+        self.embedded = file.embedded_metadata.unwrap_or_default();
         self.load_power_settings(&file);
 
         Ok(())
@@ -417,6 +424,16 @@ impl AppConfig {
         self.allow_remote_admin = enabled;
         let mut s = self.read_persisted();
         s.allow_remote_admin = Some(enabled);
+        self.write_persisted(&s)
+    }
+
+    pub fn save_embedded_settings(
+        &mut self,
+        settings: crate::embedded::EmbeddedSettings,
+    ) -> Result<()> {
+        self.embedded = settings;
+        let mut s = self.read_persisted();
+        s.embedded_metadata = Some(settings);
         self.write_persisted(&s)
     }
 

@@ -25,7 +25,6 @@ import {
   normalizePlectrSettings,
   normalizePlectrStore,
   resetPlectrStore,
-  touchRecent,
   type PlectrSettings,
   type PlectrStore,
   type RunApplyOptions,
@@ -166,13 +165,6 @@ class PlectrPersistence {
       const settings = normalizePlectrSettings({ ...s.settings, ...patch });
       return { ...s, settings, lowEnd: lowEndOf(settings) };
     });
-  }
-
-  /** Remembers a track started in Plectr (pick screen carousel). */
-  touchRecent(relPath: string) {
-    const current = this.store;
-    const next = touchRecent(current, relPath);
-    if (next !== current) this.write(next);
   }
 
   /**

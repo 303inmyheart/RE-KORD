@@ -103,3 +103,20 @@
 .library-list-tile__tracks-meta > span {
   min-width: 0;
 }
+
+/* Phone / tablet chrome: a 56px cover (the 72px desktop one made every artist,
+   album and genre row taller than two track rows). */
+@media (max-width: 999.98px) {
+  .library-list-tile {
+    min-height: 0;
+    padding: var(--rk-space-sm) var(--rk-space-md);
+  }
+
+  .library-list-tile__media,
+  .library-list-tile__album-wrap,
+  .library-list-tile .library-list-tile__media .rk-cover,
+  .library-list-tile .library-list-tile__album-wrap .rk-cover {
+    width: 3.5rem;
+    height: 3.5rem;
+  }
+}

@@ -1,7 +1,7 @@
 /**
  * Album art for the Plectr page, computed once per album: the dominant
  * colour (device glow, stage tint) and a tiny pre-blurred copy of the cover
- * (page backdrop, stage backdrop). Everything is static — no CSS
+ * (page backdrop on wide screens, share card). Everything is static — no CSS
  * `backdrop-filter`, no per-frame filters (WebKitGTK composites in software).
  */
 import { coverUrlFor, type CoverEntity } from "../api";

@@ -42,12 +42,38 @@
   .album-hero__genre-chip {
     align-items: stretch;
     min-height: var(--rk-tap-row);
+    /* The halves are the targets: no padding around them, or the chip would
+       be 40px of target plus a frame of air. */
+    padding-block: 0;
+    padding-right: 0;
   }
 
-  .album-hero__genre-chip__x,
-  .album-hero__genre-add {
+  .album-hero__genre-chip__x {
     min-width: var(--rk-tap-row);
     min-height: var(--rk-tap-row);
+  }
+
+  /* Dense controls that would cost a row of layout at 44px — mix chips, sort
+     options, "Aggiungi genere", the dialog ×: they keep their compact look and
+     an invisible ::after grows the hit area to --rk-tap-min around them. */
+  .mix-chip,
+  .rk-seg__opt,
+  .album-detail__genre-add,
+  [data-modal-close] {
+    position: relative;
+  }
+
+  .mix-chip::after,
+  .rk-seg__opt::after,
+  .album-detail__genre-add::after,
+  [data-modal-close]::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, var(--rk-tap-min));
+    height: max(100%, var(--rk-tap-min));
+    transform: translate(-50%, -50%);
   }
 
   /* Favourite, edit metadata and exclude from shuffle, in the Listen hero:
@@ -68,5 +94,25 @@
   .tools-dl-dest__up-icon {
     width: var(--rk-tap-row);
     height: var(--rk-tap-row);
+  }
+}
+
+/* Touch screens scroll with the finger and Android / iOS draw their own
+   transient indicator: the classic scrollbar is only a strip of wasted width
+   down the page (and the `scrollbar-gutter` reserved for it). Hidden on every
+   scroll area — page, sheets, lists, horizontal rows — while scrolling itself
+   (touch, momentum, scrollIntoView, restored positions) is untouched. A mouse
+   (`pointer: fine`) keeps its scrollbars at any width. `!important` because
+   scroll areas style their bar with a class (`.rk-scroll`, component styles):
+   this is a platform rule, not one more look to win against. */
+@media (pointer: coarse) {
+  * {
+    scrollbar-width: none !important;
+  }
+
+  *::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
   }
 }

@@ -1,6 +1,6 @@
 /**
  * Plectr timing rules, pure (no DOM): note speed (legacy fixed px/s), latency
- * offset, record eligibility, tap-test calibration and the daily track seed.
+ * offset, record eligibility and tap-test calibration.
  */
 import {
   LATENCY_LIMIT_MS,
@@ -9,7 +9,7 @@ import {
   NOTE_SPEED_MIN,
   RECORD_MIN_JUDGED_RATIO,
 } from "./config";
-import { clamp, stableHash } from "./math";
+import { clamp } from "./math";
 
 /* ── Note speed ────────────────────────────────────────────────────────── */
 
@@ -88,20 +88,4 @@ export function isRecordEligible(r: RunEligibilityInput): boolean {
   if (r.totalNotes <= 0 || r.judged <= 0) return false;
   if (r.fromStart && (r.jumped ?? r.skipped) === 0) return true;
   return r.judged / r.totalNotes >= RECORD_MIN_JUDGED_RATIO;
-}
-
-/* ── Daily track ───────────────────────────────────────────────────────── */
-
-/** Local calendar day, "YYYY-MM-DD". */
-export function dayKey(at: Date = new Date()): string {
-  const y = at.getFullYear();
-  const m = String(at.getMonth() + 1).padStart(2, "0");
-  const d = String(at.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
-/** Same pick for everyone on the same day and library size. */
-export function dailyIndex(key: string, count: number): number {
-  if (count <= 0) return -1;
-  return stableHash(`plectr-daily:${key}`) % count;
 }

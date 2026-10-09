@@ -9,6 +9,8 @@
   "hub.activity.library.layout": "Struttura della libreria impostata: {{layout}}",
   "hub.activity.library.watchOn": "Controllo della cartella libreria attivato",
   "hub.activity.library.watchOff": "Controllo della cartella libreria disattivato",
+  "hub.activity.library.embeddedSettings": "Impostazioni dei metadati incorporati cambiate",
+  "hub.activity.library.embeddedReread": "Rilettura dei metadati incorporati avviata",
   "hub.activity.library.selection": "Selezione della libreria aggiornata",
   "hub.activity.system.remoteAdminOn": "Operazioni di macchina abilitate da remoto",
   "hub.activity.system.remoteAdminOff": "Operazioni di macchina limitate al computer dell'hub",

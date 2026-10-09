@@ -222,4 +222,21 @@
       flex: 1 1 100%;
     }
   }
+
+  @media (max-width: 999.98px) {
+    .search-filter-row {
+      margin-bottom: var(--rk-space-md);
+    }
+
+    /* The row scrolls sideways instead of squeezing the options to "T…",
+       "Arti…": each keeps its full label. */
+    .search-filter-row :global(.rk-seg) {
+      flex: 0 0 auto;
+      max-width: none;
+    }
+
+    .search-block {
+      margin-bottom: var(--rk-space-lg);
+    }
+  }
 </style>

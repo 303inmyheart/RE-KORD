@@ -61,7 +61,7 @@ desktop app runs it on its own thread and runtime, so the window never waits for
 | API and routing | `api.rs`, `studio.rs` | JSON envelope `{ ok, data }` / `{ ok: false, error, message? }`, stable error codes. See [API.md](API.md). |
 | Security | `origin.rs`, `perm.rs` | Browser origin policy, local vs remote requests, library and machine operations. See [SECURITY.md](../SECURITY.md). |
 | Library database | `db/` | SQLite (bundled `rusqlite`), WAL, schema migrations via `PRAGMA user_version`, FTS search, curated vs tag values, normalised genres. |
-| Scanner | `scan.rs`, `layout.rs`, `watcher.rs` | Folder-first incremental scan, layout detection, tag import, exact MP3 durations, filesystem watcher with coalesced rescans. |
+| Scanner | `scan.rs`, `layout.rs`, `watcher.rs`, `embedded/` | Folder-first incremental scan, layout detection, embedded tags and covers for every format (one read per file, Studio values win), the resumable embedded-tags backfill job, exact MP3 durations, filesystem watcher with coalesced rescans. |
 | Media | `media.rs`, `transcode.rs`, `cover.rs`, `thumbs.rs` | Range/ETag streaming, synthetic Xing headers, cached FLAC conversions, live MP3/AAC transcodes for Cast, cover thumbnails. |
 | Accounts and personal data | `accounts.rs`, `user_state.rs`, `selection.rs`, `track_moods.rs` | Profiles, per-account user state with optimistic revisions (HTTP 409 on conflict), library selection, moods. |
 | Studio | `downloads.rs`, `ytdlp*.rs`, `youtube_music.rs`, `catalog_preview.rs`, `studio_fs.rs` | yt-dlp downloads as observable jobs, YouTube Music search, Discover previews, folder operations. |
@@ -82,6 +82,7 @@ desktop app runs it on its own thread and runtime, so the window never waits for
   accounts/<id>/               per-account library selection
   accounts/<id>_info/          per-account user state, theme background
   thumbs/<size>/               cover thumbnails
+  covers/embedded/             covers taken from the files (albums without a folder image)
   cache/transcode/             FLAC copies of WMA / AIFF / ALAC (LRU, 2 GiB)
   cache/podcast-art/           podcast artwork thumbnails (optional module)
   tools/yt-dlp                 yt-dlp installed by "update yt-dlp"

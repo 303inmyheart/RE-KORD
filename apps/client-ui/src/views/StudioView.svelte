@@ -332,6 +332,7 @@
                         <h1
                           class="listen-stage__title"
                           class:listen-stage__title--idle={!session.current}
+                          title={session.current?.title || undefined}
                         >
                           {session.current?.title || t("studio.listen.noTrack")}
                         </h1>
@@ -345,7 +346,11 @@
                         <div class="listen-stage__meta-full">
                           <p class="listen-stage__sub listen-stage__sub--with-stats">
                             <span class="listen-stage__sub-lead">
-                              {session.current.artist_name} · {session.current.album_name}
+                              <span
+                                class="listen-stage__sub-names"
+                                title={`${session.current.artist_name} · ${session.current.album_name}`}
+                                >{session.current.artist_name} · {session.current.album_name}</span
+                              >
                               <span class="track-row__meta-sep" aria-hidden="true"> · </span>
                               <TrackLyricsIcon
                                 kind={lyricsKind(session.current?.lyrics)}

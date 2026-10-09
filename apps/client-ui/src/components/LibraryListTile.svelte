@@ -65,10 +65,10 @@
   <div class="library-list-tile__body">
     <div class="library-list-tile__title-row">
       <UiIcon name={kind === "artist" ? "person" : "album"} class="library-list-tile__kind-ic" />
-      <div class="library-list-tile__title">{title}</div>
+      <div class="library-list-tile__title" {title}>{title}</div>
     </div>
     {#if subtitle}
-      <div class="library-list-tile__meta">{subtitle}</div>
+      <div class="library-list-tile__meta" title={subtitle}>{subtitle}</div>
     {/if}
     {#if metaLine}
       <div class="library-list-tile__tracks-meta">

@@ -1,0 +1,17 @@
+{
+  "themePicker.custom.text": "Textfarbe",
+  "themePicker.customTextHeading": "Text",
+  "themePicker.customTextAuto": "Auto",
+  "themePicker.customTextReset": "Automatisch",
+  "themePicker.customTextSampleMuted": "Nebentext",
+  "themePicker.customTextContrastLow": "Geringer Kontrast ({{ratio}}:1): Der Text ist eventuell schwer lesbar. Für gute Lesbarkeit (WCAG AA) sind mindestens {{min}}:1 nötig.",
+  "appearance.width.content": "Inhaltsbreite",
+  "appearance.width.dock": "Breite der Player-Leiste",
+  "appearance.width.default": "Standard ({{px}} px)",
+  "appearance.width.full": "Volle Breite",
+  "appearance.width.matchContent": "Wie der Inhalt",
+  "appearance.width.custom": "Benutzerdefiniert…",
+  "appearance.width.contentCustomAria": "Maximale Inhaltsbreite in Pixeln",
+  "appearance.width.dockCustomAria": "Maximale Breite der Player-Leiste in Pixeln",
+  "appearance.width.hint": "Nur Desktop, auf diesem Gerät gespeichert. Jenseits der gewählten Breite bleibt der Inhalt zentriert; schmale Fenster und Smartphones behalten das adaptive Layout."
+}

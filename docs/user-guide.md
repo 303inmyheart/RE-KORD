@@ -211,8 +211,8 @@ actions"**.
 - **"Lyrics"**: **"Edit"** to type or paste lyrics, **"Auto LRC"** to fetch synced lyrics
   from LRCLIB. When no synced version exists, plain lyrics are saved instead.
 
-Fields you edit by hand are protected: later rescans and metadata fetches never overwrite
-them.
+Fields you edit by hand are protected: later rescans, metadata fetches and the tags in the
+file never overwrite them (see [Embedded metadata and covers](#the-admin-panel)).
 
 **"Delete from disk"** (in the track editor and the album editor) erases the file or the
 album folder. Its favorites, playlist entries and play counts go with it. There is no undo.
@@ -271,7 +271,8 @@ prefix, and file paths and leading track numbers never match.
 ### The player dock
 
 The bar at the bottom appears once something is queued. It shows the cover, title, artist
-and album (click the artist or album to open it, or the cover to open Studio › Listen).
+and album (click the artist or album to open it, or the cover to open Studio › Listen). Long
+names are cut with "…"; hover them for the full text.
 
 On desktop:
 
@@ -488,7 +489,8 @@ A Discogs token gives better results and higher rate limits (see
 
 Pick the **"Target album"**, then either drop an image (JPG, PNG or WebP, up to 15 MB) or
 **"Search covers"** across iTunes, Deezer, Discogs and MusicBrainz, choose one and **"Save
-cover"**. The cover is written into the album folder.
+cover"**. The cover is written into the album folder and takes the place of a cover read
+from the files.
 
 ## Plectr
 
@@ -499,9 +501,10 @@ generated from the song's audio; the music keeps playing while it is prepared.
 
 **Starting.** Open Plectr while a song plays and the game starts at once on that song, from
 where it is: the music is never paused, rewound or restarted. When the next song starts, a
-new chart follows it. If the song is paused, **"Play"** resumes it and the notes start. With
-nothing in the player, or with **"Change song"**, pick from **"Song of the day"**,
-**"Recently played"**, **"Your records"**, **"Up next"**, search, or **"Random"**.
+new chart follows it. If the song is paused, **"Play"** resumes it and the notes start. The
+song is chosen in the library like everywhere else: with nothing in the player Plectr shows
+**"Start a song from the library to play"**, with **"Open the library"** and **"Shuffle
+play"**. Podcasts and live radio cannot be played.
 
 **Difficulty.** "Easy", "Normal" or "Hard", switched at any time with the buttons on the
 stage or the `1` `2` `3` keys: the new chart starts from the current point of the song.
@@ -511,6 +514,13 @@ on long notes. The default keys are `D` `F` `J` `K` (presets "S D K L" and "Arro
 any key); on touch screens, tap the lanes (several fingers at once work). `Space`, `Esc`, the
 pause button or Back pause the song; resuming is immediate. Pausing from the player bar or
 media keys freezes the notes too.
+
+**On a phone** the game fills the screen, with the player bar kept at the bottom as in 5.0:
+the pads sit just above it, in easy reach, separated by a thin guard strip. A press that
+starts on the lanes never reaches the bar, and a tap on the bar right after a pad press is
+ignored as a stray thumb; a deliberate tap works as usual (pause, next song, the ⋯ menu),
+and the game follows it. To leave, tap **✕** at the top, choose **"Exit"** in the pause
+menu, or press Back twice (the first press pauses).
 
 | Judgement | Window | Points |
 |---|---|---|
@@ -525,16 +535,19 @@ Points are multiplied by the combo multiplier: ×1, plus one step every 12 hits,
 **Results.** Accuracy, max combo, notes hit and the grade: S (95 %+), A (90 %+), B (80 %+),
 C (70 %+), D, or F when a challenge run fails. A new best is saved as a record per song and
 difficulty, on your account, on every device. Runs where too many notes were skipped do
-not count. **"Save result image"** saves a shareable card.
+not count. Then **"Keep playing"** (when the next song already runs), **"Play again"**,
+**"Next song"** or **"Exit"**; **"Save result image"** saves a shareable card.
 
-**"Records"** lists your best runs, sortable by recent, score or title.
+**"Records"** lists your best runs, sortable by recent, score or title; ▶ plays that song and
+returns to the game on it. The current song's records per difficulty sit beside the stage
+(in the ⓘ sheet on tablets).
 
 **"Settings"** (game settings):
 
 - **"Note speed"** (0.8× to 1.6×);
 - **"Latency calibration"** (±150 ms), with a tap-along **timing test**;
 - **"Light stage"** for slower devices: automatic, always or never;
-- **"Stage backdrop"**: none, bars or the cover;
+- **"Stage backdrop"**: the visualizer (default; the light stage turns it off) or none;
 - **"Keys"** and key letters on the pads;
 - **"Vibration"** on misses and combo milestones, where supported;
 - **"Challenge"**: the run ends if accuracy drops below 30 %;
@@ -651,12 +664,22 @@ from the hub computer, or anywhere once remote administration is on. See
 - **"Customize…"** opens the custom theme: four colors (background, sections, accent 1,
   accent 2), and a background color or image (JPEG, PNG, WebP or animated GIF; fit cover,
   contain, fill, repeat or center). **"Extract colors from image"** builds a matching palette
-  from the picture. **"Accent wash on background"** adds a soft gradient.
+  from the picture, text color included. **"Text color"** sets the main text color (the
+  secondary text follows it); **"Automatic"** goes back to the color derived from the
+  sections. Below 4.5:1 contrast on the sections (the WCAG AA level) a warning tells you the
+  text may be hard to read. **"Accent wash on background"** adds a soft gradient.
 - **Glass style**: semi-transparent cards, with an adjustable **"Glass opacity"**. The top
   bar, the player bar, the sidebar and the first card of each page are frosted (blurred);
   the cards further down are only see-through, which keeps scrolling fast.
 - **"Export theme"** saves your look as a `.zip`; **"Upload theme"** applies a theme file
   from anyone, without touching other data.
+- **"Content width"** and **"Player bar width"** (desktop only, saved on this device, not
+  on your account): how wide the page and the player bar may grow on a large screen.
+  Content: **"Default (1360 px)"**, **"Full"**, 1200 / 1440 / 1680 / 1920 px or
+  **"Custom…"** (a 960–2560 px slider, previewed live while you drag). Player bar:
+  **"Default"**, **"Full"**, **"Match content"**, the same presets or a custom width. Past
+  the chosen width the content and the bar stay centered and the header follows the
+  content; phones and narrow windows ignore these settings.
 - **"Player"**: **"Visualizer"** and **"Crossfade"** (off, 3 or 5 seconds).
 - **"Shortcuts"**: the [keyboard shortcuts](#keyboard-shortcuts).
 
@@ -765,8 +788,8 @@ panel"*). From another device the panel is read-only, unless remote administrati
 | Section | What it does |
 |---|---|
 | **Status** | Service state, track/album/artist counts, last scan, active jobs, free space, uptime, folder watching. **"Update library"** starts a scan. |
-| **Library** | **"Music folder"**: set the path, **"Update (changes only)"** or **"Rebuild everything"**. **"Library structure"**: **"Analyse folders"** and choose how folders are organised ("Artist / Album / Track", "Artist / Track", "Single folder", "File tags only"), and whether subfolders such as CD1 / CD2 are separate albums. **"Automatic updates"**: watch the folder and update on its own. **"Maintenance"**: rebuild cover thumbnails, import data from the previous version. A **scan report** lists what was read, indexed, skipped and removed. |
-| **Jobs** | Scans, thumbnails, legacy syncs and restores, with progress and **"Cancel"**. |
+| **Library** | **"Music folder"**: set the path, **"Update (changes only)"** or **"Rebuild everything"**. **"Library structure"**: **"Analyse folders"** and choose how folders are organised ("Artist / Album / Track", "Artist / Track", "Single folder", "File tags only"), and whether subfolders such as CD1 / CD2 are separate albums. **"Automatic updates"**: watch the folder and update on its own. **"Embedded metadata"**: read the tags and covers stored in the files, and their priority (see below). **"Maintenance"**: rebuild cover thumbnails, import data from the previous version, **"Re-read embedded metadata"**. A **scan report** lists what was read, indexed, skipped and removed. |
+| **Jobs** | Scans, thumbnails, embedded metadata reads, legacy syncs and restores, with progress and **"Cancel"**. |
 | **Diagnostics** | Hub version, uptime, database, disk space, library structure, the external programs found (ffmpeg, yt-dlp, cloudflared) and recent errors. |
 | **Activity** | The activity log, by day, for the hub and the accounts. |
 | **Backup** | **"Download backup"**, **"Restore from ZIP file…"**, and **"Restore from the previous version"** (import from a legacy `.kord` folder). |
@@ -780,6 +803,26 @@ refuses to drop a large part of the library at once (for example when a disk is 
 mounted): missing tracks are kept and reported. "Rebuild everything" re-reads every file
 and removes tracks it cannot find, so connect all disks first. Favorites and playlist
 entries of a missing file reconnect when the file comes back.
+
+**Embedded metadata and covers.** **Library › Embedded metadata › "Read embedded
+metadata and covers"** (on by default) fills title, artist, album artist, album, track and
+disc numbers (and totals), date, genres, BPM, lyrics and MusicBrainz ids from the tags in
+the files, on the first scan of a file and again whenever it changes. Covers stored in the
+files are used for albums with no image in their folder; they are kept in the hub's data
+folder, the music folder is never written. **"Priority"**:
+
+- **"Studio > embedded > file name"** (default): what Studio, sidecars, metadata fetches or
+  the previous version stored wins; the tags fill the rest; the file name comes last.
+- **"Embedded > Studio (filling only)"**: the tags also replace values that were filled in
+  automatically (fetches, imports). Values typed by hand still win.
+
+Changing either setting re-reads the library in the background (a *Reading embedded
+metadata* job in **Jobs**). **Maintenance › "Re-read embedded metadata"** does the same on
+request; with the embedded priority, **"Re-read and replace Studio values too"** also
+replaces values typed by hand, after a confirmation. After an upgrade from 5.0 the hub reads
+the tags of the existing library once, the same way, without changing anything you
+curated. Cover precedence: a cover chosen in Studio or an image in the album folder, then
+covers of the previous version, then the embedded picture.
 
 **Machine operations.** **Network › Machine operations** shows whether this session can
 control the hub (Default account, local request). The switch **"Also allow these

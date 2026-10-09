@@ -262,18 +262,20 @@ describe("records", () => {
     assert.equal(st.speed, 1.6);
     assert.equal(st.latencyMs, -150);
     assert.deepEqual(st.keys, ["d", "f", "j", "k"], "duplicate keys fall back to D F J K");
-    assert.equal(st.backdrop, "art");
+    assert.equal(st.backdrop, "bars", "unknown backdrop → the visualizer (light stage still turns it off)");
     const arrows = records.normalizePlectrSettings({ keys: ["ArrowLeft", "ArrowDown", "ArrowUp", "ArrowRight"] });
     assert.deepEqual(arrows.keys, ["arrowleft", "arrowdown", "arrowup", "arrowright"]);
   });
 
-  test("recent list: newest first, unique, capped", () => {
-    let s = records.emptyPlectrStore();
-    for (let i = 0; i < 30; i += 1) s = records.touchRecent(s, `t${i}.mp3`);
-    s = records.touchRecent(s, "t10.mp3");
-    assert.equal(s.recent[0], "t10.mp3");
-    assert.equal(s.recent.length, records.RECENT_LIMIT);
-    assert.equal(new Set(s.recent).size, s.recent.length);
+  test("the 5.0 cover backdrop migrates to the default, the others stay", () => {
+    assert.equal(records.defaultPlectrSettings().backdrop, "bars");
+    const migrated = records.normalizePlectrStore({ settings: { backdrop: "art", speed: 1.2 } });
+    assert.equal(migrated.settings.backdrop, "bars");
+    assert.equal(migrated.settings.speed, 1.2, "the rest of the settings is kept");
+    assert.equal(records.normalizePlectrSettings({ backdrop: "off" }).backdrop, "off");
+    assert.equal(records.normalizePlectrSettings({ backdrop: "bars" }).backdrop, "bars");
+    // The old pick-screen "recent" list is dropped from the stored blob.
+    assert.equal("recent" in records.normalizePlectrStore({ recent: ["a.mp3"] }), false);
   });
 
   test("merging stores never loses a record, reset drops older ones", () => {
@@ -774,11 +776,6 @@ describe("latency", () => {
     assert.equal(timing.estimateLatencyMs([300, -200, 40, 50, 60, 1000, 45, 55]), 50);
     assert.equal(timing.estimateLatencyMs([10, 20, 30]), null);
   });
-  test("daily index is stable and in range", () => {
-    assert.equal(timing.dailyIndex("2026-10-05", 50), timing.dailyIndex("2026-10-05", 50));
-    assert.ok(timing.dailyIndex("2026-10-05", 50) < 50);
-    assert.equal(timing.dailyIndex("x", 0), -1);
-  });
 });
 
 const renderer = await import("./plectr/renderer.ts");
@@ -878,5 +875,31 @@ describe("timing parity with legacy-5.0 (game/config/gameConfig.ts)", () => {
     // Both the frame and a press go through clockNow (smooth clock + calibration).
     assert.match(src, /const songTime = s\.finished \? s\.songTime : clockNow\(now\)/);
     assert.match(src, /s\.songTime = clockNow\(now\);\s*pressLane/);
+  });
+});
+
+describe("Plectr view (5.1: no track picker, reliable exit, player bar on phones)", () => {
+  const view = readFileSync(new URL("../views/PlectrView.svelte", import.meta.url), "utf8");
+  const stage = readFileSync(new URL("../components/plectr/GameStage.svelte", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../styles/plectr.css", import.meta.url), "utf8");
+
+  test("no pick screen: nothing in the player shows the library empty state", () => {
+    assert.ok(!/PickScreen|changeSong|plectr\.changeTrack/.test(view));
+    assert.match(view, /t\("plectr\.empty\.openLibrary"\)/);
+    assert.match(view, /session\.navigate\("library"\)/);
+    assert.match(view, /session\.shuffleLibrary\(\)/);
+  });
+
+  test("exit drops the run's Back layer before stepping history back", () => {
+    assert.match(stage, /export function dropBackLayer\(\): boolean/);
+    assert.match(view, /if \(stageRef\?\.dropBackLayer\(\)\) await nextPop\(/);
+    assert.ok(!/let exited = /.test(view), "no one-shot exit flag that ignores later taps");
+  });
+
+  test("phone run: chrome inert except the player bar, which stays under the stage", () => {
+    assert.match(view, /querySelectorAll<HTMLElement>\("header\.top, nav\.bottom, aside\.rail"\)/);
+    assert.ok(!/footer\.player-dock, aside/.test(view), "the player bar is never made inert");
+    assert.match(css, /\.plectr-page\.is-immersive \{[^}]*inset: 0 0 var\(--rk-dock-h, 0px\) 0;/);
+    assert.ok(!/html\[data-plectr-immersive\] footer\.player-dock,/.test(css), "the bar is not hidden");
   });
 });

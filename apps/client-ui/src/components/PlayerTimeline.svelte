@@ -244,6 +244,35 @@
   /* Phone: thinner bar and bigger knob, because it is the only way to
      seek to a point in the track. */
   @media (max-width: 999.98px) {
+    /* One line, "0:42 ━━━●──── 3:27": the times beside the bar instead of a
+       row of their own under it, so the compact dock is one line shorter. */
+    .timeline {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      /* Clears the knob, which overhangs the rail by half its width at 0:00. */
+      column-gap: var(--rk-space-lg);
+    }
+
+    .progress2 {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    .times {
+      display: contents;
+    }
+
+    .times > :first-child {
+      grid-column: 1;
+      grid-row: 1;
+    }
+
+    .times > :last-child {
+      grid-column: 3;
+      grid-row: 1;
+    }
+
     .slot {
       height: 12px;
     }

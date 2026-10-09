@@ -596,6 +596,15 @@
   align-self: center;
 }
 
+/* Phone / tablet chrome: rows sit inside a card that already has its padding,
+   so they keep only a slim inner one (the safe-area inset is the page's job).
+   The art stays 44px: it is the row's play target. */
+@media (max-width: 999.98px) {
+  .track-row {
+    padding: var(--rk-space-xs) var(--rk-space-sm);
+  }
+}
+
 /* Compact (list < 651px): art 44px, hide meta, lyrics in stats */
 @container track-list (max-width: 650.98px) {
   .track-row {

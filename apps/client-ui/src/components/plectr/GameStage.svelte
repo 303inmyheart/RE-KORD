@@ -100,7 +100,7 @@
   import { COMBO_LABEL_FROM, feedbackView } from "../../lib/plectr/feedback";
   import { createPlayerBridge, type PlectrPlayerBridge } from "../../lib/plectr/playerBridge";
   import type { StageBackdrop } from "../../lib/plectr/records";
-  import { NoteSprites, StageLayer, drawLanes, drawNotes, hitLineY, type DrawContext, type StageArt } from "../../lib/plectr/renderer";
+  import { NoteSprites, StageLayer, drawLanes, drawNotes, hitLineY, type DrawContext } from "../../lib/plectr/renderer";
   import { resetSongClock, resolveSmoothSongTime } from "../../lib/plectr/smoothSongClock";
   import { FpsWatch } from "../../lib/plectr/stageQuality";
   import { gameTimeFromAudio } from "../../lib/plectr/timing";
@@ -122,8 +122,9 @@
     vibration = true,
     challenge = false,
     light = false,
-    backdrop = "art",
-    art = { image: null, tint: null },
+    backdrop = "bars",
+    /** Album colour "#rrggbb" for a faint glow at the bottom (no visualizer). */
+    tint = null,
     vizMode = "bars",
     difficulty,
     playable = [],
@@ -156,7 +157,7 @@
     challenge?: boolean;
     light?: boolean;
     backdrop?: StageBackdrop;
-    art?: StageArt;
+    tint?: string | null;
     vizMode?: VizMode;
     difficulty: DifficultyId;
     playable?: DifficultyId[];
@@ -565,7 +566,7 @@
     const viz = useViz();
     const playing = isAudioPlaying();
     analyserLease.set(viz && playing);
-    layer.configure(width, height, dpr, hitY, light || backdrop !== "art" ? { image: null, tint: art.tint } : art, viz);
+    layer.configure(width, height, dpr, hitY, tint, viz);
     if (viz) {
       const f = backdropViz.frame(
         width,
@@ -902,7 +903,7 @@
     void light;
     void noteSpeed;
     void backdrop;
-    void art;
+    void tint;
     void vizMode;
     untrack(() => {
       measure();
@@ -916,12 +917,38 @@
     else untrack(() => (resyncPending = true));
   });
 
-  /* Android Back / browser Back while notes fall: pause first (legacy trapped it). */
+  /*
+   * Android Back / browser Back while notes fall: the first Back pauses, the
+   * next one leaves Plectr (legacy trapped it).
+   */
+  let releaseBack: (() => void) | null = null;
   $effect(() => {
     if (phase !== "live") return;
-    const release = pushBackLayer(() => pause());
-    return release;
+    const release = pushBackLayer(() => {
+      releaseBack = null;
+      pause();
+    });
+    releaseBack = release;
+    return () => {
+      if (releaseBack === release) releaseBack = null;
+      release();
+    };
   });
+
+  /**
+   * Drops the run's Back layer before the view navigates away: a
+   * `history.back()` would otherwise only pop that layer and pause the game
+   * (the old mobile "can't close Plectr" trap). True when this stepped
+   * history back (the caller waits for that pop before its own).
+   */
+  export function dropBackLayer(): boolean {
+    const release = releaseBack;
+    if (!release) return false;
+    releaseBack = null;
+    const onTop = typeof (history.state as Record<string, unknown> | null)?.rkLayer === "number";
+    release();
+    return onTop;
+  }
 
   onMount(() => {
     mounted = true;

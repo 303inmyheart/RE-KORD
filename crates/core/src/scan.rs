@@ -1,11 +1,9 @@
 use crate::cover::find_cover_in_dir;
 use crate::db::{Db, TrackRow};
+use crate::embedded::tags::{EmbeddedPicture, EmbeddedTags, ReadRequest};
+use crate::embedded::EmbeddedOptions;
 use crate::layout::{self, is_audio_name, is_excluded_dir, LibraryLayout, LOOSE_ALBUM_FOLDER};
 use anyhow::{bail, Context, Result};
-use lofty::file::AudioFile;
-use lofty::prelude::*;
-use lofty::probe::Probe;
-use lofty::tag::ItemKey;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -77,10 +75,12 @@ impl ScanTrigger {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ScanOptions {
     pub mode: ScanMode,
     pub trigger: ScanTrigger,
+    /// Embedded tags and covers (default: tags on, no cover store).
+    pub embedded: EmbeddedOptions,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -122,6 +122,7 @@ pub fn scan_library_with(db: &Db, music_root: &Path, mode: ScanMode) -> Result<S
         ScanOptions {
             mode,
             trigger: ScanTrigger::Manual,
+            ..Default::default()
         },
     )
 }
@@ -157,6 +158,7 @@ pub fn scan_library_opts(db: &Db, music_root: &Path, opts: ScanOptions) -> Resul
             &known_files,
             force_reread,
             &legacy_art,
+            &opts.embedded,
             &mut seen,
             &mut stats,
         ) {
@@ -204,6 +206,9 @@ pub fn scan_library_opts(db: &Db, music_root: &Path, opts: ScanOptions) -> Resul
     db.rebuild_fts()?;
     db.refresh_counts()?;
     db.rebuild_genres()?;
+    if let Some(store) = opts.embedded.cover_store.as_deref() {
+        prune_embedded_covers(db, store);
+    }
 
     let now = chrono::Utc::now().to_rfc3339();
     db.set_meta("last_scan_at", &now)?;
@@ -250,7 +255,12 @@ pub fn scan_library_opts(db: &Db, music_root: &Path, opts: ScanOptions) -> Resul
 /// Re-index one folder of the library (`artist` or `artist/album[/…]`), e.g.
 /// right after a download into it. Only tracks under that folder can be
 /// pruned; the rest of the catalog is untouched.
-pub fn scan_subtree(db: &Db, music_root: &Path, rel_dir: &str) -> Result<ScanReport> {
+pub fn scan_subtree(
+    db: &Db,
+    music_root: &Path,
+    rel_dir: &str,
+    embedded: &EmbeddedOptions,
+) -> Result<ScanReport> {
     let rel_dir = rel_dir.replace('\\', "/");
     let rel_dir = rel_dir.trim_matches('/');
     let parts: Vec<&str> = rel_dir.split('/').filter(|p| !p.is_empty()).collect();
@@ -288,6 +298,7 @@ pub fn scan_subtree(db: &Db, music_root: &Path, rel_dir: &str) -> Result<ScanRep
             &known_files,
             false,
             &legacy_art,
+            embedded,
             &mut seen,
             &mut stats,
         ) {
@@ -349,6 +360,21 @@ pub fn scan_subtree(db: &Db, music_root: &Path, rel_dir: &str) -> Result<ScanRep
         unreadable_dirs: collected.unreadable,
         index_epoch,
     })
+}
+
+/// Drop stored embedded covers no album uses any more (albums removed, or
+/// now covered by a folder image).
+pub fn prune_embedded_covers(db: &Db, store: &Path) {
+    match db.all_album_cover_paths() {
+        Ok(paths) => {
+            let referenced: HashSet<PathBuf> = paths.into_iter().collect();
+            let removed = crate::embedded::cover::prune(store, &referenced);
+            if removed > 0 {
+                info!(removed, "unused embedded covers removed");
+            }
+        }
+        Err(err) => warn!(error = %err, "could not list album covers"),
+    }
 }
 
 /// Covers registered by the legacy server (`.kord/artwork`), by album folder:
@@ -543,7 +569,8 @@ fn collect_groups(root: &Path, layout: &LibraryLayout) -> Result<Collected> {
                 continue;
             };
             let artist = if layout.uses_tags() {
-                read_tag_artist(&file).unwrap_or_else(|| layout.virtual_artist.clone())
+                crate::embedded::tags::read_artist(&file)
+                    .unwrap_or_else(|| layout.virtual_artist.clone())
             } else {
                 layout.virtual_artist.clone()
             };
@@ -725,31 +752,85 @@ enum FileWork {
     /// size+mtime unchanged: only re-point at the current album/artist rows.
     Relink,
     Index {
-        meta: AudioMeta,
+        meta: Box<AudioMeta>,
         size: u64,
         mtime: i64,
     },
 }
 
+/// At most this many tracks of an album are opened to look for a picture.
+const COVER_ATTEMPTS: usize = 3;
+
+/// The best embedded picture seen so far in an album.
+#[derive(Default)]
+struct PictureHunt {
+    best: Option<(String, EmbeddedPicture)>,
+    attempts: usize,
+    tried: HashSet<String>,
+}
+
+impl PictureHunt {
+    fn wants_more(&self) -> bool {
+        self.attempts < COVER_ATTEMPTS && !self.best.as_ref().is_some_and(|(_, p)| p.front)
+    }
+
+    fn offer(&mut self, rel: &str, picture: Option<EmbeddedPicture>) {
+        self.attempts += 1;
+        self.tried.insert(rel.to_string());
+        if let Some(p) = picture {
+            let better = match &self.best {
+                None => true,
+                Some((_, cur)) => p.front && !cur.front,
+            };
+            if better {
+                self.best = Some((rel.to_string(), p));
+            }
+        }
+    }
+}
+
+/// The cover an album row gets, and what to record about it.
+struct CoverChoice {
+    path: Option<PathBuf>,
+    source: Option<&'static str>,
+    /// `embedded_cover_from` to store (`None`: leave it).
+    embedded_from: Option<Option<String>>,
+}
+
 /// Index one album: all filesystem I/O (stat, tags, cover lookup) happens
 /// first, then every row is written in a single transaction.
+#[allow(clippy::too_many_arguments)]
 fn index_group(
     db: &Db,
     group: &AlbumGroup,
     known_files: &HashMap<String, (i64, i64)>,
     force_reread: bool,
     legacy_art: &HashMap<String, PathBuf>,
+    embedded: &EmbeddedOptions,
     seen: &mut HashSet<String>,
     stats: &mut Stats,
 ) -> Result<()> {
-    let cover = group
-        .cover_dir
-        .as_deref()
-        .and_then(find_cover_in_dir)
-        .or_else(|| legacy_art.get(&group.folder_key).cloned());
+    let folder_cover = group.cover_dir.as_deref().and_then(find_cover_in_dir);
+    let legacy_cover = if folder_cover.is_none() {
+        legacy_art.get(&group.folder_key).cloned()
+    } else {
+        None
+    };
+    // Embedded pictures stand in only when the folder has no image. Loose
+    // tracks ("Tracks") come from different releases: no embedded cover.
+    let cover_store = embedded
+        .covers()
+        .filter(|_| folder_cover.is_none() && legacy_cover.is_none() && !group.loose);
+    let prev_from: Option<String> = match cover_store {
+        Some(_) => db.album_embedded_cover_from(&group.folder_key)?,
+        None => None,
+    };
+    let mut hunt = PictureHunt::default();
+    let read_tags = embedded.enabled;
 
     let mut work: Vec<(&Path, &str, FileWork)> = Vec::with_capacity(group.files.len());
     let mut changed_files = 0usize;
+    let mut read_files = 0usize;
     for (path, rel) in &group.files {
         stats.scanned += 1;
         seen.insert(rel.clone());
@@ -781,21 +862,39 @@ fn index_group(
             Some((_, -1)) => {}
             _ => changed_files += 1,
         }
+        read_files += 1;
         let file_stem = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("Unknown")
             .to_string();
+        // The picture comes with the same read, for the first few files of
+        // an album that needs one.
+        let want_picture = cover_store.is_some() && hunt.wants_more();
+        let mut meta = read_audio_meta(path, &file_stem, &group.artist, read_tags, want_picture);
+        if want_picture {
+            hunt.offer(rel, meta.picture.take());
+        }
         work.push((
             path,
             rel,
             FileWork::Index {
-                meta: read_audio_meta(path, &file_stem, &group.artist),
+                meta: Box::new(meta),
                 size: size as u64,
                 mtime,
             },
         ));
     }
+
+    let cover = choose_cover(
+        group,
+        folder_cover,
+        legacy_cover,
+        cover_store,
+        prev_from,
+        read_files > 0,
+        &mut hunt,
+    );
 
     // Loose tracks share a synthetic album: its name is the folder constant.
     let folder_title = if group.loose {
@@ -803,6 +902,7 @@ fn index_group(
     } else {
         crate::db::text::album_display_title(&group.album)
     };
+    let policy = embedded.merge_policy();
     let (indexed, unchanged) = db.write_batch(|batch| {
         let artist_id = batch.upsert_artist(&group.artist)?;
         let album_id = batch.upsert_album(
@@ -810,8 +910,13 @@ fn index_group(
             &group.artist,
             Some(artist_id),
             &group.folder_key,
-            cover.as_deref(),
+            cover.path.as_deref(),
             group.loose,
+        )?;
+        batch.set_album_cover_info(
+            album_id,
+            cover.source,
+            cover.embedded_from.as_ref().map(|f| f.as_deref()),
         )?;
         let album_name = batch.album_name(album_id)?;
         let mut indexed = 0u64;
@@ -825,25 +930,19 @@ fn index_group(
                     unchanged += 1;
                 }
                 FileWork::Index { meta, size, mtime } => {
-                    batch.upsert_track(&TrackRow {
+                    batch.upsert_track(&meta.track_row(RowPlace {
                         rel_path: rel,
                         file_path: path,
-                        title: &meta.title,
                         artist_name: &group.artist,
                         album_name: &album_name,
-                        duration_ms: meta.duration_ms,
-                        track_number: meta.track_number,
                         album_id: Some(album_id),
                         artist_id: Some(artist_id),
                         size: *size,
                         mtime: *mtime,
-                        genre: meta.genre.as_deref(),
-                        release_date: meta.release_date.as_deref(),
-                        lyrics: meta.lyrics.as_deref(),
-                        bpm: meta.bpm,
-                        disc_number: meta.disc_number,
-                        tag_album: meta.album.as_deref(),
-                    })?;
+                        duration_ms: meta.duration_ms,
+                        policy,
+                        write_file_state: true,
+                    }))?;
                     batch.set_mp3_seek_header(
                         rel,
                         *size,
@@ -858,7 +957,7 @@ fn index_group(
         }
         batch.sync_album_display(album_id, &folder_title, !group.loose)?;
         if indexed > 0 {
-            batch.backfill_album_meta_from_tracks(album_id)?;
+            batch.backfill_album_meta_from_tracks(album_id, policy.prefer_embedded)?;
         }
         if changed_files > 0 {
             batch.touch_album(album_id)?;
@@ -870,108 +969,256 @@ fn index_group(
     Ok(())
 }
 
-struct AudioMeta {
-    title: String,
-    track_number: Option<i64>,
-    disc_number: Option<i64>,
-    duration_ms: i64,
-    genre: Option<String>,
-    release_date: Option<String>,
-    lyrics: Option<String>,
-    bpm: Option<f64>,
-    album: Option<String>,
+/// Folder image > legacy artwork > embedded picture. The embedded one is
+/// looked for when the album was never checked, when files were (re)read
+/// in this pass, or when its stored copy is gone; otherwise the stored copy
+/// (or the absence of a picture) is reused without opening anything.
+fn choose_cover(
+    group: &AlbumGroup,
+    folder_cover: Option<PathBuf>,
+    legacy_cover: Option<PathBuf>,
+    cover_store: Option<&Path>,
+    prev_from: Option<String>,
+    files_read: bool,
+    hunt: &mut PictureHunt,
+) -> CoverChoice {
+    if let Some(p) = folder_cover {
+        return CoverChoice {
+            path: Some(p),
+            source: Some("folder"),
+            embedded_from: None,
+        };
+    }
+    if let Some(p) = legacy_cover {
+        return CoverChoice {
+            path: Some(p),
+            source: Some("legacy"),
+            embedded_from: None,
+        };
+    }
+    let none = CoverChoice {
+        path: None,
+        source: None,
+        embedded_from: None,
+    };
+    let Some(store) = cover_store else {
+        return none;
+    };
+    let stored = crate::embedded::cover::stored_path(store, &group.folder_key);
+    let had_picture = prev_from.as_deref().is_some_and(|f| !f.is_empty());
+    let must_check = prev_from.is_none() || files_read || (had_picture && !stored.is_file());
+    if !must_check {
+        return if had_picture {
+            CoverChoice {
+                path: Some(stored),
+                source: Some("embedded"),
+                embedded_from: None,
+            }
+        } else {
+            none
+        };
+    }
+    // Files that were not re-read in this pass are opened for their picture
+    // only, a few at most.
+    for (path, rel) in &group.files {
+        if !hunt.wants_more() {
+            break;
+        }
+        if hunt.tried.contains(rel) {
+            continue;
+        }
+        hunt.offer(rel, crate::embedded::tags::read_picture(path));
+    }
+    let Some((rel, picture)) = hunt.best.take() else {
+        return CoverChoice {
+            embedded_from: Some(Some(String::new())),
+            ..none
+        };
+    };
+    match crate::embedded::cover::save(store, &group.folder_key, &picture.data) {
+        Ok(path) => CoverChoice {
+            path: Some(path),
+            source: Some("embedded"),
+            embedded_from: Some(Some(rel)),
+        },
+        Err(err) => {
+            // Logged once: the album is marked checked until its files change.
+            warn!(album = %group.folder_key, track = %rel, error = %err, "embedded cover skipped");
+            CoverChoice {
+                embedded_from: Some(Some(String::new())),
+                ..none
+            }
+        }
+    }
+}
+
+/// Where a read of a file goes in the catalog (see [`AudioMeta::track_row`]).
+pub(crate) struct RowPlace<'a> {
+    pub rel_path: &'a str,
+    pub file_path: &'a Path,
+    pub artist_name: &'a str,
+    pub album_name: &'a str,
+    pub album_id: Option<i64>,
+    pub artist_id: Option<i64>,
+    pub size: u64,
+    pub mtime: i64,
+    pub duration_ms: i64,
+    pub policy: crate::embedded::MergePolicy,
+    pub write_file_state: bool,
+}
+
+/// One read of a file, resolved for the catalog: tag values with the file
+/// name as fallback, and which values came from the tags.
+pub(crate) struct AudioMeta {
+    pub title: String,
+    pub track_number: Option<i64>,
+    pub disc_number: Option<i64>,
+    pub duration_ms: i64,
+    pub tags: EmbeddedTags,
+    /// `db::field` bits of the values that came from the tags.
+    pub embedded_mask: i64,
+    pub picture: Option<EmbeddedPicture>,
     /// Boxed: rare, and it would bloat every queued file.
     mp3_seek_header: Option<Box<Mp3SeekHeader>>,
 }
 
-/// `"128"`, `"127.5"`, `"127,5"`, `"120 BPM"` → tempo; nonsense → None.
-pub fn parse_bpm(raw: &str) -> Option<f64> {
-    let t = raw.trim().replace(',', ".");
-    let num: String = t
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    let v: f64 = num.parse().ok()?;
-    (v.is_finite() && v > 0.0 && v < 1000.0).then(|| (v * 100.0).round() / 100.0)
-}
-
-/// Tempo from ID3 `TBPM` / MP4 `tmpo` (integer BPM), Vorbis/APE `BPM`, or a
-/// free-form `TEMPO` field.
-fn read_bpm(tag: &lofty::tag::Tag) -> Option<f64> {
-    [
-        ItemKey::Bpm,
-        ItemKey::IntegerBpm,
-        ItemKey::Unknown("TEMPO".into()),
-        ItemKey::Unknown("tempo".into()),
-    ]
-    .iter()
-    .find_map(|k| tag.get_string(k).and_then(parse_bpm))
-}
-
-fn read_tag_artist(path: &Path) -> Option<String> {
-    let tagged = Probe::open(path).ok()?.read().ok()?;
-    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
-    tag.artist()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-/// Most precise release date in the tags: recording / release dates are full
-/// dates more often than the year field (yt-dlp writes `YYYYMMDD` there).
-fn read_tag_date(tag: &lofty::tag::Tag) -> Option<String> {
-    let mut best: Option<String> = None;
-    let candidates = [
-        ItemKey::RecordingDate,
-        ItemKey::ReleaseDate,
-        ItemKey::OriginalReleaseDate,
-        ItemKey::Year,
-    ];
-    for key in &candidates {
-        let Some(date) = tag
-            .get_string(key)
-            .and_then(crate::db::text::normalize_date)
-        else {
-            continue;
-        };
-        let better = best.as_deref().is_none_or(|b| {
-            crate::db::text::date_precision(&date) > crate::db::text::date_precision(b)
-        });
-        if better {
-            best = Some(date);
+impl AudioMeta {
+    pub(crate) fn track_row<'a>(&'a self, at: RowPlace<'a>) -> TrackRow<'a> {
+        let t = &self.tags;
+        TrackRow {
+            rel_path: at.rel_path,
+            file_path: at.file_path,
+            title: &self.title,
+            artist_name: at.artist_name,
+            album_name: at.album_name,
+            duration_ms: at.duration_ms,
+            track_number: self.track_number,
+            album_id: at.album_id,
+            artist_id: at.artist_id,
+            size: at.size,
+            mtime: at.mtime,
+            genre: t.genre.as_deref(),
+            release_date: t.date.as_deref(),
+            lyrics: t.lyrics.as_deref(),
+            bpm: t.bpm,
+            disc_number: self.disc_number,
+            tag_album: t.album.as_deref(),
+            tag_artist: t.artist.as_deref(),
+            tag_album_artist: t.album_artist.as_deref(),
+            track_total: t.track_total,
+            disc_total: t.disc_total,
+            mb_recording_id: t.mb_recording_id.as_deref(),
+            mb_release_id: t.mb_release_id.as_deref(),
+            mb_artist_id: t.mb_artist_id.as_deref(),
+            mb_release_group_id: t.mb_release_group_id.as_deref(),
+            embedded_mask: self.embedded_mask,
+            tags_version: Some(crate::embedded::TAGS_VERSION),
+            policy: at.policy,
+            write_file_state: at.write_file_state,
         }
     }
-    best.or_else(|| {
-        tag.year()
-            .filter(|y| *y > 0)
-            .and_then(|y| crate::db::text::normalize_date(&y.to_string()))
-    })
 }
 
-/// Duration from `ffmpeg -i` ("Duration: HH:MM:SS.cc"), for files lofty can't
-/// time. Runs only on those files, on the scan's blocking thread.
-fn ffmpeg_duration_ms(path: &Path) -> Option<i64> {
-    let ffmpeg = crate::tools::resolve_blocking(
-        crate::tools::Tool::Ffmpeg,
-        &crate::tools::ToolContext::default(),
+/// Which fields of `tags` hold a value (`db::field` bits); the title only
+/// when it is the display title (not a copy of the file name).
+fn embedded_mask(tags: &EmbeddedTags, title_from_tag: bool) -> i64 {
+    use crate::db::field;
+    [
+        (title_from_tag, field::TITLE),
+        (tags.date.is_some(), field::RELEASE_DATE),
+        (tags.genre.is_some(), field::GENRE),
+        (tags.track_number.is_some(), field::TRACK_NUMBER),
+        (tags.disc_number.is_some(), field::DISC_NUMBER),
+        (tags.lyrics.is_some(), field::LYRICS),
+        (tags.bpm.is_some(), field::BPM),
+        (tags.album.is_some(), field::ALBUM),
+        (tags.artist.is_some(), field::ARTIST),
+        (tags.album_artist.is_some(), field::ALBUM_ARTIST),
+        (tags.track_total.is_some(), field::TRACK_TOTAL),
+        (tags.disc_total.is_some(), field::DISC_TOTAL),
+        (
+            tags.mb_recording_id.is_some()
+                || tags.mb_release_id.is_some()
+                || tags.mb_artist_id.is_some()
+                || tags.mb_release_group_id.is_some(),
+            field::MUSICBRAINZ,
+        ),
+    ]
+    .iter()
+    .filter(|(has, _)| *has)
+    .fold(0, |mask, (_, bit)| mask | bit)
+}
+
+/// Display values of a file from its tags (`tags` empty when embedded
+/// metadata is off): a missing title (or one that only repeats the file
+/// name) is cleaned up from the file name, numbers fall back to it too.
+pub(crate) fn resolve_meta(
+    tags: EmbeddedTags,
+    file_stem: &str,
+    artist_folder: &str,
+    duration_ms: i64,
+) -> AudioMeta {
+    let (guess_disc, guess_track) = crate::db::text::guess_track_numbers(file_stem);
+    let title = crate::db::text::track_display_title(
+        tags.title.as_deref(),
+        file_stem,
+        tags.artist.as_deref().unwrap_or(artist_folder),
     );
-    if !ffmpeg.available {
-        return None;
+    let title_from_tag = tags.title.as_deref().is_some_and(|t| t.trim() == title);
+    AudioMeta {
+        track_number: tags.track_number.or(guess_track),
+        disc_number: tags.disc_number.or(guess_disc),
+        embedded_mask: embedded_mask(&tags, title_from_tag),
+        title,
+        duration_ms,
+        tags,
+        picture: None,
+        mp3_seek_header: None,
     }
-    let out = std::process::Command::new(&ffmpeg.path)
-        .args(["-hide_banner", "-nostdin", "-i"])
-        .arg(path)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stderr);
-    let raw = text.split("Duration: ").nth(1)?.split(',').next()?.trim();
-    let mut parts = raw.split(':');
-    let h: f64 = parts.next()?.parse().ok()?;
-    let m: f64 = parts.next()?.parse().ok()?;
-    let sec: f64 = parts.next()?.parse().ok()?;
-    let ms = ((h * 3600.0 + m * 60.0 + sec) * 1000.0).round() as i64;
-    (ms > 0).then_some(ms)
+}
+
+/// Tags (when `read_tags`), the picture (when asked) and the exact duration
+/// of one file, from a single read of its headers.
+fn read_audio_meta(
+    path: &Path,
+    file_stem: &str,
+    artist_folder: &str,
+    read_tags: bool,
+    want_picture: bool,
+) -> AudioMeta {
+    let read = crate::embedded::tags::read_file(
+        path,
+        ReadRequest {
+            tags: read_tags,
+            picture: want_picture,
+            properties: true,
+        },
+    );
+    let mut duration_ms = read.duration_ms;
+    let mut mp3_seek_header = None;
+    // lofty only estimates VBR files without a Xing/VBRI header; a file it
+    // cannot parse at all is walked frame by frame.
+    let counted = if read.is_mpeg {
+        mp3_count(path)
+    } else if !read.parsed && is_mp3(path) {
+        mp3_frames::count(path, true)
+    } else {
+        None
+    };
+    if let Some(counted) = counted {
+        duration_ms = counted.duration_ms;
+        mp3_seek_header = counted.seek_header.map(Box::new);
+    }
+    if duration_ms <= 0 && read.parsed {
+        // lofty can't time some containers: ask ffmpeg.
+        duration_ms = crate::embedded::tags::ffmpeg::probe(path)
+            .map(|p| p.duration_ms)
+            .unwrap_or(0);
+    }
+    let mut meta = resolve_meta(read.tags, file_stem, artist_folder, duration_ms);
+    meta.picture = read.picture;
+    meta.mp3_seek_header = mp3_seek_header;
+    meta
 }
 
 fn is_mp3(path: &Path) -> bool {
@@ -980,91 +1227,7 @@ fn is_mp3(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("mp3"))
 }
 
-/// Tags of one file, with the display title and track numbers resolved:
-/// a missing title (or one that only repeats the file name) is cleaned up
-/// from the file name, and numbers fall back to the file name too.
-fn read_audio_meta(path: &Path, file_stem: &str, artist_folder: &str) -> AudioMeta {
-    let (guess_disc, guess_track) = crate::db::text::guess_track_numbers(file_stem);
-    let Ok(tagged) = Probe::open(path).and_then(|p| p.read()) else {
-        let counted = is_mp3(path)
-            .then(|| mp3_frames::count(path, true))
-            .flatten();
-        return AudioMeta {
-            title: crate::db::text::track_display_title(None, file_stem, artist_folder),
-            track_number: guess_track,
-            disc_number: guess_disc,
-            duration_ms: counted
-                .as_ref()
-                .map(|c| c.duration_ms)
-                .or_else(|| ffmpeg_duration_ms(path))
-                .unwrap_or(0),
-            genre: None,
-            release_date: None,
-            lyrics: None,
-            bpm: None,
-            album: None,
-            mp3_seek_header: counted.and_then(|c| c.seek_header).map(Box::new),
-        };
-    };
-    let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
-    let mut duration_ms = tagged.properties().duration().as_millis() as i64;
-    let mut mp3_seek_header = None;
-    if tagged.file_type() == lofty::file::FileType::Mpeg {
-        // lofty only estimates VBR files without a Xing/VBRI header.
-        if let Some(counted) = mp3_count(path) {
-            duration_ms = counted.duration_ms;
-            mp3_seek_header = counted.seek_header.map(Box::new);
-        }
-    }
-    if duration_ms <= 0 {
-        // lofty can't time some containers (WMA/ASF, WebM): ask ffmpeg.
-        duration_ms = ffmpeg_duration_ms(path).unwrap_or(0);
-    }
-    let tag_artist = tag
-        .and_then(|t| t.artist().map(|s| s.trim().to_string()))
-        .filter(|s| !s.is_empty());
-    let title = crate::db::text::track_display_title(
-        tag.and_then(|t| t.title().map(|s| s.to_string()))
-            .as_deref(),
-        file_stem,
-        tag_artist.as_deref().unwrap_or(artist_folder),
-    );
-    let track_number = tag
-        .and_then(|t| t.track())
-        .filter(|n| *n > 0)
-        .map(|n| n as i64)
-        .or(guess_track);
-    let disc_number = tag
-        .and_then(|t| t.disk())
-        .filter(|n| *n > 0)
-        .map(|n| n as i64)
-        .or(guess_disc);
-    let genre = tag
-        .and_then(|t| t.genre().map(|s| s.to_string()))
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let release_date = tag.and_then(read_tag_date);
-    let lyrics = tag
-        .and_then(|t| t.get_string(&ItemKey::Lyrics).map(|s| s.to_string()))
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let bpm = tag.and_then(read_bpm);
-    let album = tag
-        .and_then(|t| t.album().map(|s| s.trim().to_string()))
-        .filter(|s| !s.is_empty());
-    AudioMeta {
-        title,
-        track_number,
-        disc_number,
-        duration_ms,
-        genre,
-        release_date,
-        lyrics,
-        bpm,
-        album,
-        mp3_seek_header,
-    }
-}
+pub use crate::embedded::tags::parse_bpm;
 
 /// Frame count of an MP3 whose duration lofty (and `ffmpeg -i`) can only
 /// *estimate*, see [`mp3_count`].

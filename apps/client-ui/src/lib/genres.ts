@@ -252,3 +252,63 @@ export function genresMatchQuery(src: GenreSource | null | undefined, query: str
   if (!q) return false;
   return rawTokens(src).some((g) => normalizeGenreKey(g).includes(q));
 }
+
+/**
+ * Identity of a genre *as shown*: the key of its canonical label. Aliases the
+ * hub keeps apart ("Rhythm & Blues" and "R&B", "Drum & Bass" and "Drum and
+ * Bass") have different `normalizeGenreKey`s but one label, so a picker or a
+ * chip row keyed on them would list the same name twice (and a keyed
+ * `{#each}` on the label throws `each_key_duplicate`).
+ */
+export function genreLabelKey(raw: string | null | undefined): string {
+  return normalizeGenreKey(canonicalGenreLabel(raw));
+}
+
+/** Whether the field holds `genre` or one of its aliases (same label). */
+export function fieldHasGenreLabel(raw: string | null | undefined, genre: string): boolean {
+  const key = genreLabelKey(genre);
+  if (!key) return false;
+  return parseTrackGenres(raw).some((g) => genreLabelKey(g) === key);
+}
+
+/**
+ * Genres of a set of `genre` fields, one entry per label: `count` is how many
+ * fields hold it (a field with two aliases counts once). Unsorted.
+ */
+export function countGenreLabels(
+  fields: Iterable<string | null | undefined>,
+): Array<{ key: string; label: string; count: number }> {
+  const byKey = new Map<string, { key: string; label: string; count: number }>();
+  for (const raw of fields) {
+    const seen = new Set<string>();
+    for (const g of parseTrackGenres(raw)) {
+      const key = genreLabelKey(g);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const cur = byKey.get(key);
+      if (cur) cur.count += 1;
+      else byKey.set(key, { key, label: canonicalGenreLabel(g), count: 1 });
+    }
+  }
+  return [...byKey.values()];
+}
+
+/**
+ * Labels to offer in an "add genre" picker: every genre of `fields`, then the
+ * `extra` ones, without `exclude` (label keys already applied) and with each
+ * label once. Unsorted.
+ */
+export function genreLabelChoices(
+  fields: Iterable<string | null | undefined>,
+  extra: readonly string[],
+  exclude: ReadonlySet<string>,
+): Array<{ key: string; label: string }> {
+  const byKey = new Map<string, string>();
+  const add = (g: string) => {
+    const key = genreLabelKey(g);
+    if (key && !exclude.has(key) && !byKey.has(key)) byKey.set(key, canonicalGenreLabel(g));
+  };
+  for (const raw of fields) for (const g of parseTrackGenres(raw)) add(g);
+  for (const g of extra) add(g);
+  return [...byKey.entries()].map(([key, label]) => ({ key, label }));
+}

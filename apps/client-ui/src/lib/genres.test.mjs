@@ -5,7 +5,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  countGenreLabels,
+  fieldHasGenreLabel,
   formatTrackGenresForDisplay,
+  genreLabelChoices,
+  genreLabelKey,
   parseTrackGenres,
   serializeTrackGenres,
   trackHasGenre,
@@ -97,4 +101,30 @@ test("i generi del brano: prima l'elenco dell'hub, poi il campo, poi l'album", (
   assert.deepEqual(trackGenres({ genre: null }, { genre: "Rock" }), ["Rock"]);
   assert.deepEqual(trackGenreKeys({ genre: "Hip Hop; Pop Rap" }), ["hiphop", "poprap"]);
   assert.equal(primaryGenre({ genre: "" }), null);
+});
+
+// Issue #97: the album "Aggiungi genere" menu was a keyed {#each} on the label;
+// "Rhythm & Blues" (library) and "R&B" (pool) are different keys with one
+// label → each_key_duplicate and the library view crashed.
+test("alias con la stessa etichetta: una sola voce nel menu e un solo chip", () => {
+  assert.equal(genreLabelKey("Rhythm & Blues"), genreLabelKey("R&B"));
+  assert.equal(genreLabelKey("Drum & Bass"), genreLabelKey("Drum and Bass"));
+  const choices = genreLabelChoices(["Rhythm & Blues; Drum & Bass", "Drum and Bass", "Rock"], ["R&B", "Rock", "Jazz"], new Set());
+  const labels = choices.map((c) => c.label);
+  assert.deepEqual([...labels].sort(), ["Drum and Bass", "Jazz", "R&B", "Rock"]);
+  assert.equal(new Set(choices.map((c) => c.key)).size, choices.length);
+  assert.equal(new Set(labels).size, labels.length);
+  const stats = countGenreLabels(["Rhythm & Blues; R&B", "R&B", null, "Rock"]);
+  assert.deepEqual(
+    stats.map((g) => [g.label, g.count]).sort(),
+    [["R&B", 2], ["Rock", 1]],
+  );
+});
+
+test("menu aggiungi genere: niente generi già sull'album, nemmeno come alias", () => {
+  const have = new Set(countGenreLabels(["Rhythm & Blues"]).map((g) => g.key));
+  const labels = genreLabelChoices(["R&B; Pop"], ["R&B", "Jazz"], have).map((c) => c.label);
+  assert.deepEqual(labels.sort(), ["Jazz", "Pop"]);
+  assert.ok(fieldHasGenreLabel("Rhythm & Blues; Pop", "R&B"));
+  assert.ok(!fieldHasGenreLabel("Pop", "R&B"));
 });

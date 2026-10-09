@@ -268,7 +268,7 @@
 
   <button type="button" class="track-row__main" onclick={onplay}>
     <span class="track-row__title-row">
-      <span class="track-row__title">{track.title}</span>
+      <span class="track-row__title" title={track.title}>{track.title}</span>
       <span class="track-row__stats">
         {#if external}
           {#if live}
@@ -289,7 +289,10 @@
       </span>
     </span>
     <span class="track-row__meta">
-      <span class="track-row__meta-text">
+      <span
+        class="track-row__meta-text"
+        title={inAlbum ? track.artist_name : `${track.artist_name} · ${track.album_name}`}
+      >
         {inAlbum ? track.artist_name : `${track.artist_name} · ${track.album_name}`}
       </span>
       <TrackLyricsIcon kind={trackLyricsKind} class="track-row__lyrics-inline--meta" />

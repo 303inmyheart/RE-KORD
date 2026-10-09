@@ -16,11 +16,12 @@
   import { floating } from "../../../lib/floatingPopover";
   import { confirmDialog } from "../../../lib/confirm.svelte";
   import {
-    canonicalGenreLabel,
-    normalizeGenreKey,
+    countGenreLabels,
+    fieldHasGenreLabel,
+    genreLabelChoices,
+    genreLabelKey,
     parseTrackGenres,
     serializeTrackGenres,
-    trackHasGenre,
   } from "../../../lib/genres";
   import { fmtDate, i18n, t, tp } from "../../../lib/i18n.svelte";
   import { player } from "../../../lib/player";
@@ -102,47 +103,38 @@
     return n != null && n > 0 ? n : null;
   });
 
-  /** Genres present on the album's tracks, canonical label → track count. */
-  const trackGenreStats = $derived.by(() => {
-    const byKey = new Map<string, { label: string; count: number }>();
-    for (const tr of tracks) {
-      for (const g of parseTrackGenres(tr.genre)) {
-        const key = normalizeGenreKey(g);
-        const cur = byKey.get(key);
-        if (cur) cur.count += 1;
-        else byKey.set(key, { label: canonicalGenreLabel(g), count: 1 });
-      }
-    }
-    return [...byKey.entries()]
-      .map(([key, v]) => ({ key, ...v }))
-      .sort((a, b) => a.label.localeCompare(b.label, i18n.sortLocale, { numeric: true }));
-  });
+  /**
+   * Genres present on the album's tracks, one chip per label → track count.
+   * Keyed on the label (`genreLabelKey`), not the raw key: aliases such as
+   * "Rhythm & Blues" and "R&B" are one chip, one picker entry, one edit.
+   */
+  const trackGenreStats = $derived(
+    countGenreLabels(tracks.map((tr) => tr.genre)).sort((a, b) =>
+      a.label.localeCompare(b.label, i18n.sortLocale, { numeric: true }),
+    ),
+  );
 
   /** Library genres (or the pool) not on the album yet — for the add picker. */
-  const genreOptions = $derived.by(() => {
-    const have = new Set(trackGenreStats.map((g) => g.key));
-    const byKey = new Map<string, string>();
-    const add = (g: string) => {
-      const key = normalizeGenreKey(g);
-      if (key && !have.has(key) && !byKey.has(key)) byKey.set(key, canonicalGenreLabel(g));
-    };
-    for (const tr of session.catalogTracks) for (const g of parseTrackGenres(tr.genre)) add(g);
-    for (const g of GENRE_POOL) add(g);
-    return [...byKey.values()].sort((a, b) => a.localeCompare(b, i18n.sortLocale, { numeric: true }));
-  });
+  const genreOptions = $derived(
+    genreLabelChoices(
+      session.catalogTracks.map((tr) => tr.genre),
+      GENRE_POOL,
+      new Set(trackGenreStats.map((g) => g.key)),
+    ).sort((a, b) => a.label.localeCompare(b.label, i18n.sortLocale, { numeric: true })),
+  );
 
   async function applyGenre(token: string, mode: "add" | "remove", target: Track[] = tracks) {
     const g = token.trim();
     if (!g || !target.length) return;
-    const key = normalizeGenreKey(g);
+    const key = genreLabelKey(g);
     genreBusy = true;
     genreErr = null;
     try {
       for (const tr of target) {
         const cur = parseTrackGenres(tr.genre);
-        const has = cur.some((x) => normalizeGenreKey(x) === key);
+        const has = cur.some((x) => genreLabelKey(x) === key);
         if (mode === "add" ? has : !has) continue;
-        const next = mode === "add" ? [...cur, g] : cur.filter((x) => normalizeGenreKey(x) !== key);
+        const next = mode === "add" ? [...cur, g] : cur.filter((x) => genreLabelKey(x) !== key);
         const serialized = serializeTrackGenres(next);
         await api.trackInfoSave(tr.rel_path, { genre: serialized ?? "" });
         // Lists are immutable ($state.raw): replace the track everywhere it appears.
@@ -156,12 +148,16 @@
   }
 
   async function addGenre(g: string) {
-    await applyGenre(g, "add");
+    // Close first: while the saves run (one request per track, slow on a
+    // phone) the list would shift under the finger and a second tap would
+    // start a concurrent edit from stale genre lists.
+    if (genreBusy) return;
     genrePickerOpen = false;
+    await applyGenre(g, "add");
   }
 
   async function fillGenre(g: string) {
-    const missing = tracks.filter((tr) => !trackHasGenre(tr.genre, g));
+    const missing = tracks.filter((tr) => !fieldHasGenreLabel(tr.genre, g));
     if (!missing.length) return;
     const ok = await confirmDialog({ title: t("albumMeta.addGenreMissingConfirm", { g, n: missing.length }) });
     if (ok) await applyGenre(g, "add", missing);
@@ -303,11 +299,17 @@
                 role="menu"
                 use:floating={{ anchor: genreAddWrapEl, placement: "bottom-start", minWidth: 200 }}
               >
-                {#each genreOptions as opt (opt)}
+                {#each genreOptions as opt (opt.key)}
                   <li role="presentation">
-                    <button type="button" role="menuitem" class="track-row__overflow-item" onclick={() => void addGenre(opt)}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="track-row__overflow-item"
+                      disabled={genreBusy}
+                      onclick={() => void addGenre(opt.label)}
+                    >
                       <span class="track-row__overflow-item-glyph" aria-hidden="true"><UiIcon name="style" /></span>
-                      <span class="track-row__overflow-item-label">{opt}</span>
+                      <span class="track-row__overflow-item-label">{opt.label}</span>
                     </button>
                   </li>
                 {/each}
@@ -575,55 +577,62 @@
     height: 18px;
   }
 
-  /* Phones: back row on top, cover centred, then title, meta and a
-     full-width primary action (legacy responsive album hero). */
+  /* Phones (legacy responsive album hero): cover on the left with the back
+     row and the actions beside it, title, meta and genres full width below.
+     The old stacked layout (240px cover centred, everything under it) spent
+     most of the first screen before the first track. */
   @media (max-width: 719.98px) {
     .album-detail {
-      grid-template-columns: minmax(0, 1fr);
+      grid-template-columns: clamp(108px, 32vw, 152px) minmax(0, 1fr);
       grid-template-rows: none;
-      justify-items: center;
-      gap: 0.85rem;
-      padding: 1rem;
+      grid-template-areas:
+        "cover top"
+        "title title"
+        "info info";
+      gap: var(--rk-space-md) var(--rk-space-lg);
+      padding: var(--rk-space-lg);
     }
 
-    .album-detail__toprow,
-    .album-detail__title,
-    .album-detail__info,
     .album-detail__cover {
-      grid-column: 1;
-      grid-row: auto;
+      grid-area: cover;
     }
 
     .album-detail__toprow {
-      order: -1;
-      width: 100%;
+      grid-area: top;
+      flex-direction: column;
+      flex-wrap: nowrap;
+      align-items: stretch;
+      justify-content: flex-start;
+      gap: var(--rk-space-sm);
+    }
+
+    .album-detail__title {
+      grid-area: title;
+      font-size: var(--rk-fs-6);
+    }
+
+    .album-detail__info {
+      grid-area: info;
+      gap: var(--rk-space-sm);
     }
 
     .album-detail__cover :global(.rk-cover.album-detail__cover-art) {
-      width: min(62vw, 240px);
-      height: min(62vw, 240px);
-    }
-
-    .album-detail__title,
-    .album-detail__info {
-      justify-items: center;
-      text-align: center;
-      width: 100%;
-    }
-
-    .album-detail__meta,
-    .album-detail__genres {
-      justify-content: center;
+      width: clamp(108px, 32vw, 152px);
+      height: clamp(108px, 32vw, 152px);
     }
 
     .album-detail__actions {
-      justify-content: center;
-      width: 100%;
+      justify-content: flex-start;
+      gap: var(--rk-space-xs);
     }
 
     .album-detail__actions :global(.album-detail__play) {
       flex: 1 1 100%;
       justify-content: center;
+    }
+
+    .album-detail__tracks-head {
+      margin-bottom: var(--rk-space-sm);
     }
   }
 </style>

@@ -30,7 +30,7 @@
    * new-record ribbon (or the previous best), accuracy ring, max combo,
    * judgement bar, notes hit out of the notes judged (skipped excluded),
    * FC / AP badges, then Continue (when the music plays on) / Play again /
-   * Next song / Change song / Exit.
+   * Next song / Exit.
    */
   import { onMount } from "svelte";
   import UiIcon from "../icons/UiIcon.svelte";
@@ -44,7 +44,6 @@
     hasNext = true,
     onreplay,
     onnext,
-    onchange,
     onexit,
     onshare,
     oncontinue,
@@ -53,7 +52,6 @@
     hasNext?: boolean;
     onreplay: () => void;
     onnext: () => void;
-    onchange: () => void;
     onexit: () => void;
     onshare?: () => void;
     /** The music plays on (next song already running): close and keep playing. */
@@ -196,10 +194,6 @@
       <button type="button" class="rk-btn rk-btn--secondary" disabled={!hasNext} onclick={onnext}>
         <UiIcon name="next" />
         {t("plectr.nextTrack")}
-      </button>
-      <button type="button" class="rk-btn rk-btn--secondary" onclick={onchange}>
-        <UiIcon name="queueMusic" />
-        {t("plectr.changeTrack")}
       </button>
       <button type="button" class="rk-btn rk-btn--ghost" onclick={onexit}>
         <UiIcon name="close" />

@@ -1,5 +1,9 @@
 <script lang="ts">
-  /** Plectr records: career card + one row per track (E / N / H grade chips), sortable and filterable. */
+  /**
+   * Plectr records: career card + one row per track (E / N / H grade chips),
+   * sortable and filterable. ▶ plays that song in the player and goes back to
+   * the game on it.
+   */
   import { radioGroupKeys } from "../../lib/radioGroupKeys";
   import UiIcon from "../icons/UiIcon.svelte";
   import CareerCard from "./CareerCard.svelte";
@@ -13,11 +17,11 @@
   let {
     store,
     onback,
-    onpick,
+    onplay,
   }: {
     store: PlectrStore;
     onback: () => void;
-    onpick: (track: Track) => void;
+    onplay: (track: Track) => void;
   } = $props();
 
   type SortKey = "date" | "score" | "title";
@@ -76,7 +80,7 @@
   </div>
 
   {#if rows.length === 0}
-    <p class="plectr-empty">{query.trim() ? t("plectr.picker.noResults") : t("plectr.picker.recordsEmpty")}</p>
+    <p class="plectr-empty">{query.trim() ? t("plectr.records.noResults") : t("plectr.records.empty")}</p>
   {:else}
     <ul class="plectr-records__list rk-surface-card">
       {#each rows as r (r.relPath)}
@@ -94,8 +98,8 @@
             class="plectr-icon-btn"
             disabled={!r.track}
             aria-label={t("plectr.records.play", { title: r.title })}
-            title={t("plectr.pick.play")}
-            onclick={() => r.track && onpick(r.track)}
+            title={t("plectr.play")}
+            onclick={() => r.track && onplay(r.track)}
           >
             <UiIcon name="play" />
           </button>

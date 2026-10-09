@@ -15,7 +15,12 @@ import { buildGameResult } from "./runResult";
 import type { DifficultyId, GameResult, PlectrBestScore } from "./types";
 
 export type LightStageMode = "auto" | "on" | "off";
-export type StageBackdrop = "off" | "bars" | "art";
+/**
+ * What sits behind the lanes: the Listen visualizer (`bars`, off on the light
+ * stage) or nothing. 5.0 also had `art` (the album cover): it migrates to the
+ * default on read.
+ */
+export type StageBackdrop = "off" | "bars";
 
 export type PlectrSettings = {
   /** Note speed multiplier (lead time = 1.6 s / speed). */
@@ -54,20 +59,16 @@ export type PlectrStore = {
   /** v1 "light stage" flag, kept in sync with `settings.lightStage` for older clients. */
   lowEnd: boolean | null;
   settings: PlectrSettings;
-  /** Tracks recently started in Plectr, newest first. */
-  recent: string[];
   /** Records reset: anything older than this is dropped when stores merge. */
   resetAt: string | null;
 };
-
-export const RECENT_LIMIT = 24;
 
 export function defaultPlectrSettings(): PlectrSettings {
   return {
     speed: 1,
     latencyMs: 0,
     lightStage: "auto",
-    backdrop: "art",
+    backdrop: "bars",
     keyLetters: true,
     vibration: true,
     keys: [...KEY_PRESETS.dfjk],
@@ -87,7 +88,6 @@ export function emptyPlectrStore(): PlectrStore {
     lastRunAt: null,
     lowEnd: null,
     settings: defaultPlectrSettings(),
-    recent: [],
     resetAt: null,
   };
 }
@@ -289,22 +289,13 @@ export function normalizePlectrSettings(raw: unknown, legacyLowEnd: boolean | nu
     speed: Math.round(speed * 20) / 20,
     latencyMs: Math.round(latency),
     lightStage: r.lightStage === "on" || r.lightStage === "off" || r.lightStage === "auto" ? r.lightStage : base.lightStage,
-    backdrop: r.backdrop === "off" || r.backdrop === "bars" || r.backdrop === "art" ? r.backdrop : base.backdrop,
+    // 5.0 "art" (cover) and anything unknown → the default.
+    backdrop: r.backdrop === "off" || r.backdrop === "bars" ? r.backdrop : base.backdrop,
     keyLetters: typeof r.keyLetters === "boolean" ? r.keyLetters : base.keyLetters,
     vibration: typeof r.vibration === "boolean" ? r.vibration : base.vibration,
     keys: normalizeKeys(r.keys),
     challenge: r.challenge === true,
   };
-}
-
-function normalizeRecent(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const out: string[] = [];
-  for (const v of raw) {
-    if (typeof v === "string" && v && !out.includes(v)) out.push(v);
-    if (out.length >= RECENT_LIMIT) break;
-  }
-  return out;
 }
 
 /** Accepts anything (synced JSON, old local blob, v1) and returns a valid v2 store. */
@@ -337,7 +328,6 @@ export function normalizePlectrStore(raw: unknown): PlectrStore {
     lowEnd,
     // v1 had only the light-stage flag: it seeds the setting.
     settings: normalizePlectrSettings(r.settings, r.settings ? null : lowEnd),
-    recent: normalizeRecent(r.recent),
     resetAt: typeof r.resetAt === "string" ? r.resetAt : null,
   };
 }
@@ -383,12 +373,11 @@ export function mergePlectrStores(primary: PlectrStore, other: PlectrStore): Ple
     notesHit: Math.max(0, ...counted.map((s) => s.notesHit)),
     lastRunAt: latestIso(primary.lastRunAt, other.lastRunAt),
     lowEnd: primary.lowEnd ?? other.lowEnd,
-    recent: normalizeRecent([...primary.recent, ...other.recent]),
     resetAt,
   };
 }
 
-/** Clears records and counters (difficulty, settings and recents stay). */
+/** Clears records and counters (difficulty and settings stay). */
 export function resetPlectrStore(store: PlectrStore, at: Date = new Date()): PlectrStore {
   return {
     ...store,
@@ -400,12 +389,6 @@ export function resetPlectrStore(store: PlectrStore, at: Date = new Date()): Ple
     lastRunAt: null,
     resetAt: at.toISOString(),
   };
-}
-
-/** Moves a track to the front of the recent list. */
-export function touchRecent(store: PlectrStore, relPath: string): PlectrStore {
-  if (store.recent[0] === relPath) return store;
-  return { ...store, recent: normalizeRecent([relPath, ...store.recent]) };
 }
 
 /** The best for a track on one difficulty (alias aware). */

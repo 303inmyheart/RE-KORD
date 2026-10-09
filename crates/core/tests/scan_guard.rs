@@ -48,6 +48,7 @@ fn automatic() -> ScanOptions {
     ScanOptions {
         mode: ScanMode::Incremental,
         trigger: ScanTrigger::Automatic,
+        ..Default::default()
     }
 }
 

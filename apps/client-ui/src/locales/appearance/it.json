@@ -1,0 +1,17 @@
+{
+  "themePicker.custom.text": "Colore testo",
+  "themePicker.customTextHeading": "Testo",
+  "themePicker.customTextAuto": "Auto",
+  "themePicker.customTextReset": "Automatico",
+  "themePicker.customTextSampleMuted": "Testo secondario",
+  "themePicker.customTextContrastLow": "Contrasto basso ({{ratio}}:1): il testo può essere poco leggibile. Per la leggibilità (WCAG AA) servono almeno {{min}}:1.",
+  "appearance.width.content": "Larghezza contenuto",
+  "appearance.width.dock": "Larghezza barra player",
+  "appearance.width.default": "Predefinita ({{px}} px)",
+  "appearance.width.full": "Piena",
+  "appearance.width.matchContent": "Come il contenuto",
+  "appearance.width.custom": "Personalizzata…",
+  "appearance.width.contentCustomAria": "Larghezza massima del contenuto in pixel",
+  "appearance.width.dockCustomAria": "Larghezza massima della barra player in pixel",
+  "appearance.width.hint": "Solo desktop, salvate su questo dispositivo. Oltre la larghezza scelta il contenuto resta centrato; su finestre strette e sul telefono vale il layout adattivo."
+}

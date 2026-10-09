@@ -8,6 +8,7 @@ import { installDownloadBridge, onDownloadSaved } from "./lib/platform/downloads
 import { installExternalLinkHandler } from "./lib/platform/externalLinks";
 import { registerServiceWorker } from "./lib/platform/pwa";
 import { toasts } from "./lib/toasts.svelte";
+import { initLayoutWidth } from "./lib/layoutWidth";
 import { applyTheme, loadUserPrefs } from "./lib/userPrefs";
 
 // `index.html` ships `lang="it"`: fix `<html lang>` from the saved locale first
@@ -19,6 +20,8 @@ applyTheme(prefs.theme, prefs.customTheme, {
   glassSurfaces: prefs.glassSurfaces,
   glassOpacity: prefs.glassOpacity,
 });
+// Desktop content / player widths of this device (CSS variables, no layout work).
+initLayoutWidth();
 
 // Only in the Tauri shells (the functions check this themselves): external links in the
 // system browser, downloads generated in the page saved as real files.

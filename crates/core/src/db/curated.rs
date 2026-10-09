@@ -103,12 +103,32 @@ struct RowWrite {
     sets: Vec<(&'static str, rusqlite::types::Value)>,
     edited: i64,
     user: i64,
+    /// `embedded_fields` of the row.
+    embedded: i64,
+    /// Embedded priority: fills leave values that came from the tags.
+    protect_embedded: bool,
 }
 
 impl RowWrite {
     /// A value a person typed also replaces one that is only curated.
     fn allowed(&self, mode: CuratedWrite, user_flag: bool, bit: i64) -> bool {
+        if mode == CuratedWrite::FillUncurated
+            && self.protect_embedded
+            && self.embedded & bit != 0
+            && !user_flag
+        {
+            return false;
+        }
         may_write(mode, bit, self.edited, self.user) || (user_flag && self.user & bit == 0)
+    }
+
+    /// The field now holds a curated value (no longer the tag's).
+    fn mark_curated(&mut self, bit: i64, user_flag: bool) {
+        self.edited |= bit;
+        self.embedded &= !bit;
+        if user_flag {
+            self.user |= bit;
+        }
     }
 
     fn set(&mut self, col: &'static str, v: impl Into<rusqlite::types::Value>) {
@@ -132,10 +152,7 @@ impl RowWrite {
         if current != Some(v.as_str()) {
             self.set(col, v);
         }
-        self.edited |= bit;
-        if user_flag {
-            self.user |= bit;
-        }
+        self.mark_curated(bit, user_flag);
     }
 
     fn curated_int(
@@ -156,10 +173,7 @@ impl RowWrite {
         if current != Some(v) {
             self.set(col, v);
         }
-        self.edited |= bit;
-        if user_flag {
-            self.user |= bit;
-        }
+        self.mark_curated(bit, user_flag);
     }
 
     /// Plain field: filled when empty, replaced on override / user writes.
@@ -179,20 +193,17 @@ impl RowWrite {
     }
 
     /// Run the UPDATE; returns true when anything (values or flags) changed.
-    fn apply(
-        self,
-        conn: &Connection,
-        table: &str,
-        id: i64,
-        old_edited: i64,
-        old_user: i64,
-    ) -> Result<bool> {
+    fn apply(self, conn: &Connection, table: &str, id: i64, old: (i64, i64, i64)) -> Result<bool> {
+        let (old_edited, old_user, old_embedded) = old;
         let mut sets = self.sets;
         if self.edited != old_edited {
             sets.push(("edited_fields", self.edited.into()));
         }
         if self.user != old_user {
             sets.push(("user_fields", self.user.into()));
+        }
+        if self.embedded != old_embedded {
+            sets.push(("embedded_fields", self.embedded.into()));
         }
         if sets.is_empty() {
             return Ok(false);
@@ -230,6 +241,7 @@ type AlbumRow = (
     i64,
     i64,
     Option<String>,
+    i64,
 );
 
 pub(super) fn apply_curated_album(
@@ -237,13 +249,15 @@ pub(super) fn apply_curated_album(
     folder_key: &str,
     meta: &CuratedAlbumMeta,
     mode: CuratedWrite,
+    protect_embedded: bool,
 ) -> Result<bool> {
     let row: Option<AlbumRow> = conn
         .query_row(
             r#"
             SELECT id, name, release_date, genre, label, country, musicbrainz_release_id,
                    discogs_release_id, discogs_extra_json, expected_track_count,
-                   edited_fields, user_fields, added_at, track_count, has_album_meta, updated_at
+                   edited_fields, user_fields, added_at, track_count, has_album_meta, updated_at,
+                   embedded_fields
             FROM albums WHERE folder_key = ?1
             "#,
             params![folder_key],
@@ -265,6 +279,7 @@ pub(super) fn apply_curated_album(
                     r.get(13)?,
                     r.get(14)?,
                     r.get(15)?,
+                    r.get(16)?,
                 ))
             },
         )
@@ -286,6 +301,7 @@ pub(super) fn apply_curated_album(
         track_count,
         had_meta,
         updated_at,
+        embedded,
     )) = row
     else {
         return Ok(false);
@@ -295,6 +311,8 @@ pub(super) fn apply_curated_album(
         sets: Vec::new(),
         edited,
         user,
+        embedded,
+        protect_embedded,
     };
     w.curated_text(
         mode,
@@ -375,7 +393,7 @@ pub(super) fn apply_curated_album(
         }
     }
     let title_changed = w.sets.iter().any(|(c, _)| *c == "name");
-    let changed = w.apply(conn, "albums", id, edited, user)?;
+    let changed = w.apply(conn, "albums", id, (edited, user, embedded))?;
     if title_changed {
         conn.execute(
             r#"
@@ -402,6 +420,7 @@ type TrackRowCur = (
     i64,
     i64,
     Option<String>,
+    i64,
 );
 
 pub(super) fn apply_curated_track(
@@ -409,12 +428,14 @@ pub(super) fn apply_curated_track(
     rel_path: &str,
     meta: &CuratedTrackMeta,
     mode: CuratedWrite,
+    protect_embedded: bool,
 ) -> Result<bool> {
     let row: Option<TrackRowCur> = conn
         .query_row(
             r#"
             SELECT id, title, release_date, genre, track_number, disc_number,
-                   lyrics, source, url, duration_ms, edited_fields, user_fields, added_at
+                   lyrics, source, url, duration_ms, edited_fields, user_fields, added_at,
+                   embedded_fields
             FROM tracks WHERE rel_path = ?1
             "#,
             params![rel_path],
@@ -433,6 +454,7 @@ pub(super) fn apply_curated_track(
                     r.get(10)?,
                     r.get(11)?,
                     r.get(12)?,
+                    r.get(13)?,
                 ))
             },
         )
@@ -451,6 +473,7 @@ pub(super) fn apply_curated_track(
         edited,
         user,
         added_at,
+        embedded,
     )) = row
     else {
         return Ok(false);
@@ -460,6 +483,8 @@ pub(super) fn apply_curated_track(
         sets: Vec::new(),
         edited,
         user,
+        embedded,
+        protect_embedded,
     };
     w.curated_text(
         mode,
@@ -509,12 +534,17 @@ pub(super) fn apply_curated_track(
     } else {
         CuratedWrite::FillUncurated
     };
+    let before = w.sets.len();
     w.plain_text(
         lyrics_mode,
         "lyrics",
         lyrics.as_deref(),
         clean(&meta.lyrics),
     );
+    if w.sets.len() > before {
+        // Curated from now on: a re-read of the tags keeps it.
+        w.mark_curated(field::LYRICS, mode == CuratedWrite::User);
+    }
     w.plain_text(mode, "source", source.as_deref(), clean(&meta.source));
     w.plain_text(mode, "url", url.as_deref(), clean(&meta.url));
     if let Some(d) = meta.duration_ms.filter(|d| *d > 0) {
@@ -529,7 +559,7 @@ pub(super) fn apply_curated_track(
     }
     let touched_text = w.sets.iter().any(|(c, _)| matches!(*c, "title" | "genre"));
     let touched_genre = w.sets.iter().any(|(c, _)| *c == "genre");
-    let changed = w.apply(conn, "tracks", id, edited, user)?;
+    let changed = w.apply(conn, "tracks", id, (edited, user, embedded))?;
     if touched_genre {
         genres::refresh_genres_where(conn, "tracks", "id = ?1", &id)?;
     }
@@ -563,7 +593,7 @@ impl Db {
     ) -> Result<bool> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
-        let changed = apply_curated_album(&tx, folder_key, meta, mode)?;
+        let changed = apply_curated_album(&tx, folder_key, meta, mode, self.prefers_embedded())?;
         if changed {
             genres::refresh_genres_where(&tx, "albums", "folder_key = ?1", &folder_key)?;
         }
@@ -580,7 +610,7 @@ impl Db {
     ) -> Result<bool> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
-        let changed = apply_curated_track(&tx, rel_path, meta, mode)?;
+        let changed = apply_curated_track(&tx, rel_path, meta, mode, self.prefers_embedded())?;
         tx.commit()?;
         Ok(changed)
     }
@@ -593,17 +623,18 @@ impl Db {
         tracks: &[(String, CuratedTrackMeta)],
         mode: CuratedWrite,
     ) -> Result<(u32, u32)> {
+        let protect = self.prefers_embedded();
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         let mut a = 0u32;
         let mut t = 0u32;
         for (key, meta) in albums {
-            if apply_curated_album(&tx, key, meta, mode)? {
+            if apply_curated_album(&tx, key, meta, mode, protect)? {
                 a += 1;
             }
         }
         for (rel, meta) in tracks {
-            if apply_curated_track(&tx, rel, meta, mode)? {
+            if apply_curated_track(&tx, rel, meta, mode, protect)? {
                 t += 1;
             }
         }

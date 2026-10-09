@@ -131,7 +131,7 @@
     <section class="plectr-set">
       <span class="plectr-set__label"><strong>{t("plectr.settings.backdrop")}</strong></span>
       <div class="plectr-seg" role="radiogroup" use:radioGroupKeys aria-label={t("plectr.settings.backdrop")}>
-        {#each ["off", "bars", "art"] as const as mode (mode)}
+        {#each ["bars", "off"] as const as mode (mode)}
           <button
             type="button"
             role="radio"
