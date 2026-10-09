@@ -131,18 +131,24 @@ pub async fn upstream_for(state: &AppState, sid: i64, key: &str) -> Result<Upstr
     })
 }
 
+/// Only media types leave the proxy: an upstream (or a redirect hop) that
+/// answers `text/html` or `image/svg+xml` must never be served as a page of
+/// the hub's own origin.
+fn is_media_type(t: &str) -> bool {
+    t.starts_with("audio/") || t.starts_with("video/") || t == "application/ogg"
+}
+
 /// What `<audio>` engines accept best for the upstream's content type.
 fn normalize_content_type(upstream: Option<&str>, fallback: Option<&str>) -> String {
-    let raw = upstream
-        .map(|s| {
-            s.split(';')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_ascii_lowercase()
-        })
-        .filter(|s| !s.is_empty() && s != "application/octet-stream" && s != "binary/octet-stream");
-    let ct = raw.or_else(|| fallback.map(str::to_ascii_lowercase));
+    let clean = |s: &str| {
+        s.split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase()
+    };
+    let raw = upstream.map(clean).filter(|s| is_media_type(s));
+    let ct = raw.or_else(|| fallback.map(clean).filter(|s| is_media_type(s)));
     match ct.as_deref() {
         Some("audio/x-m4a") | Some("audio/m4a") | Some("audio/x-mp4") => "audio/mp4".into(),
         Some("audio/aacp") | Some("audio/x-aac") => "audio/aac".into(),
@@ -234,6 +240,11 @@ pub async fn stream(state: &AppState, sid: i64, key: &str, req_headers: &HeaderM
     out.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("no-store, no-transform"),
+    );
+    // Upstream bytes, never a document of the hub's origin.
+    out.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; sandbox"),
     );
     let lifetime = if upstream.live {
         LIVE_MAX_LIFETIME
@@ -364,17 +375,19 @@ pub async fn artwork(state: &AppState, sid: i64, key: &str) -> Response {
     if let Ok(bytes) = tokio::fs::read(&path).await {
         return image_response(bytes);
     }
+    // Few downloads + decodes at a time: each can take tens of MB.
+    let Ok(_permit) = ART_PERMITS.acquire().await else {
+        return art_missing();
+    };
+    if let Ok(bytes) = tokio::fs::read(&path).await {
+        return image_response(bytes);
+    }
     let Ok((raw, _)) = crate::metadata::artwork::fetch_public_image(&url, ART_MAX_DOWNLOAD).await
     else {
         return art_missing();
     };
     let made = tokio::task::spawn_blocking(move || -> Option<Vec<u8>> {
-        let img = image::load_from_memory(&raw).ok()?;
-        let thumb = img.thumbnail(ART_SIZE, ART_SIZE).to_rgb8();
-        let mut out = std::io::Cursor::new(Vec::new());
-        let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 82);
-        thumb.write_with_encoder(enc).ok()?;
-        let bytes = out.into_inner();
+        let bytes = art_thumbnail(&raw)?;
         if std::fs::create_dir_all(&dir).is_ok() {
             prune_art_cache(&dir);
             let tmp = path.with_extension("tmp");
@@ -392,6 +405,32 @@ pub async fn artwork(state: &AppState, sid: i64, key: &str) -> Response {
         None => art_missing(),
     }
 }
+
+static ART_PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+/// Decode an artwork with bounded size (a small file can declare a huge
+/// canvas) and re-encode it as a small JPEG.
+fn art_thumbnail(raw: &[u8]) -> Option<Vec<u8>> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(raw))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(ART_MAX_DIMENSION);
+    limits.max_image_height = Some(ART_MAX_DIMENSION);
+    limits.max_alloc = Some(ART_MAX_ALLOC);
+    reader.limits(limits);
+    let img = reader.decode().ok()?;
+    let thumb = img.thumbnail(ART_SIZE, ART_SIZE).to_rgb8();
+    let mut out = std::io::Cursor::new(Vec::new());
+    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 82);
+    thumb.write_with_encoder(enc).ok()?;
+    Some(out.into_inner())
+}
+
+/// Largest artwork side decoded (podcast art is 3000 px at most in practice).
+const ART_MAX_DIMENSION: u32 = 8192;
+/// Memory the decoder may allocate for one artwork.
+const ART_MAX_ALLOC: u64 = 128 * 1024 * 1024;
 
 fn prune_art_cache(dir: &std::path::Path) {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -420,6 +459,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn huge_declared_artwork_is_refused_without_decoding() {
+        // A valid PNG header declaring 20000×20000: refused by the limits.
+        let mut png = Vec::new();
+        png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(b"IHDR");
+        ihdr.extend_from_slice(&20000u32.to_be_bytes());
+        ihdr.extend_from_slice(&20000u32.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+        png.extend_from_slice(&13u32.to_be_bytes());
+        png.extend_from_slice(&ihdr);
+        png.extend_from_slice(&crc32(&ihdr).to_be_bytes());
+        assert!(art_thumbnail(&png).is_none());
+        // A normal small image still works.
+        let img = image::RgbImage::from_pixel(600, 600, image::Rgb([10, 20, 30]));
+        let mut ok = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut ok, image::ImageFormat::Png).unwrap();
+        assert!(art_thumbnail(ok.get_ref()).is_some());
+    }
+
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc = 0xffff_ffffu32;
+        for &b in data {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    #[test]
     fn content_types_engines_accept() {
         assert_eq!(
             normalize_content_type(Some("audio/x-m4a"), None),
@@ -434,6 +509,19 @@ mod tests {
             "audio/mpeg"
         );
         assert_eq!(normalize_content_type(None, None), "audio/mpeg");
+        // Never a document type on the hub's origin.
+        assert_eq!(
+            normalize_content_type(Some("text/html"), None),
+            "audio/mpeg"
+        );
+        assert_eq!(
+            normalize_content_type(Some("image/svg+xml"), Some("audio/mp4")),
+            "audio/mp4"
+        );
+        assert_eq!(
+            normalize_content_type(Some("application/xhtml+xml"), Some("text/html")),
+            "audio/mpeg"
+        );
         assert_eq!(
             normalize_content_type(Some("audio/ogg; codecs=opus"), None),
             "audio/ogg"
